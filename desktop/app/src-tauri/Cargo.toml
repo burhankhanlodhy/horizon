@@ -1,6 +1,6 @@
 [package]
 name = "contextshrink-desktop"
-version = "0.3.0"
+version = "0.4.0"
 description = "ContextShrink desktop launcher: run coding tools through the ContextShrink proxy"
 authors = ["ContextShrink"]
 edition = "2021"

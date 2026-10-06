@@ -262,6 +262,8 @@ header {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
+  /* An expanded card must not stretch its neighbours. */
+  align-items: start;
 }
 
 .tool {
@@ -310,4 +312,48 @@ footer {
 
 .status.on::before {
   background: var(--sage);
+}
+
+.section-title {
+  margin: 8px 0 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+
+.section-note {
+  margin: -8px 0 0;
+}
+
+.settings {
+  display: grid;
+  gap: 10px;
+}
+
+.settings p {
+  margin: 0;
+}
+
+.setting {
+  display: grid;
+  gap: 4px;
+}
+
+.setting-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.setting-row code {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
 }

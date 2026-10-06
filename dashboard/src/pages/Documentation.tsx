@@ -117,7 +117,7 @@ export default function Documentation() {
               ) and keeps it in Windows Credential Manager.
             </li>
             <li>
-              Choose your project folder and click Launch next to one of the 12 supported
+              Choose your project folder and click Launch next to one of the supported
               tools, such as Claude Code, Codex or OpenCode. The full list is on{" "}
               <Link to="/downloads" className="font-semibold text-ember hover:underline">
                 Downloads
@@ -167,6 +167,18 @@ export default function Documentation() {
             <li>
               <strong className="text-ink">Oh My Pi</strong> has its models file pointed at
               the app for the session; the original is restored when it exits.
+            </li>
+            <li>
+              <strong className="text-ink">Claude Code for VS Code</strong> is connected
+              from the app's Editors section. The app points Claude Code's user settings at
+              itself, restores them when you quit or sign out, and reconnects at your next
+              sign-in. While connected, Claude Code you start yourself goes through
+              ContextShrink too.
+            </li>
+            <li>
+              <strong className="text-ink">Cline, Continue and ZCode</strong> are set up in
+              their own settings: the app shows the base URL to paste, and keeps it working
+              while it runs.
             </li>
             <li>
               Your tools are never bundled with the app. Install them yourself; the app

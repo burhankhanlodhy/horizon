@@ -12,6 +12,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use serde::Serialize;
+use serde_json::Value;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -19,6 +20,25 @@ const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 /// Loopback port of the main forwarder (kept clear of a local proxy's 8787).
 /// It serves every tool that talks to Anthropic or OpenAI.
 pub const FORWARDER_PORT: u16 = 18788;
+
+/// How the app hooks a tool up to the forwarder.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// Opened in a console through `horizon wrap`.
+    Terminal,
+    /// An editor whose settings the app points at the forwarder and restores
+    /// (`horizon desktop connect/disconnect`).
+    Connect,
+    /// An editor configured in its own settings UI: the app shows what to paste.
+    Settings,
+}
+
+/// One value an editor needs; `{port}` stands for the tool's forwarder port.
+pub struct Setting {
+    pub label: &'static str,
+    pub value: &'static str,
+}
 
 /// A tool the launcher can wrap. Tools are never shipped with the app; they
 /// must already be installed on the user's machine.
@@ -36,11 +56,16 @@ pub struct Tool {
     /// Provider base URL for a tool on a provider the proxy is not configured
     /// for; its own forwarder tags model calls for it (`forward start --upstream`).
     pub upstream: Option<&'static str>,
+    pub kind: Kind,
+    /// Editors only: where the settings go, and the values to set there.
+    pub steps: &'static str,
+    pub settings: &'static [Setting],
 }
 
 impl Tool {
+    /// Editor extensions are not on PATH, so editors always count as available.
     pub fn installed(&self) -> bool {
-        self.commands.iter().any(|c| which::which(c).is_ok())
+        self.commands.is_empty() || self.commands.iter().any(|c| which::which(c).is_ok())
     }
 }
 
@@ -63,6 +88,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &["unwrap", "claude", "--no-stop-proxy", "--keep-mcp"],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "codex",
@@ -79,6 +107,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "opencode",
@@ -90,6 +121,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &["unwrap", "opencode", "--no-stop-proxy"],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "aider",
@@ -101,6 +135,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "copilot",
@@ -115,6 +152,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "goose",
@@ -126,11 +166,14 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "grok",
         name: "Grok CLI",
-        description: "xAI's coding agent for the terminal",
+        description: "xAI's coding agent for the terminal, including Grok Build",
         commands: &["grok"],
         install_url: "https://docs.x.ai/docs/grok-cli",
         // --no-mcp leaves ~/.grok/config.toml alone, so there is nothing to undo.
@@ -138,6 +181,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: 18791,
         upstream: Some("https://api.x.ai"),
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "kimi",
@@ -149,6 +195,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: 18789,
         upstream: Some("https://api.kimi.com/coding/v1"),
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "vibe",
@@ -160,6 +209,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: 18790,
         upstream: Some("https://api.mistral.ai"),
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "omp",
@@ -173,6 +225,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &["unwrap", "omp", "--no-stop-proxy"],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "openclaude",
@@ -184,6 +239,9 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
     },
     Tool {
         id: "openhands",
@@ -195,8 +253,84 @@ pub const TOOLS: &[Tool] = &[
         unwrap: &[],
         port: FORWARDER_PORT,
         upstream: None,
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
+    },
+    Tool {
+        id: "vscode-claude",
+        name: "Claude Code for VS Code",
+        description: "Anthropic's VS Code extension (also any Claude Code you start yourself)",
+        commands: &[],
+        install_url: "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code",
+        // Sets ANTHROPIC_BASE_URL in the user-level ~/.claude/settings.json
+        // (key by key, previous values saved). The app restores it on quit and
+        // sign-out and re-applies it at the next sign-in.
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Connect,
+        steps: "Reload VS Code after connecting. Your Claude sign-in and model stay as they are.",
+        settings: &[],
+    },
+    Tool {
+        id: "cline",
+        name: "Cline",
+        description: "Autonomous coding agent for VS Code",
+        commands: &[],
+        install_url: "https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev",
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Settings,
+        steps: "In Cline's settings, pick your API provider, turn on its custom base URL and paste the matching address. Keep your own API key.",
+        settings: &[
+            Setting { label: "Anthropic base URL", value: "http://127.0.0.1:{port}" },
+            Setting { label: "OpenAI Compatible base URL", value: "http://127.0.0.1:{port}/v1" },
+        ],
+    },
+    Tool {
+        id: "continue",
+        name: "Continue",
+        description: "Open-source AI code assistant for VS Code and JetBrains",
+        commands: &[],
+        install_url: "https://docs.continue.dev/",
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Settings,
+        // Continue builds request URLs relative to apiBase, so the trailing
+        // /v1/ is required for both providers.
+        steps: "In Continue's config, add an apiBase line to each Anthropic or OpenAI model. Keep your own API key.",
+        settings: &[Setting { label: "apiBase (Anthropic and OpenAI models)", value: "http://127.0.0.1:{port}/v1/" }],
+    },
+    Tool {
+        id: "zcode",
+        name: "ZCode",
+        description: "Z.ai's desktop coding app",
+        commands: &[],
+        install_url: "https://zcode.z.ai/",
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Settings,
+        steps: "Open Settings > Model Settings > Add Provider and paste the base URL for your provider. Keep your own API key.",
+        settings: &[
+            Setting { label: "Anthropic base URL", value: "http://127.0.0.1:{port}" },
+            Setting { label: "OpenAI base URL", value: "http://127.0.0.1:{port}/v1" },
+        ],
     },
 ];
+
+#[derive(Serialize)]
+pub struct SettingInfo {
+    pub label: &'static str,
+    pub value: String,
+}
 
 #[derive(Serialize)]
 pub struct ToolInfo {
@@ -205,6 +339,9 @@ pub struct ToolInfo {
     pub description: &'static str,
     pub installed: bool,
     pub install_url: &'static str,
+    pub kind: Kind,
+    pub steps: &'static str,
+    pub settings: Vec<SettingInfo>,
 }
 
 pub fn tools() -> Vec<ToolInfo> {
@@ -216,6 +353,16 @@ pub fn tools() -> Vec<ToolInfo> {
             description: t.description,
             installed: t.installed(),
             install_url: t.install_url,
+            kind: t.kind,
+            steps: t.steps,
+            settings: t
+                .settings
+                .iter()
+                .map(|s| SettingInfo {
+                    label: s.label,
+                    value: s.value.replace("{port}", &t.port.to_string()),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -328,6 +475,65 @@ impl Client {
     pub fn forwarder_listening(port: u16) -> bool {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    }
+
+    /// Runs `horizon desktop <action> <editor> --port <port>`; returns stdout.
+    fn desktop(&self, action: &str, tool: &Tool) -> Result<String, String> {
+        let out = self
+            .command()
+            .args(["desktop", action, tool.id, "--port"])
+            .arg(tool.port.to_string())
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("Could not start the ContextShrink client: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let err = err.trim().trim_start_matches("Error: ");
+            Err(if err.is_empty() { format!("Could not update {}", tool.name) } else { err.to_string() })
+        }
+    }
+
+    /// "connected", "other" (set up by something else) or "off".
+    pub fn editor_status(&self, tool: &Tool) -> Result<String, String> {
+        let out = self.desktop("status", tool)?;
+        let parsed: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+        Ok(parsed["status"].as_str().unwrap_or("off").to_string())
+    }
+
+    pub fn connect_editor(&self, tool: &Tool) -> Result<(), String> {
+        self.desktop("connect", tool).map(|_| ())
+    }
+
+    pub fn disconnect_editor(&self, tool: &Tool) -> Result<(), String> {
+        self.desktop("disconnect", tool).map(|_| ())
+    }
+
+    fn editors_file(&self) -> PathBuf {
+        self.data_dir.join("editors.json")
+    }
+
+    /// Editors the user connected, re-applied at the next sign-in.
+    pub fn wanted_editors(&self) -> Vec<String> {
+        std::fs::read_to_string(self.editors_file())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn set_wanted_editor(&self, id: &str, wanted: bool) {
+        let mut ids = self.wanted_editors();
+        ids.retain(|i| i != id);
+        if wanted {
+            ids.push(id.to_string());
+        }
+        let _ = std::fs::create_dir_all(&self.data_dir);
+        let _ = std::fs::write(self.editors_file(), serde_json::to_string(&ids).unwrap_or_default());
+    }
+
+    pub fn clear_wanted_editors(&self) {
+        let _ = std::fs::remove_file(self.editors_file());
     }
 
     /// Opens a console window in `folder` running the wrapped tool, and

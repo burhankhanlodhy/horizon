@@ -133,12 +133,39 @@ fn stop_forwarders(state: &AppState) {
     }
 }
 
+fn editor(id: &str) -> Result<&'static client::Tool, String> {
+    client::TOOLS
+        .iter()
+        .find(|t| t.id == id && t.kind == client::Kind::Connect)
+        .ok_or_else(|| "Unknown editor".to_string())
+}
+
+/// Re-applies the editors the user connected (they were restored on quit).
+fn reconnect_editors(state: &AppState) {
+    for id in state.client.wanted_editors() {
+        if let Ok(spec) = editor(&id) {
+            if ensure_forwarder(state, spec.port, spec.upstream).is_ok() {
+                let _ = state.client.connect_editor(spec);
+            }
+        }
+    }
+}
+
+/// Restores every editor's own settings, so nothing points at a forwarder
+/// that is about to stop.
+fn disconnect_editors(state: &AppState) {
+    for spec in client::TOOLS.iter().filter(|t| t.kind == client::Kind::Connect) {
+        let _ = state.client.disconnect_editor(spec);
+    }
+}
+
 async fn open_session(state: &AppState, token: &str, user: User) -> Result<Session, String> {
     if !state.client.available() {
         return Err("The ContextShrink client is missing. Reinstall the app.".into());
     }
     ensure_device_key(state, token).await?;
     ensure_forwarder(state, client::FORWARDER_PORT, None)?;
+    reconnect_editors(state);
     Ok(Session {
         user,
         device: device_name(),
@@ -182,6 +209,8 @@ async fn login(
 
 #[tauri::command]
 async fn logout(state: State<'_, AppState>) -> Result<(), String> {
+    disconnect_editors(&state);
+    state.client.clear_wanted_editors();
     stop_forwarders(&state);
     if let Some(token) = secrets::session() {
         if let Some(id) = secrets::device_key_id() {
@@ -225,13 +254,35 @@ async fn launch_tool(
 ) -> Result<(), String> {
     let spec = client::TOOLS
         .iter()
-        .find(|t| t.id == tool)
+        .find(|t| t.id == tool && t.kind == client::Kind::Terminal)
         .ok_or("Unknown tool")?;
     if !spec.installed() {
         return Err(format!("{} is not installed on this computer.", spec.name));
     }
     ensure_forwarder(&state, spec.port, spec.upstream)?;
     state.client.launch(spec, &PathBuf::from(folder))
+}
+
+#[tauri::command]
+async fn editor_status(state: State<'_, AppState>, tool: String) -> Result<String, String> {
+    state.client.editor_status(editor(&tool)?)
+}
+
+#[tauri::command]
+async fn set_editor_connected(
+    state: State<'_, AppState>,
+    tool: String,
+    connected: bool,
+) -> Result<String, String> {
+    let spec = editor(&tool)?;
+    if connected {
+        ensure_forwarder(&state, spec.port, spec.upstream)?;
+        state.client.connect_editor(spec)?;
+    } else {
+        state.client.disconnect_editor(spec)?;
+    }
+    state.client.set_wanted_editor(spec.id, connected);
+    state.client.editor_status(spec)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -270,14 +321,18 @@ pub fn run() {
             account_summary,
             list_tools,
             forwarder_running,
-            launch_tool
+            launch_tool,
+            editor_status,
+            set_editor_connected
         ])
         .build(tauri::generate_context!())
         .expect("error while building the ContextShrink app");
 
     app.run(|handle: &AppHandle, event| {
         if let RunEvent::Exit = event {
-            stop_forwarders(&handle.state::<AppState>());
+            let state = handle.state::<AppState>();
+            disconnect_editors(&state);
+            stop_forwarders(&state);
         }
     });
 }

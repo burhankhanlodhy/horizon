@@ -74,6 +74,26 @@ const TOOLS = [
     note: "All Hands AI's software agent in the terminal",
     url: "https://docs.all-hands.dev/",
   },
+  {
+    name: "Claude Code for VS Code",
+    note: "Editor: connected and restored by the app",
+    url: "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code",
+  },
+  {
+    name: "Cline",
+    note: "Editor: the app shows the base URL to paste",
+    url: "https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev",
+  },
+  {
+    name: "Continue",
+    note: "Editor: the app shows the apiBase to paste",
+    url: "https://docs.continue.dev/",
+  },
+  {
+    name: "ZCode",
+    note: "Editor: the app shows the base URL to paste",
+    url: "https://zcode.z.ai/",
+  },
 ];
 
 const STEPS = [

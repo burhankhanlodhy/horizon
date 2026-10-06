@@ -25,7 +25,14 @@ interface Tool {
   description: string;
   installed: boolean;
   install_url: string;
+  /** terminal: opened through `horizon wrap`; connect: settings the app sets
+   *  and restores; settings: values the user pastes into the editor. */
+  kind: "terminal" | "connect" | "settings";
+  steps: string;
+  settings: { label: string; value: string }[];
 }
+
+type EditorStatus = "connected" | "other" | "off";
 
 interface Summary {
   user: User;
@@ -230,6 +237,8 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
     onSignedOut();
   }
 
+  const terminalTools = tools.filter((t) => t.kind === "terminal");
+  const editors = tools.filter((t) => t.kind !== "terminal");
   const user = summary?.user ?? session.user;
   const plan = user.plan ?? "free";
   const est = summary?.estimate;
@@ -292,8 +301,9 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
       {notice && <p className="ok">{notice}</p>}
       {error && <p className="error">{error}</p>}
 
+      <h2 className="section-title">Terminal tools</h2>
       <section className="tools">
-        {tools.map((tool) => (
+        {terminalTools.map((tool) => (
           <div key={tool.id} className="card tool">
             <div className="tool-head">
               <ToolIcon id={tool.id} name={tool.name} />
@@ -316,6 +326,21 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
         ))}
       </section>
 
+      <h2 className="section-title">Editors</h2>
+      <p className="muted small section-note">
+        Editors stay connected while ContextShrink runs. Minimise it to keep it running in the
+        tray.
+      </p>
+      <section className="tools">
+        {editors.map((tool) =>
+          tool.kind === "connect" ? (
+            <ConnectCard key={tool.id} tool={tool} onConnected={() => setConnected(true)} />
+          ) : (
+            <SettingsCard key={tool.id} tool={tool} />
+          ),
+        )}
+      </section>
+
       <footer>
         <span className={connected ? "status on" : "status"}>
           {connected ? "Connected" : "Not connected"} · {session.device}
@@ -330,5 +355,113 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
         </span>
       </footer>
     </main>
+  );
+}
+
+function EditorHead({ tool }: { tool: Tool }) {
+  return (
+    <div className="tool-head">
+      <ToolIcon id={tool.id} name={tool.name} />
+      <div>
+        <strong>{tool.name}</strong>
+        <p className="muted small">{tool.description}</p>
+      </div>
+    </div>
+  );
+}
+
+/** An editor whose settings the app points at ContextShrink and restores. */
+function ConnectCard({ tool, onConnected }: { tool: Tool; onConnected: () => void }) {
+  const [status, setStatus] = useState<EditorStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    invoke<EditorStatus>("editor_status", { tool: tool.id })
+      .then(setStatus)
+      .catch((e) => setError(message(e)));
+  }, [tool.id]);
+
+  async function toggle(connected: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      setStatus(await invoke<EditorStatus>("set_editor_connected", { tool: tool.id, connected }));
+      if (connected) onConnected();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card tool">
+      <EditorHead tool={tool} />
+      {status === "connected" && <p className="ok small">Connected. {tool.steps}</p>}
+      {status === "other" && (
+        <p className="muted small">
+          Already routed through a Horizon proxy set up outside this app, so it is left alone.
+        </p>
+      )}
+      {error && <p className="error small">{error}</p>}
+      {status === "connected" ? (
+        <button disabled={busy} onClick={() => void toggle(false)}>
+          {busy ? "Restoring…" : "Disconnect"}
+        </button>
+      ) : (
+        <button className="primary" disabled={busy || status !== "off"} onClick={() => void toggle(true)}>
+          {busy ? "Connecting…" : `Connect ${tool.name}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** An editor configured in its own settings: show what to paste. */
+function SettingsCard({ tool }: { tool: Tool }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState("");
+
+  async function copy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(value);
+      window.setTimeout(() => setCopied(""), 1500);
+    } catch {
+      /* the value stays selectable */
+    }
+  }
+
+  return (
+    <div className="card tool">
+      <EditorHead tool={tool} />
+      {open ? (
+        <div className="settings">
+          <p className="small">{tool.steps}</p>
+          {tool.settings.map((s) => (
+            <div key={s.label} className="setting">
+              <span className="label">{s.label}</span>
+              <div className="setting-row">
+                <code>{s.value}</code>
+                <button onClick={() => void copy(s.value)}>{copied === s.value ? "Copied" : "Copy"}</button>
+              </div>
+            </div>
+          ))}
+          <span className="links small">
+            <a href="#" onClick={() => setOpen(false)}>
+              Hide
+            </a>
+            <a href="#" onClick={() => void openUrl(tool.install_url)}>
+              Get {tool.name}
+            </a>
+          </span>
+        </div>
+      ) : (
+        <button className="primary" onClick={() => setOpen(true)}>
+          Set up {tool.name}
+        </button>
+      )}
+    </div>
   );
 }
