@@ -18,6 +18,12 @@ instead - exactly as it would without Horizon, and without the key.
 
 WebSocket connections (e.g. Codex's Responses transport) are relayed the same
 way: the key is added to the upstream handshake and frames are piped both ways.
+
+A relay started with a fixed ``upstream`` (``horizon forward start --upstream``)
+serves a tool that talks to one OpenAI-compatible provider the proxy is not
+configured for (Kimi, Mistral, xAI). It tags that tool's requests exactly as a
+transport plugin would, so model calls reach that provider through the proxy
+and everything else goes straight to the provider.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -85,6 +92,32 @@ def _direct_target(request: Request, url: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
+_PROJECT_PREFIX = re.compile(r"^/p/[^/]+(?=/)")
+
+
+def parse_upstream(upstream: str) -> tuple[str, str]:
+    """Split a provider base URL into (origin, path), e.g. ``https://api.kimi.com/coding/v1``."""
+    parsed = urlparse(upstream.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"upstream must be an http(s) URL, got {upstream!r}")
+    if parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise ValueError(f"upstream must be a plain base URL, got {upstream!r}")
+    return f"{parsed.scheme}://{parsed.netloc}", parsed.path.rstrip("/")
+
+
+def _upstream_path(base_path: str, url: str) -> str:
+    """The provider path for relay path ``url``, given the provider's base path.
+
+    Tools point at ``<relay>[/p/<project>]/v1``; the provider's own base may
+    already end in ``/v1`` (``https://api.kimi.com/coding/v1``), so the client's
+    ``/v1`` maps onto it rather than doubling up.
+    """
+    path = _PROJECT_PREFIX.sub("", url)
+    if base_path.endswith("/v1") and (path == "/v1" or path.startswith("/v1/")):
+        path = path[len("/v1") :]
+    return f"{base_path}{path}"
+
+
 #: Opens the upstream WebSocket: (url, headers, subprotocols) -> connection.
 WsConnect = Callable[[str, dict[str, str], list[str]], Awaitable[Any]]
 
@@ -120,8 +153,13 @@ def build_app(
     credential_provider: Callable[[], str],
     transport: httpx.AsyncBaseTransport | None = None,
     ws_connect: WsConnect | None = None,
+    upstream: str | None = None,
 ) -> FastAPI:
     """Build the relay app.
+
+    ``upstream`` fixes the provider for untagged requests (see module doc):
+    inference calls go to the proxy tagged for it, anything else (model lists,
+    usage, sign-in) goes straight to it without the key.
 
     ``credential_provider`` is called once per request (not at startup) so a
     rotated key stored mid-session is picked up without a restart. It should
@@ -130,6 +168,7 @@ def build_app(
     """
 
     base = remote_url.rstrip("/")
+    fixed = parse_upstream(upstream) if upstream else None
     app = FastAPI(title="Horizon Forwarder", docs_url=None, redoc_url=None, openapi_url=None)
     client = httpx.AsyncClient(
         base_url=base,
@@ -263,6 +302,23 @@ def build_app(
     )
     async def relay(path: str, request: Request) -> Response:
         url = f"/{path}" if path else "/"
+        tags: dict[str, str] = {}
+        if fixed is not None and BASE_URL_HEADER not in request.headers:
+            origin, base_path = fixed
+            upstream_path = _upstream_path(base_path, url)
+            from horizon.proxy.account_analytics import INFERENCE
+
+            if not INFERENCE.fullmatch(url):
+                headers = {
+                    name: value
+                    for name, value in request.headers.items()
+                    if name.lower() not in _HOP_BY_HOP
+                    and name.lower() != "host"
+                    and not name.lower().startswith("x-horizon-")
+                }
+                return await send(direct, request, f"{origin}{upstream_path}", headers, path)
+            tags = {BASE_URL_HEADER: origin, ORIGINAL_PATH_HEADER: upstream_path}
+
         target = _direct_target(request, url)
         if target is not None:
             headers = {
@@ -281,6 +337,7 @@ def build_app(
             and name.lower() != "host"
             and name.lower() != CREDENTIAL_HEADER
         }
+        headers.update(tags)
         headers[CREDENTIAL_HEADER] = credential_provider()
         return await send(client, request, url, headers, path)
 
@@ -292,12 +349,16 @@ def run_forwarder(
     port: int,
     host: str = "127.0.0.1",
     credential_provider: Callable[[], str] | None = None,
+    upstream: str | None = None,
 ) -> None:
     """Run the relay (blocking). Binds loopback only.
 
     ``credential_provider`` defaults to reading the per-user key from the OS
     credential store. Startup fails fast when no credential is stored.
     """
+
+    if upstream:
+        parse_upstream(upstream)  # reject a bad URL before touching the vault
 
     if not _is_loopback(host):
         raise ValueError(
@@ -317,5 +378,7 @@ def run_forwarder(
 
     import uvicorn
 
-    app = build_app(remote_url=remote_url, credential_provider=credential_provider)
+    app = build_app(
+        remote_url=remote_url, credential_provider=credential_provider, upstream=upstream
+    )
     uvicorn.run(app, host=host, port=port, log_level="info")

@@ -227,6 +227,66 @@ def test_tag_with_unsafe_scheme_is_not_followed() -> None:
     assert str(req.url).startswith(REMOTE)
 
 
+# ── Fixed upstream (tools for providers the proxy is not configured for) ──
+
+
+def _upstream_client(seen: list, upstream: str) -> TestClient:
+    app = build_app(
+        REMOTE, lambda: "hz_feedface", transport=httpx.MockTransport(_capture(seen)), upstream=upstream
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("upstream", "path", "origin", "original"),
+    [
+        # Kimi's base already ends in /v1: the client's /v1 maps onto it.
+        ("https://api.kimi.com/coding/v1", "/p/demo/v1/chat/completions",
+         "https://api.kimi.com", "/coding/v1/chat/completions"),
+        ("https://api.mistral.ai", "/p/demo/v1/chat/completions",
+         "https://api.mistral.ai", "/v1/chat/completions"),
+        ("https://api.x.ai/", "/v1/responses", "https://api.x.ai", "/v1/responses"),
+    ],
+)
+def test_fixed_upstream_tags_model_calls_for_the_proxy(upstream, path, origin, original) -> None:
+    seen: list = []
+    _upstream_client(seen, upstream).post(path, json={"model": "m"})
+    (req,) = seen
+    assert str(req.url) == REMOTE + path
+    assert req.headers["x-horizon-proxy-token"] == "hz_feedface"
+    assert req.headers["x-horizon-base-url"] == origin
+    assert req.headers["x-horizon-original-path"] == original
+
+
+def test_fixed_upstream_sends_other_calls_direct_without_credential() -> None:
+    seen: list = []
+    client = _upstream_client(seen, "https://api.kimi.com/coding/v1")
+    client.get("/p/demo/v1/models", headers={"authorization": "Bearer kimi"})
+    client.get("/v1/usages", params={"a": "1"})
+    assert [str(r.url) for r in seen] == [
+        "https://api.kimi.com/coding/v1/models",
+        "https://api.kimi.com/coding/v1/usages?a=1",
+    ]
+    assert all("x-horizon-proxy-token" not in r.headers for r in seen)
+    assert seen[0].headers["authorization"] == "Bearer kimi"
+
+
+def test_plugin_tag_wins_over_fixed_upstream() -> None:
+    seen: list = []
+    _upstream_client(seen, "https://api.kimi.com/coding/v1").post(
+        "/v1/chat/completions", headers={"x-horizon-base-url": "https://api.other.dev"}
+    )
+    (req,) = seen
+    assert req.headers["x-horizon-base-url"] == "https://api.other.dev"
+    assert "x-horizon-original-path" not in req.headers
+
+
+@pytest.mark.parametrize("bad", ["ftp://x.example", "api.kimi.com", "https://u:p@x.example/v1", "https://x.example/v1?a=1"])
+def test_fixed_upstream_rejects_bad_urls(bad: str) -> None:
+    with pytest.raises(ValueError):
+        build_app(REMOTE, lambda: "k", upstream=bad)
+
+
 # ── WebSocket relay (Codex Responses transport) ──────────────────────────────
 
 

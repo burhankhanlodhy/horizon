@@ -38,12 +38,20 @@ def forward() -> None:
     show_default=True,
     help="Bind address (must be loopback).",
 )
-def forward_start(remote_url: str, port: int, host: str) -> None:
+@click.option(
+    "--upstream",
+    default=None,
+    help=(
+        "Provider base URL for tools on this port that use a provider the proxy "
+        "is not configured for (e.g. https://api.kimi.com/coding/v1)."
+    ),
+)
+def forward_start(remote_url: str, port: int, host: str, upstream: str | None) -> None:
     """Start the loopback relay to REMOTE_URL."""
     from horizon.forwarder import run_forwarder
 
     try:
-        run_forwarder(remote_url=remote_url, port=port, host=host)
+        run_forwarder(remote_url=remote_url, port=port, host=host, upstream=upstream)
     except KeyboardInterrupt:
         pass
     except Exception as exc:  # noqa: BLE001 — CLI boundary

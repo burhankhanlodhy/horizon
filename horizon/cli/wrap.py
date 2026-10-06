@@ -5241,7 +5241,7 @@ def claude(
     if prepare_only:
         return
 
-    claude_bin = shutil.which("claude")
+    claude_bin = _resolve_windows_launcher("claude")
     if not claude_bin:
         click.echo("Error: 'claude' not found in PATH.")
         click.echo("Install Claude Code: https://docs.anthropic.com/en/docs/claude-code")
@@ -5860,7 +5860,7 @@ def copilot(
     explicitly with GITHUB_COPILOT_API_URL (the override flows through to upstream).
     See TESTING-copilot-subscription.md for details.
     """
-    copilot_bin = shutil.which("copilot")
+    copilot_bin = _resolve_windows_launcher("copilot")
     if not copilot_bin:
         click.echo("Error: 'copilot' not found in PATH.")
         click.echo(
@@ -6680,7 +6680,7 @@ def aider(
     if prepare_only:
         return
 
-    aider_bin = shutil.which("aider")
+    aider_bin = _resolve_windows_launcher("aider")
     if not aider_bin:
         click.echo("Error: 'aider' not found in PATH.")
         click.echo("Install aider: pip install aider-chat")
@@ -6760,7 +6760,7 @@ def openclaude(
     if prepare_only:
         return
 
-    openclaude_bin = shutil.which("openclaude")
+    openclaude_bin = _resolve_windows_launcher("openclaude")
     if not openclaude_bin:
         click.echo("Error: 'openclaude' not found in PATH.")
         click.echo("Install OpenClaude before running `horizon wrap openclaude`.")
@@ -6833,7 +6833,7 @@ def vibe(
     if prepare_only:
         return
 
-    vibe_bin = shutil.which("vibe")
+    vibe_bin = _resolve_windows_launcher("vibe")
     if not vibe_bin:
         click.echo("Error: 'vibe' not found in PATH.")
         click.echo("Install Mistral Vibe: https://github.com/mistralai/mistral-vibe")
@@ -6914,7 +6914,7 @@ def kimi(
     if prepare_only:
         return
 
-    kimi_bin = shutil.which("kimi") or shutil.which("kimi-cli")
+    kimi_bin = _resolve_windows_launcher("kimi") or _resolve_windows_launcher("kimi-cli")
     if not kimi_bin:
         click.echo("Error: 'kimi' (or 'kimi-cli') not found in PATH.")
         click.echo("Install Kimi CLI: https://github.com/MoonshotAI/kimi-cli")
@@ -7055,7 +7055,7 @@ def grok(
     if prepare_only:
         return
 
-    grok_bin = shutil.which("grok")
+    grok_bin = _resolve_windows_launcher("grok")
     if not grok_bin:
         click.echo("Error: 'grok' not found in PATH.")
         click.echo("Install Grok CLI: https://docs.x.ai/docs/grok-cli")
@@ -7480,7 +7480,7 @@ def goose(
     if prepare_only:
         return
 
-    goose_bin = shutil.which("goose")
+    goose_bin = _resolve_windows_launcher("goose")
     if not goose_bin:
         click.echo("Error: 'goose' not found in PATH.")
         click.echo("Install Goose: https://block.github.io/goose/")
@@ -7569,7 +7569,7 @@ def openhands(
     if prepare_only:
         return
 
-    openhands_bin = shutil.which("openhands")
+    openhands_bin = _resolve_windows_launcher("openhands")
     if not openhands_bin:
         click.echo("Error: 'openhands' not found in PATH.")
         click.echo("Install OpenHands: https://docs.all-hands.dev/")
@@ -7706,7 +7706,7 @@ def openclaw(
         click.echo(json.dumps(entry, separators=(",", ":")))
         return
 
-    openclaw_bin = shutil.which("openclaw")
+    openclaw_bin = _resolve_windows_launcher("openclaw")
     if not openclaw_bin:
         raise click.ClickException("'openclaw' not found in PATH. Install OpenClaw CLI first.")
 
@@ -7722,7 +7722,7 @@ def openclaw(
                 f"Invalid plugin path (missing openclaw.plugin.json): {plugin_dir}"
             )
 
-    npm_bin = shutil.which("npm")
+    npm_bin = _resolve_windows_launcher("npm")
     if local_source_mode and not skip_build and not npm_bin:
         raise click.ClickException(
             "'npm' not found in PATH. Install Node/npm or rerun with --skip-build."
@@ -7883,13 +7883,18 @@ def _resolve_windows_launcher(tool: str) -> str | None:
     directory, and CreateProcess on a sh script fails with
     "[WinError 193] %1 is not a valid Win32 application".
     """
-    if os.name != "nt":
-        return shutil.which(tool)
+    found = shutil.which(tool)
+    if os.name != "nt" or not found:
+        return found
+    # Only step in when the hit is an extensionless file on disk (the sh shim);
+    # anything else already launches fine.
+    if os.path.splitext(found)[1] or not os.path.isfile(found):
+        return found
     for name in (f"{tool}.exe", f"{tool}.cmd", f"{tool}.bat"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return shutil.which(tool)
+        runnable = shutil.which(name)
+        if runnable:
+            return runnable
+    return found
 
 
 def _resolve_opencode_launcher() -> str | None:
@@ -8237,7 +8242,7 @@ def unwrap_openclaw(
         )
         return
 
-    openclaw_bin = shutil.which("openclaw")
+    openclaw_bin = _resolve_windows_launcher("openclaw")
     if not openclaw_bin:
         raise click.ClickException("'openclaw' not found in PATH. Install OpenClaw CLI first.")
 
@@ -8469,7 +8474,7 @@ def omp(
         _inject_omp_models_override(port, _project_name_from_cwd())
         return
 
-    omp_bin = shutil.which("omp")
+    omp_bin = _resolve_windows_launcher("omp")
     if not omp_bin:
         click.echo("Error: 'omp' not found in PATH.")
         click.echo("Install Oh My Pi: npm install -g @oh-my-pi/pi-coding-agent")
