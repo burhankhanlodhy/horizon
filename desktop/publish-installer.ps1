@@ -10,12 +10,14 @@
   /var/www/contextshrink/releases needs sudo, so the script prints the one
   command to run. Earlier installers are kept; latest.json points at the new ones.
 
-  Run after desktop\build-installer.ps1 and the Linux build, from PowerShell.
-  Pass -WindowsOnly to publish without Linux packages.
+  Run after desktop\build-installer.ps1 and the macOS/Linux builds (GitHub
+  Actions "Desktop app" artifacts, unpacked into desktop\dist-macos and
+  desktop\dist-linux), from PowerShell. -Platforms limits what is published.
 #>
 param(
     [string]$Pi4 = "raspberrypi4@192.168.0.64",
-    [switch]$WindowsOnly
+    [ValidateSet("windows", "macos", "linux")]
+    [string[]]$Platforms = @("windows", "macos", "linux")
 )
 $ErrorActionPreference = "Stop"
 
@@ -38,17 +40,20 @@ function Get-Asset([IO.FileInfo]$File, [string]$Os, [string]$Kind) {
 
 $files = @($installer)
 $assets = @(Get-Asset $installer "windows" "installer")
-if (-not $WindowsOnly) {
-    $linuxDir = Join-Path $PSScriptRoot "dist-linux"
-    foreach ($k in @(
-            @{ kind = "deb"; pattern = "*_${version}_amd64.deb" },
-            @{ kind = "rpm"; pattern = "*-${version}-*.x86_64.rpm" },
-            @{ kind = "appimage"; pattern = "*_${version}_amd64.AppImage" })) {
-        $f = Get-ChildItem (Join-Path $linuxDir $k.pattern) -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $f) { throw "No Linux $($k.kind) for version $version in $linuxDir. Build it, or pass -WindowsOnly." }
-        $files += $f
-        $assets += Get-Asset $f "linux" $k.kind
-    }
+$wanted = @(
+    @{ os = "macos"; arch = "aarch64"; kind = "dmg"; dir = "dist-macos"; pattern = "*_${version}_aarch64.dmg" },
+    @{ os = "linux"; arch = "x86_64"; kind = "deb"; dir = "dist-linux"; pattern = "*_${version}_amd64.deb" },
+    @{ os = "linux"; arch = "x86_64"; kind = "rpm"; dir = "dist-linux"; pattern = "*-${version}-*.x86_64.rpm" },
+    @{ os = "linux"; arch = "x86_64"; kind = "appimage"; dir = "dist-linux"; pattern = "*_${version}_amd64.AppImage" }
+) | Where-Object { $Platforms -contains $_.os }
+foreach ($k in $wanted) {
+    $dir = Join-Path $PSScriptRoot $k.dir
+    $f = Get-ChildItem (Join-Path $dir $k.pattern) -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $f) { throw "No $($k.os) $($k.kind) for version $version in $dir. Build it, or leave $($k.os) out of -Platforms." }
+    $files += $f
+    $asset = Get-Asset $f $k.os $k.kind
+    $asset.arch = $k.arch
+    $assets += $asset
 }
 
 # The top-level file fields describe the Windows installer, for Downloads

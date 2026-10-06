@@ -16,3 +16,6 @@ app/src-tauri/gen/schemas/
 
 # Linux packages (desktop/linux/build-in-container.sh)
 dist-linux/
+
+# macOS packages (GitHub Actions artifact)
+dist-macos/

@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-HORIZON = sys.argv[1]
+HORIZON = str(Path(sys.argv[1]).resolve())  # the checks run from temporary folders
 PORT = "18788"
 
 # The exact wrap/unwrap arguments desktop/app/src-tauri/src/client.rs uses,

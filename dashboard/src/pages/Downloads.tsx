@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { Download, ExternalLink, ShieldAlert } from "lucide-react";
 import { Badge, Card, CodeBlock, CopyButton, SectionHeader } from "../components/ui";
 
-type Os = "windows" | "linux";
+type Os = "windows" | "macos" | "linux";
 
 /** One downloadable file of a release. */
 interface Asset {
   os: Os;
   arch: string;
-  kind: "installer" | "deb" | "rpm" | "appimage";
+  kind: "installer" | "dmg" | "deb" | "rpm" | "appimage";
   file: string;
   size_bytes: number;
   sha256: string;
@@ -57,8 +57,14 @@ const LINUX_FORMATS: { kind: Asset["kind"]; label: string; note: string; install
 
 function detectOs(): Os {
   const ua = navigator.userAgent;
+  if (/Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad/.test(ua)) return "macos";
   return /Linux/.test(ua) && !/Android/.test(ua) ? "linux" : "windows";
 }
+
+const OS_LABEL: Record<Os, string> = { windows: "Windows", macos: "macOS", linux: "Linux" };
+
+/** The app isn't notarized by Apple yet, so macOS quarantines the download. */
+const MAC_UNQUARANTINE = "xattr -dr com.apple.quarantine /Applications/ContextShrink.app";
 
 const TOOLS = [
   {
@@ -145,6 +151,7 @@ const TOOLS = [
 
 const firstStep: Record<Os, string> = {
   windows: "Run the installer. It installs for your Windows user only; no administrator rights needed.",
+  macos: "Open the .dmg, drag ContextShrink to Applications, run the Terminal command above once, then open ContextShrink.",
   linux: "Install the package for your distribution (commands above), then open ContextShrink from your app menu.",
 };
 
@@ -199,6 +206,7 @@ export default function Downloads() {
 
   const assets = release ? assetsOf(release) : [];
   const windows = assets.find((a) => a.os === "windows");
+  const mac = assets.find((a) => a.os === "macos");
   const linux = LINUX_FORMATS.map((f) => ({ ...f, asset: assets.find((a) => a.os === "linux" && a.kind === f.kind) }));
   const hasLinux = linux.some((f) => f.asset);
   const released = release ? new Date(release.released).toLocaleDateString() : "";
@@ -208,7 +216,7 @@ export default function Downloads() {
       <Card hairline className="p-7">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="max-w-xl">
-            <SectionHeader eyebrow="Desktop app" title="ContextShrink for Windows and Linux" />
+            <SectionHeader eyebrow="Desktop app" title="ContextShrink for Windows, macOS and Linux" />
             <p className="text-sm leading-relaxed text-ink-3">
               Run the coding tools you already use through ContextShrink: sign in once,
               pick a project and click Launch. Your prompts are compressed on the way to
@@ -216,7 +224,7 @@ export default function Downloads() {
             </p>
           </div>
           <div className="flex rounded-lg border border-ink/10 p-1 text-sm" role="tablist">
-            {(["windows", "linux"] as const).map((o) => (
+            {(["windows", "macos", "linux"] as const).map((o) => (
               <button
                 key={o}
                 role="tab"
@@ -224,7 +232,7 @@ export default function Downloads() {
                 onClick={() => setOs(o)}
                 className={`rounded-md px-4 py-1.5 font-semibold ${os === o ? "bg-ember-soft text-ember" : "text-ink-3"}`}
               >
-                {o === "windows" ? "Windows" : "Linux"}
+                {OS_LABEL[o]}
               </button>
             ))}
           </div>
@@ -247,6 +255,19 @@ export default function Downloads() {
               </div>
             ) : (
               <span className="text-sm text-ink-3">The Windows installer isn't available for this release.</span>
+            )
+          )}
+
+          {release && os === "macos" && (
+            mac ? (
+              <div className="flex flex-col items-start gap-3">
+                <DownloadButton asset={mac} label="Download for Mac" />
+                <span className="text-xs text-ink-3">
+                  Version {release.version} · {fmtSize(mac.size_bytes)} · Apple Silicon (M1 or newer) · macOS 12 or newer · {released}
+                </span>
+              </div>
+            ) : (
+              <span className="text-sm text-ink-3">The Mac version isn't available for this release yet.</span>
             )
           )}
 
@@ -285,7 +306,29 @@ export default function Downloads() {
         </div>
       </Card>
 
-      {os === "windows" ? (
+      {os === "macos" && (
+        <Card hairline className="flex gap-4 p-6">
+          <ShieldAlert size={20} className="mt-0.5 shrink-0 text-ember" />
+          <div className="min-w-0 text-sm leading-relaxed text-ink-2">
+            <strong className="text-ink">macOS may say the app “is damaged” or “can't be opened”.</strong>{" "}
+            The app isn't notarized by Apple yet, so macOS quarantines it. After dragging it
+            to Applications, run this once in Terminal, then open ContextShrink as usual:
+            <div className="mt-3">
+              <CodeBlock code={MAC_UNQUARANTINE} />
+            </div>
+            The app keeps this Mac's key in your Keychain. To check the download is genuine,
+            compare <code className="font-mono text-xs">shasum -a 256 ~/Downloads/{mac?.file ?? "ContextShrink.dmg"}</code>{" "}
+            with:
+            {mac && (
+              <div className="mt-2">
+                <Checksum asset={mac} />
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {os === "windows" && (
         <Card hairline className="flex gap-4 p-6">
           <ShieldAlert size={20} className="mt-0.5 shrink-0 text-ember" />
           <div className="text-sm leading-relaxed text-ink-2">
@@ -305,7 +348,9 @@ export default function Downloads() {
             )}
           </div>
         </Card>
-      ) : (
+      )}
+
+      {os === "linux" && (
         <Card hairline className="flex gap-4 p-6">
           <ShieldAlert size={20} className="mt-0.5 shrink-0 text-ember" />
           <div className="text-sm leading-relaxed text-ink-2">
@@ -340,7 +385,7 @@ export default function Downloads() {
           <SectionHeader
             eyebrow="Supported tools"
             title="Bring your own tools"
-            action={<Badge tone="slate">macOS coming soon</Badge>}
+            action={<Badge tone="slate">Windows, macOS, Linux</Badge>}
           />
           <p className="mb-4 text-sm leading-relaxed text-ink-3">
             The app doesn't include these tools. Install the ones you use; the app finds
