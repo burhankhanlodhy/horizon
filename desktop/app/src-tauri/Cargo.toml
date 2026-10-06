@@ -30,6 +30,9 @@ dunce = "1"
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
 # Secret Service over D-Bus (GNOME Keyring, KWallet). libdbus is vendored, so
 # users need no extra package and the build needs no libdbus-1-dev.
 [target.'cfg(target_os = "linux")'.dependencies]

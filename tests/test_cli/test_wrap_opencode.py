@@ -1140,3 +1140,88 @@ def test_unwrap_opencode_preserves_utf8_user_content(
     assert "“smart quotes”" in content
     assert "—" in content
     assert wrap_mod._PROVIDER_MARKER_START not in content
+
+
+def _wrap_then_unwrap(runner: CliRunner) -> None:
+    """Wrap and unwrap the way the desktop app does (no MCP, no Serena)."""
+    with patch.object(wrap_mod.shutil, "which", return_value="opencode"):
+        with patch.object(wrap_mod, "_launch_tool", side_effect=SystemExit(0)):
+            runner.invoke(main, ["wrap", "opencode", "--port", "9000", "--no-mcp", "--no-serena"])
+    with patch.object(wrap_mod, "_stop_local_proxy_for_unwrap", return_value="stopped"):
+        runner.invoke(main, ["unwrap", "opencode"])
+
+
+def test_unwrap_removes_config_the_wrap_created(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no opencode.json before the wrap, unwrap leaves none behind."""
+    monkeypatch.chdir(tmp_path)
+    _set_test_home(monkeypatch, tmp_path)
+    config_file = tmp_path / ".config" / "opencode" / "opencode.json"
+
+    _wrap_then_unwrap(runner)
+
+    assert not config_file.exists()
+    assert list(config_file.parent.glob("opencode.json.horizon-*")) == []
+
+
+def test_unwrap_keeps_settings_added_to_a_created_config(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_test_home(monkeypatch, tmp_path)
+    config_file = tmp_path / ".config" / "opencode" / "opencode.json"
+
+    with patch.object(wrap_mod.shutil, "which", return_value="opencode"):
+        with patch.object(wrap_mod, "_launch_tool", side_effect=SystemExit(0)):
+            runner.invoke(main, ["wrap", "opencode", "--port", "9000", "--no-mcp", "--no-serena"])
+    data = json.loads(config_file.read_text(encoding="utf-8"))
+    data["theme"] = "tokyonight"  # the user changed a setting during the session
+    config_file.write_text(json.dumps(data), encoding="utf-8")
+    with patch.object(wrap_mod, "_stop_local_proxy_for_unwrap", return_value="stopped"):
+        runner.invoke(main, ["unwrap", "opencode"])
+
+    assert json.loads(config_file.read_text(encoding="utf-8")) == {"theme": "tokyonight"}
+
+
+def test_unwrap_cleans_provider_left_by_older_releases(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Earlier wraps left the generated provider with no marker or backup."""
+    _set_test_home(monkeypatch, tmp_path)
+    config_file = tmp_path / ".config" / "opencode" / "opencode.json"
+    config_file.parent.mkdir(parents=True)
+    leftover = {
+        "model": "openai/gpt-4o",
+        "provider": {
+            "horizon": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Horizon Proxy",
+                "options": {"baseURL": "http://127.0.0.1:18788/v1"},
+                "models": {},
+            }
+        },
+    }
+    config_file.write_text(json.dumps(leftover), encoding="utf-8")
+
+    with patch.object(wrap_mod, "_stop_local_proxy_for_unwrap", return_value="stopped"):
+        runner.invoke(main, ["unwrap", "opencode"])
+
+    assert json.loads(config_file.read_text(encoding="utf-8")) == {"model": "openai/gpt-4o"}
+
+
+def test_unwrap_leaves_a_users_own_horizon_provider(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_test_home(monkeypatch, tmp_path)
+    config_file = tmp_path / ".config" / "opencode" / "opencode.json"
+    config_file.parent.mkdir(parents=True)
+    own = json.dumps(
+        {"provider": {"horizon": {"name": "My Horizon", "options": {"baseURL": "https://h.example/v1"}}}}
+    )
+    config_file.write_text(own, encoding="utf-8")
+
+    with patch.object(wrap_mod, "_stop_local_proxy_for_unwrap", return_value="stopped"):
+        runner.invoke(main, ["unwrap", "opencode"])
+
+    assert config_file.read_text(encoding="utf-8") == own

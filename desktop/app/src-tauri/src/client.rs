@@ -26,6 +26,8 @@ pub const CLIENT_EXE: &str = if cfg!(windows) { "horizon.exe" } else { "horizon"
 /// Where the device key is kept, as users know it.
 pub const KEY_STORE: &str = if cfg!(windows) {
     "Windows Credential Manager"
+} else if cfg!(target_os = "macos") {
+    "the macOS Keychain"
 } else {
     "the system keyring"
 };
@@ -422,7 +424,7 @@ impl Client {
         if status.success() {
             Ok(())
         } else {
-            Err(if cfg!(windows) {
+            Err(if !cfg!(target_os = "linux") {
                 format!("Could not save the device key to {KEY_STORE}")
             } else {
                 format!(
@@ -612,7 +614,7 @@ impl Client {
             folder,
             &std::env::var("PATH").unwrap_or_default(),
         );
-        let path = self.data_dir.join(format!("launch-{}.sh", tool.id));
+        let path = self.data_dir.join(format!("launch-{}.{}", tool.id, crate::unix::SCRIPT_EXT));
         open_in_terminal(&script, &path, folder, tool.name)
     }
 }

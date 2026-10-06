@@ -1,5 +1,5 @@
-//! App secrets in the OS credential store: Windows Credential Manager, or the
-//! Secret Service keyring on Linux (GNOME Keyring, KWallet).
+//! App secrets in the OS credential store: Windows Credential Manager, the
+//! macOS Keychain, or the Secret Service keyring on Linux (GNOME Keyring, KWallet).
 //!
 //! Holds the dashboard session token and the ID of this device's proxy key
 //! (needed to revoke it on sign-out). The proxy key itself is stored by the

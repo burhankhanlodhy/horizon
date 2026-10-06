@@ -6,3 +6,5 @@
 CHANGELOG.md merge=union
 desktop/linux/*.sh text eol=lf
 desktop/linux/Containerfile text eol=lf
+desktop/macos/*.sh text eol=lf
+.github/workflows/*.yml text eol=lf

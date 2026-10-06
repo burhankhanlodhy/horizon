@@ -1,0 +1,75 @@
+# Build the ContextShrink desktop app for macOS (Apple Silicon) and Linux
+# (x86_64), smoke-test the bundled client, and keep the packages as artifacts.
+# Windows is still built locally (desktop/build-installer.ps1).
+#
+# Runs on demand (Actions tab, or `gh workflow run desktop.yml`) and for tags
+# named desktop-v*.
+name: Desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.18"
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build
+        run: bash desktop/macos/build.sh
+      - name: Smoke-test the bundled client
+        run: |
+          app=desktop/app/src-tauri/target/release/bundle/macos/ContextShrink.app
+          python3 desktop/tests/smoke_client.py "$app/Contents/Resources/horizon/horizon"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextshrink-macos-arm64
+          path: desktop/dist-macos/*
+          if-no-files-found: error
+          retention-days: 30
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Ubuntu 22.04 keeps the packages compatible with 22.04, Debian 12,
+    # Fedora 38 and newer.
+    container: ubuntu:22.04
+    steps:
+      - name: Install git (for checkout)
+        run: apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: bash desktop/linux/install-deps.sh
+      - name: Build
+        run: bash desktop/linux/build.sh
+      - name: Smoke-test the bundled client
+        run: |
+          apt-get install -y -qq gnome-keyring dbus-x11 >/dev/null
+          dbus-run-session -- sh -c '
+            printf "ci-throwaway" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            python3 desktop/tests/smoke_client.py desktop/client/dist/horizon/horizon'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextshrink-linux-x86_64
+          path: desktop/dist-linux/*
+          if-no-files-found: error
+          retention-days: 30

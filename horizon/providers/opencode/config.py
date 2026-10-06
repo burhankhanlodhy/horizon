@@ -79,6 +79,38 @@ def opencode_config_paths() -> tuple[Path, Path]:
     return config_file, backup_file
 
 
+def opencode_created_marker(config_file: Path) -> Path:
+    """Marker left when the wrap created ``config_file`` (there was none to back up)."""
+    return config_file.with_name(config_file.name + ".horizon-created")
+
+
+def is_generated_horizon_provider(entry: Any) -> bool:
+    """True for the ``horizon`` provider exactly as :func:`horizon_provider_entry` writes it.
+
+    Lets unwrap remove a block the wrap wrote without markers, including ones
+    left by releases that did not record creating the file.
+    """
+    if not isinstance(entry, dict):
+        return False
+    base_url = str((entry.get("options") or {}).get("baseURL", ""))
+    return (
+        entry.get("name") == "Horizon Proxy"
+        and entry.get("npm") == "@ai-sdk/openai-compatible"
+        and re.fullmatch(r"http://127\.0\.0\.1:\d+/v1", base_url) is not None
+    )
+
+
+def remove_generated_horizon_provider(data: dict[str, Any]) -> bool:
+    """Drop a generated ``horizon`` provider (and an emptied ``provider`` map)."""
+    providers = data.get("provider")
+    if not isinstance(providers, dict) or not is_generated_horizon_provider(providers.get("horizon")):
+        return False
+    del providers["horizon"]
+    if not providers:
+        del data["provider"]
+    return True
+
+
 def snapshot_opencode_config_if_unwrapped(config_file: Path, backup_file: Path) -> None:
     """Snapshot ``opencode.json`` to ``backup_file`` before the first injection.
 
@@ -200,6 +232,9 @@ def inject_opencode_provider_config(port: int) -> None:
         else:
             content = ""
             data = {}
+            # Nothing to back up: record that this file is ours so unwrap
+            # can remove it again.
+            opencode_created_marker(config_file).touch()
 
         # Strip any prior Horizon-managed blocks before re-injecting.
         if _PROVIDER_MARKER_START in content or _MCP_MARKER_START in content:

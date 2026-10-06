@@ -183,6 +183,8 @@ from horizon.providers.opencode.config import (
     _PROVIDER_MARKER_START,
     inject_opencode_provider_config,
     opencode_config_paths,
+    opencode_created_marker,
+    remove_generated_horizon_provider,
     snapshot_opencode_config_if_unwrapped,
     strip_opencode_horizon_blocks,
 )
@@ -8154,8 +8156,10 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
       preserved.
     * If the config only ever contained Horizon-written content, the file
       is removed entirely so OpenCode falls back to its defaults.
-    * If neither a backup nor a Horizon block is present, this is a safe
-      no-op.
+    * Otherwise, the ``horizon`` provider the wrap wrote as plain JSON (when
+      it created the file, or by a release that left no marker) is removed,
+      and the file too if nothing else is left.
+    * If none of these is present, this is a safe no-op.
     """
     click.echo()
     click.echo("  ╔═══════════════════════════════════════════════╗")
@@ -8164,6 +8168,7 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
     click.echo()
 
     config_file, backup_file = opencode_config_paths()
+    created_marker = opencode_created_marker(config_file)
 
     if backup_file.exists():
         try:
@@ -8188,11 +8193,11 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
                 click.echo(f"  Removed {config_file} (contained only Horizon-written config).")
                 status = "removed"
         else:
-            click.echo(f"  Nothing to undo: {config_file} has no Horizon wrap markers.")
-            status = "noop"
+            status = _remove_generated_opencode_provider(config_file)
     else:
         click.echo(f"  Nothing to undo: {config_file} does not exist.")
         status = "noop"
+    created_marker.unlink(missing_ok=True)
 
     # Remove Serena MCP if it was installed by Horizon.
     # Also remove the horizon MCP server itself.
@@ -8213,6 +8218,23 @@ def unwrap_opencode(port: int, no_stop_proxy: bool) -> None:
     if not no_stop_proxy and status != "noop":
         _echo_unwrap_proxy_stop_status(_stop_local_proxy_for_unwrap(port), port)
     click.echo()
+
+
+def _remove_generated_opencode_provider(config_file: Path) -> str:
+    """Remove the plain-JSON ``horizon`` provider a wrap wrote; return the unwrap status."""
+    from horizon.providers.opencode.config import _parse_json_loose
+
+    data = _parse_json_loose(_read_text(config_file))
+    if not remove_generated_horizon_provider(data):
+        click.echo(f"  Nothing to undo: {config_file} has no Horizon wrap markers.")
+        return "noop"
+    if data:
+        _write_text(config_file, json.dumps(data, indent=2) + "\n")
+        click.echo(f"  Removed the Horizon provider from {config_file}; other content preserved.")
+        return "cleaned"
+    config_file.unlink()
+    click.echo(f"  Removed {config_file} (contained only Horizon-written config).")
+    return "removed"
 
 
 @unwrap.command("openclaw")

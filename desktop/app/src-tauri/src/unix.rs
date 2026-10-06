@@ -1,4 +1,4 @@
-//! Linux (and later macOS) pieces of the launcher.
+//! Linux and macOS pieces of the launcher.
 //!
 //! Two things differ from Windows. Apps started from the desktop menu do not
 //! get the PATH a user's shell builds (~/.local/bin, nvm, ~/.npm-global,
@@ -76,6 +76,7 @@ pub fn sh_quote(s: &str) -> String {
 /// Terminal emulators, in the order tried, with the arguments that make each
 /// run one program. `$TERMINAL` and Debian's `x-terminal-emulator` come first
 /// so the user's own choice wins.
+#[cfg(target_os = "linux")]
 const TERMINALS: &[(&str, &[&str])] = &[
     ("x-terminal-emulator", &["-e"]),
     ("gnome-terminal", &["--"]),
@@ -95,6 +96,7 @@ const TERMINALS: &[(&str, &[&str])] = &[
 ];
 
 /// The terminal to use and its run-a-program arguments.
+#[cfg(target_os = "linux")]
 fn find_terminal() -> Option<(String, Vec<String>)> {
     // An explicit choice: CONTEXTSHRINK_TERMINAL, then the common $TERMINAL.
     for var in ["CONTEXTSHRINK_TERMINAL", "TERMINAL"] {
@@ -118,6 +120,21 @@ fn find_terminal() -> Option<(String, Vec<String>)> {
             .map(|p| (p.to_string_lossy().into_owned(), args.iter().map(|a| a.to_string()).collect()))
     })
 }
+
+/// macOS: `open -a Terminal <script>` runs the script in a new Terminal window.
+/// CONTEXTSHRINK_TERMINAL names another app instead (for example `iTerm`).
+#[cfg(target_os = "macos")]
+fn find_terminal() -> Option<(String, Vec<String>)> {
+    let app = std::env::var("CONTEXTSHRINK_TERMINAL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "Terminal".into());
+    Some(("/usr/bin/open".into(), vec!["-a".into(), app]))
+}
+
+/// File extension for launch scripts: macOS Terminal runs `.command` files.
+pub const SCRIPT_EXT: &str = if cfg!(target_os = "macos") { "command" } else { "sh" };
 
 /// Writes `script` to `path` (owner-only) and runs it in a new terminal window.
 ///
@@ -149,8 +166,13 @@ pub fn open_in_terminal(script: &str, path: &Path, folder: &Path, title: &str) -
 
 /// This computer's name, for the device key label.
 pub fn host_name() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
+    #[cfg(target_os = "macos")]
+    let name = Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
         .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    #[cfg(not(target_os = "macos"))]
+    let name = std::fs::read_to_string("/proc/sys/kernel/hostname").ok();
+    name.map(|h| h.trim().to_string()).filter(|h| !h.is_empty())
 }
