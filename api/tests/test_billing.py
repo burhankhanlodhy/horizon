@@ -10,7 +10,7 @@ import hmac
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +39,16 @@ class FakeConn:
         self.failures: list[str] = []
         self.overdue: list[str] = []
         self.ended: list[tuple] = []
+        self.locks: set[str] = set()
+
+    def acquire(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
 
     def _by_invoice(self, invoice_id):
         return next((r for r in self.fees.values() if r["stripe_invoice_id"] == invoice_id), None)
@@ -49,6 +59,11 @@ class FakeConn:
         raise AssertionError(sql)
 
     async def fetchval(self, sql, *args):
+        if "pg_try_advisory_lock" in sql:
+            if args[0] in self.locks:
+                return False
+            self.locks.add(args[0])
+            return True
         if "billing.stripe_events" in sql:
             return 1 if args[0] in self.events else None
         if "payment_status='failed' LIMIT 1" in sql:
@@ -63,12 +78,16 @@ class FakeConn:
         raise AssertionError(sql)
 
     async def execute(self, sql, *args):
-        if "INSERT INTO billing.stripe_events" in sql:
+        if "pg_advisory_unlock" in sql:
+            self.locks.discard(args[0])
+        elif "INSERT INTO billing.stripe_events" in sql:
             self.events.add(args[0])
         elif "INSERT INTO billing.savings_fees" in sql:
             self.fees.setdefault(
                 (args[0], args[1]),
                 {
+                    "savings_usd": args[3],
+                    "period_end": args[2],
                     "fee_cents": args[4],
                     "stripe_invoice_id": None,
                     "payment_status": args[5],
@@ -103,23 +122,52 @@ class FakeStripe:
     def __init__(self, conn=None):
         self.calls: list[tuple] = []
         self.linked_at_finalize = None
+        self.invoices: dict[str, SimpleNamespace] = {}
+        self.items: list[SimpleNamespace] = []
         record = self._record
+
+        def create_invoice(params, options=None):
+            invoice = SimpleNamespace(
+                id="in_fee", status="draft", auto_advance=params["auto_advance"],
+                metadata=SimpleNamespace(to_dict=lambda: params["metadata"]),
+                hosted_invoice_url=None,
+            )
+            self.invoices[invoice.id] = invoice
+            return record("invoice", params, options, invoice)
+
+        def create_item(params, options=None):
+            item = SimpleNamespace(**params)
+            self.items.append(item)
+            return record("item", params, options, item)
+
+        def update_invoice(invoice_id, params, options=None):
+            invoice = self.invoices[invoice_id]
+            for name, value in params.items():
+                setattr(invoice, name, value)
+            return record("update", params, options, invoice)
 
         def finalize(invoice_id, params=None, options=None):
             # Payment is attempted on finalize; its webhook needs the link.
             if conn is not None:
                 self.linked_at_finalize = conn._by_invoice(invoice_id) is not None
-            return record(
-                "finalize", invoice_id, options, SimpleNamespace(hosted_invoice_url="https://pay.test/in_fee")
-            )
+            invoice = self.invoices[invoice_id]
+            invoice.status = "open"
+            invoice.hosted_invoice_url = "https://pay.test/in_fee"
+            return record("finalize", invoice_id, options, invoice)
 
         self.v1 = SimpleNamespace(
             invoices=SimpleNamespace(
-                create=lambda p, o=None: record("invoice", p, o, SimpleNamespace(id="in_fee")),
+                create=create_invoice,
+                retrieve=lambda i: self.invoices[i],
+                list=lambda p: SimpleNamespace(auto_paging_iter=lambda: iter(self.invoices.values())),
+                update=update_invoice,
                 finalize_invoice=finalize,
             ),
             invoice_items=SimpleNamespace(
-                create=lambda p, o=None: record("item", p, o, None)
+                create=create_item,
+                list=lambda p: SimpleNamespace(
+                    auto_paging_iter=lambda: (item for item in self.items if item.invoice == p["invoice"])
+                ),
             ),
             subscriptions=SimpleNamespace(
                 retrieve=lambda i: SimpleNamespace(default_payment_method="pm_1")
@@ -183,6 +231,172 @@ def test_no_invoice_when_savings_at_or_below_threshold(env, monkeypatch):
     assert env.stripe.calls == []
     assert env.conn.fees[(UID, START)]["fee_cents"] == 0
     assert env.conn.fees[(UID, START)]["payment_status"] == "none"
+
+
+@pytest.mark.parametrize("stage", ["invoice", "item", "finalize", "invoice_link", "invoice_url"])
+@pytest.mark.parametrize("after_success", [False, True])
+def test_interrupted_fee_resumes_without_duplicate_stripe_objects(env, monkeypatch, stage, after_success):
+    """No idempotency cache in these fakes: recovery must read durable state."""
+    savings_reads = []
+
+    async def savings(*args):
+        savings_reads.append(args)
+        return Decimal("100") if len(savings_reads) == 1 else Decimal("200")
+
+    monkeypatch.setattr(billing, "ledger_savings", savings)
+    interrupted = False
+
+    if stage in ("invoice_link", "invoice_url"):
+        original = env.conn.execute
+        target = "SET stripe_invoice_id=" if stage == "invoice_link" else "SET invoice_url="
+
+        async def execute(sql, *args):
+            nonlocal interrupted
+            if target in sql and not interrupted:
+                interrupted = True
+                if after_success:
+                    await original(sql, *args)
+                raise RuntimeError("Simulated database interruption")
+            return await original(sql, *args)
+
+        monkeypatch.setattr(env.conn, "execute", execute)
+    else:
+        service, method = {
+            "invoice": (env.stripe.v1.invoices, "create"),
+            "item": (env.stripe.v1.invoice_items, "create"),
+            "finalize": (env.stripe.v1.invoices, "finalize_invoice"),
+        }[stage]
+        original = getattr(service, method)
+
+        def stripe_call(*args):
+            nonlocal interrupted
+            if not interrupted:
+                interrupted = True
+                if after_success:
+                    original(*args)
+                raise RuntimeError("Simulated Stripe interruption")
+            return original(*args)
+
+        monkeypatch.setattr(service, method, stripe_call)
+
+    with pytest.raises(RuntimeError, match="Simulated"):
+        asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert not env.conn.locks
+    if env.stripe.invoices and stage != "invoice_url" and not (stage == "finalize" and after_success):
+        assert env.stripe.invoices["in_fee"].auto_advance is False
+
+    # A different supplied end and new ledger entries must not alter the
+    # period/fee persisted by the first attempt, or its Stripe parameters.
+    asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END + timedelta(days=1), "pm_1"))
+    asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert [c[0] for c in env.stripe.calls] == ["invoice", "item", "finalize"]
+    assert len(env.stripe.invoices) == len(env.stripe.items) == len(savings_reads) == 1
+    fee = env.conn.fees[(UID, START)]
+    assert fee["savings_usd"] == Decimal("100")
+    assert fee["fee_cents"] == env.stripe.items[0].amount == 500
+    assert fee["period_end"] == END
+    assert fee["invoice_url"] == "https://pay.test/in_fee"
+    assert not env.conn.locks
+
+
+def test_concurrent_fee_delivery_requests_retry_then_reuses_completed_invoice(env, monkeypatch):
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def savings(*_):
+            entered.set()
+            await release.wait()
+            return Decimal("100")
+
+        monkeypatch.setattr(billing, "ledger_savings", savings)
+        first = asyncio.create_task(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+        await entered.wait()
+        try:
+            with pytest.raises(billing.HTTPException) as exc:
+                await billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1")
+            assert exc.value.status_code == 503
+            assert env.conn.locks  # The competing delivery did not unlock the first.
+        finally:
+            release.set()
+            await first
+        await billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1")
+
+    asyncio.run(scenario())
+    assert [c[0] for c in env.stripe.calls] == ["invoice", "item", "finalize"]
+    assert not env.conn.locks
+
+
+def _seed_partial_invoice(env, *, status="draft", auto_advance=False, items=(), linked=True):
+    env.conn.fees[(UID, START)] = {
+        "savings_usd": Decimal("100"), "fee_cents": 500, "period_end": END,
+        "stripe_invoice_id": "in_fee" if linked else None,
+        "payment_status": "pending", "payment_failed_at": None, "invoice_url": None,
+    }
+    env.stripe.invoices["in_fee"] = stripe.Invoice.construct_from(
+        {
+            "id": "in_fee", "object": "invoice", "status": status, "auto_advance": auto_advance,
+            "metadata": {"user_id": UID, "period_start": START.isoformat()},
+            "hosted_invoice_url": None if status == "draft" else "https://pay.test/in_fee",
+        },
+        "sk_test_x",
+    )
+    env.stripe.items = [
+        stripe.InvoiceItem.construct_from(
+            {"id": f"ii_{i}", "object": "invoiceitem", "invoice": "in_fee", **item}, "sk_test_x"
+        )
+        for i, item in enumerate(items)
+    ]
+
+
+@pytest.mark.parametrize("with_item", [False, True])
+def test_legacy_draft_is_paused_and_completed(env, with_item):
+    _seed_partial_invoice(
+        env, auto_advance=True, items=[{"amount": 500, "currency": "usd"}] if with_item else []
+    )
+    asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert [c[0] for c in env.stripe.calls] == (["update", "finalize"] if with_item else ["update", "item", "finalize"])
+    assert env.stripe.calls[0][1] == {"auto_advance": False}
+    assert len(env.stripe.items) == 1
+    assert env.conn.fees[(UID, START)]["invoice_url"] == "https://pay.test/in_fee"
+
+
+@pytest.mark.parametrize("status", ["open", "paid", "void", "uncollectible"])
+def test_finalized_invoice_recovers_url_without_new_charge(env, status):
+    _seed_partial_invoice(env, status=status, items=[{"amount": 500, "currency": "usd"}])
+    asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert env.stripe.calls == []
+    assert env.conn.fees[(UID, START)]["invoice_url"] == "https://pay.test/in_fee"
+
+
+@pytest.mark.parametrize(
+    "status, items",
+    [
+        ("paid", []),
+        ("draft", [{"amount": 0, "currency": "usd"}]),
+        ("draft", [{"amount": 500, "currency": "eur"}]),
+        ("draft", [{"amount": 500, "currency": "usd"}] * 2),
+    ],
+)
+def test_inconsistent_invoice_requires_reconciliation_without_new_charge(env, status, items):
+    _seed_partial_invoice(env, status=status, items=items)
+    with pytest.raises(billing.HTTPException) as exc:
+        asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert exc.value.status_code == 502
+    assert env.stripe.calls == []
+    assert not env.conn.locks
+
+
+def test_multiple_matching_invoices_require_reconciliation(env):
+    _seed_partial_invoice(env, linked=False)
+    duplicate = stripe.Invoice.construct_from(env.stripe.invoices["in_fee"].to_dict(), "sk_test_x")
+    duplicate.id = "in_duplicate"
+    env.stripe.invoices[duplicate.id] = duplicate
+    with pytest.raises(billing.HTTPException) as exc:
+        asyncio.run(billing.charge_savings_fee(UID, "cus_1", START, END, "pm_1"))
+    assert exc.value.status_code == 502
+    assert env.conn.fees[(UID, START)]["stripe_invoice_id"] is None
+    assert env.stripe.calls == []
+    assert not env.conn.locks
 
 
 # ── Fee payment tracking ──────────────────────────────────────────────

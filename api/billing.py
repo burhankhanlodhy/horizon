@@ -56,8 +56,8 @@ def savings_fee(savings: Decimal) -> Decimal:
     return money(savings * SAVINGS_FEE_RATE) if savings > SAVINGS_FEE_THRESHOLD_USD else Decimal("0.00")
 
 
-async def ledger_savings(user_id, start: datetime, end: datetime) -> Decimal:
-    value = await db._conn().fetchval(
+async def ledger_savings(user_id, start: datetime, end: datetime, connection=None) -> Decimal:
+    value = await (connection if connection is not None else db._conn()).fetchval(
         "SELECT COALESCE(SUM(NULLIF(data->>'savings_usd','')::numeric),0) "
         "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
         user_id,
@@ -212,71 +212,136 @@ async def renew_subscription(subscription_id: str) -> None:
 async def charge_savings_fee(
     user_id, customer_id: str, start: datetime, end: datetime, payment_method: str | None
 ) -> None:
-    """Invoice the savings fee for one ended period, at most once."""
-    existing = await db._conn().fetchrow(
-        "SELECT fee_cents, stripe_invoice_id FROM billing.savings_fees "
+    """Resume the same period invoice, including after an interrupted Stripe call."""
+    key = f"savings-fee-{user_id}-{int(start.timestamp())}"
+    # Session lock across API workers; writes below commit individually so a
+    # failure never rolls back an invoice ID already assigned by Stripe.
+    async with db._conn().acquire() as conn:
+        locked = await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", key)
+        if not locked:
+            raise HTTPException(503, "This billing period is being processed. Please retry.")
+        try:
+            await _resume_savings_fee(conn, user_id, customer_id, start, end, payment_method, key)
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", key)
+
+
+async def _resume_savings_fee(conn, user_id, customer_id, start, end, payment_method, key):
+    existing = await conn.fetchrow(
+        "SELECT savings_usd, fee_cents, period_end, stripe_invoice_id FROM billing.savings_fees "
         "WHERE user_id=$1 AND period_start=$2",
         user_id,
         start,
     )
-    if existing and (existing["fee_cents"] == 0 or existing["stripe_invoice_id"]):
-        return
-    savings = await ledger_savings(user_id, start, end)
-    fee_cents = int(savings_fee(savings) * 100)
-    await db._conn().execute(
-        "INSERT INTO billing.savings_fees(user_id, period_start, period_end, savings_usd, fee_cents, "
-        "payment_status) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, period_start) DO NOTHING",
-        user_id,
-        start,
-        end,
-        savings,
-        fee_cents,
-        "none" if fee_cents == 0 else "pending",
-    )
+    if existing is None:
+        savings = await ledger_savings(user_id, start, end, conn)
+        fee_cents = int(savings_fee(savings) * 100)
+        await conn.execute(
+            "INSERT INTO billing.savings_fees(user_id, period_start, period_end, savings_usd, fee_cents, "
+            "payment_status) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id, period_start) DO NOTHING",
+            user_id,
+            start,
+            end,
+            savings,
+            fee_cents,
+            "none" if fee_cents == 0 else "pending",
+        )
+        existing = await conn.fetchrow(
+            "SELECT savings_usd, fee_cents, period_end, stripe_invoice_id FROM billing.savings_fees "
+            "WHERE user_id=$1 AND period_start=$2",
+            user_id,
+            start,
+        )
+    # Late telemetry must not change the amount or Stripe request parameters
+    # between attempts for a period whose fee has already been recorded.
+    savings, fee_cents, end = existing["savings_usd"], existing["fee_cents"], existing["period_end"]
     if fee_cents == 0:
         return
     period = f"{start:%Y-%m-%d} to {end:%Y-%m-%d}"
-    key = f"savings-fee-{user_id}-{int(start.timestamp())}"
     client = _stripe()
-    invoice_params = {
-        "customer": customer_id,
-        "collection_method": "charge_automatically",
-        "auto_advance": True,
-        "pending_invoice_items_behavior": "exclude",
-        "description": f"ContextShrink Pro savings fee, {period}",
-        "metadata": {"user_id": str(user_id), "period_start": start.isoformat()},
-    }
-    if payment_method:
-        invoice_params["default_payment_method"] = payment_method
-    invoice = await _call(
-        client.v1.invoices.create, invoice_params, {"idempotency_key": key + "-invoice"}
-    )
+    if existing["stripe_invoice_id"]:
+        invoice = await _call(client.v1.invoices.retrieve, existing["stripe_invoice_id"])
+    else:
+        # Recover if Stripe created the invoice but the response or DB write
+        # failed. Listing remains usable after Stripe's idempotency cache expires.
+        def find_invoice():
+            invoices = client.v1.invoices.list({"customer": customer_id, "limit": 100})
+            matches = []
+            for candidate in invoices.auto_paging_iter():
+                metadata = candidate.metadata.to_dict() if candidate.metadata else {}
+                if metadata.get("user_id") == str(user_id) and metadata.get("period_start") == start.isoformat():
+                    matches.append(candidate)
+            return matches
+
+        matches = await _call(find_invoice)
+        if len(matches) > 1:
+            logger.error("Multiple savings invoices for period %s", key)
+            raise HTTPException(502, "Billing invoice needs reconciliation")
+        if matches:
+            invoice = matches[0]
+        else:
+            invoice_params = {
+                "customer": customer_id,
+                "collection_method": "charge_automatically",
+                # An incomplete invoice must never finalize itself while the
+                # webhook is waiting for a retry to attach its fee line.
+                "auto_advance": False,
+                "pending_invoice_items_behavior": "exclude",
+                "description": f"ContextShrink Pro savings fee, {period}",
+                "metadata": {"user_id": str(user_id), "period_start": start.isoformat()},
+            }
+            if payment_method:
+                invoice_params["default_payment_method"] = payment_method
+            invoice = await _call(
+                client.v1.invoices.create, invoice_params, {"idempotency_key": key + "-invoice"}
+            )
     # Link the invoice before finalizing: finalizing attempts payment, and the
     # resulting invoice.paid / invoice.payment_failed webhook looks it up.
-    await db._conn().execute(
+    await conn.execute(
         "UPDATE billing.savings_fees SET stripe_invoice_id=$3 WHERE user_id=$1 AND period_start=$2",
         user_id,
         start,
         invoice.id,
     )
-    await _call(
-        client.v1.invoice_items.create,
-        {
-            "customer": customer_id,
-            "invoice": invoice.id,
-            "currency": "usd",
-            "amount": fee_cents,
-            "description": f"5% of ${money(savings)} saved, {period}",
-        },
-        {"idempotency_key": key + "-item"},
-    )
-    finalized = await _call(
-        client.v1.invoices.finalize_invoice,
-        invoice.id,
-        {"auto_advance": True},
-        {"idempotency_key": key + "-finalize"},
-    )
-    await db._conn().execute(
+    if invoice.status == "draft" and invoice.auto_advance:
+        # Also pause drafts left by the previous implementation.
+        invoice = await _call(client.v1.invoices.update, invoice.id, {"auto_advance": False})
+
+    def invoice_items():
+        return list(client.v1.invoice_items.list({"invoice": invoice.id, "limit": 100}).auto_paging_iter())
+
+    items = await _call(invoice_items)
+    if items and (len(items) != 1 or items[0].amount != fee_cents or items[0].currency != "usd"):
+        logger.error("Unexpected savings fee lines on invoice %s", invoice.id)
+        raise HTTPException(502, "Billing invoice needs reconciliation")
+    if not items:
+        if invoice.status != "draft":
+            # An old empty invoice may already have auto-finalized. Do not
+            # silently mark it complete or generate an additional charge.
+            logger.error("Savings invoice %s finalized without its fee", invoice.id)
+            raise HTTPException(502, "Billing invoice needs reconciliation")
+        await _call(
+            client.v1.invoice_items.create,
+            {
+                "customer": customer_id,
+                "invoice": invoice.id,
+                "currency": "usd",
+                "amount": fee_cents,
+                "description": f"5% of ${money(savings)} saved, {period}",
+            },
+            {"idempotency_key": key + "-item"},
+        )
+    # If finalization succeeded but its response was lost, retrieve above
+    # returns the finalized invoice; its URL still needs to be saved locally.
+    finalized = invoice
+    if invoice.status == "draft":
+        finalized = await _call(
+            client.v1.invoices.finalize_invoice,
+            invoice.id,
+            {"auto_advance": True},
+            {"idempotency_key": key + "-finalize"},
+        )
+    await conn.execute(
         "UPDATE billing.savings_fees SET invoice_url=$2 WHERE stripe_invoice_id=$1",
         invoice.id,
         finalized.hosted_invoice_url,

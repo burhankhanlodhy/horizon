@@ -56,6 +56,15 @@
   row per account per period, so redelivered events never charge twice.
   `api/stripe_setup.py` creates the Pro price, Customer Portal settings and the
   webhook endpoint idempotently.
+- Savings-fee retries resume the stored invoice instead of treating an invoice
+  ID as proof of completion. The recorded fee amount stays fixed across retries.
+  A PostgreSQL advisory lock serializes processing for each account/period;
+  competing webhook deliveries return 503 so Stripe retries them. Invoices are
+  created with automatic advancement disabled and finalized only after the fee
+  line exists. Stripe invoice/item reads recover successful calls whose response
+  or database write was lost, including after idempotency keys expire. Unexpected
+  lines or an already-finalized empty invoice require reconciliation and return
+  502 rather than creating an additional charge. No schema migration is needed.
 - Unpaid fees: the $0 subscription renews regardless, so `invoice.payment_failed`
   / `invoice.paid` / `invoice.voided` on fee invoices are tracked per row in
   `billing.savings_fees` (first failure time kept across Stripe's retries).
