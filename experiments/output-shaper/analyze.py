@@ -20,9 +20,11 @@ from pathlib import Path
 
 LOG = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / "AppData/Local/ContextShrinkExperiment/requests.jsonl"
 
-# Fraction of the input price, when a model's catalog has no cache prices
-# (the same fallbacks as horizon/proxy/cost.py).
-CACHE = {"anthropic": (0.1, 1.25), "openai": (0.5, 1.0)}
+# (cache read, cache write) as fractions of the input price, for catalogs with
+# no cache prices (the fallbacks in horizon/proxy/cost.py). OpenAI has no
+# cache-write charge, and the proxy logs its written tokens as uncached input
+# too, so writes are not priced again there.
+CACHE = {"anthropic": (0.1, 1.25), "openai": (0.5, 0.0)}
 
 
 def price(model: str) -> tuple[float, float] | None:
