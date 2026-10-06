@@ -1,6 +1,6 @@
 # Claude work log
 
-Sessions: 2026-10-01 to 2026-10-02. Review, deployment, domain/email setup, the Free
+Sessions: 2026-10-01 to 2026-10-06. Review, deployment, domain/email setup, the Free
 compression cap, Stripe billing, the Windows desktop launcher and the move to
 per-Pi Cloudflare Tunnels for ContextShrink.
 No credentials, tokens or passwords are recorded here.
@@ -18,7 +18,7 @@ No credentials, tokens or passwords are recorded here.
 | DNS / SSL | Cloudflare (free plan) | HTTPS via Cloudflare certificates |
 | Email | Cloudflare Email Routing | `support@contextshrink.com` forwards to the owner's inbox |
 | Billing | Stripe sandbox (test mode) | Pro checkout, webhooks, savings fee, unpaid-fee handling |
-| Desktop launcher | Windows installer (Tauri) | Claude Code and OpenCode through the proxy |
+| Desktop launcher | Windows installer (Tauri), Downloads page on the dashboard | 0.4.0: 12 terminal tools and 4 editors through the proxy |
 
 ## Topology
 
@@ -113,6 +113,38 @@ proxy.contextshrink.com                  -> Cloudflare -> tunnel pi5-proxy (Pi 5
   requests with an HTML 403. The proxy now logs a redacted preview of upstream error
   bodies.
 
+### Desktop app 0.2.x to 0.4.0 (2026-10-03 to 2026-10-06)
+
+- 0.2.x: Codex (HTTP and WebSocket Responses relayed by the forwarder; no unwrap, which
+  would strip the user's own Horizon MCP block), minimise to tray, tool logos.
+- 0.3.0, terminal tools: Aider, Copilot CLI (BYOK Anthropic key only), Goose, Grok CLI,
+  Kimi CLI, Mistral Vibe, Oh My Pi, OpenClaude, OpenHands. Every wrap was run against a
+  sandboxed profile with stand-in binaries; only Oh My Pi writes a file (`models.yml`,
+  restored byte-for-byte by unwrap).
+  - All wrap binary lookups go through `_resolve_windows_launcher` (npm's extensionless
+    sh shims fail with WinError 193 on Windows).
+  - Grok, Kimi and Vibe talk to providers the proxy is not configured for, so each gets
+    its own forwarder (`horizon forward start --upstream`, ports 18791/18789/18790)
+    that tags model calls with `x-horizon-base-url` / `x-horizon-original-path`.
+    Verified live: each provider answered a fake-key request with its own auth error.
+  - Grok Build (the `grok-build` model) runs inside Grok CLI, so it is covered there.
+- 0.4.0, Editors section:
+  - Claude Code for VS Code: Connect/Disconnect via `horizon desktop connect|disconnect
+    vscode-claude`, which edits `~/.claude/settings.json` key by key and restores it.
+    The app disconnects on quit and sign-out and reconnects at the next sign-in. It
+    never takes over a setup made by the user's own `horizon wrap vscode-claude`.
+  - Cline, Continue, ZCode: configured in their own settings; the app shows the base URL
+    to paste. Continue needs `http://127.0.0.1:18788/v1/` (it resolves paths against
+    `apiBase`).
+- Not supported, and why:
+  - **Cursor** sends custom-base-URL requests from its own servers (api2.cursor.sh), so
+    a loopback forwarder is unreachable. It would need the public proxy URL plus a way
+    to carry the account key alongside the provider key in one Authorization header.
+  - **Copilot in VS Code** (and Copilot CLI with a subscription sign-in) needs a local
+    proxy holding the user's GitHub Copilot token.
+  - **OpenClaw**: its plugin package (`horizon-openclaw`) is not published on npm and its
+    source is not in this repo.
+
 ### Per-Pi tunnels and LAN lockdown (2026-10-02)
 
 - Tunnel `pi5-proxy` on the Pi 5 with hostnames `proxy` (-> 127.0.0.1:8790) and `api`
@@ -155,9 +187,11 @@ the owner's password, so the owner runs the final command.
 
 ```powershell
 .\desktop\build-installer.ps1
+.\desktop\publish-installer.ps1   # stages it; then: ssh -t raspberrypi4@192.168.0.64 /tmp/cs-publish-release.sh
 ```
 
 Output: `desktop\app\src-tauri\target\release\bundle\nsis\ContextShrink_<version>_x64-setup.exe`.
+Cloudflare caches installers by file name, so every release needs a version bump.
 
 ## Pending / next steps
 
@@ -165,8 +199,9 @@ Output: `desktop\app\src-tauri\target\release\bundle\nsis\ContextShrink_<version
   decide on **Stripe Tax**, and enable Stripe's failed-payment customer emails.
 - Landing page: contact address plus Terms, Privacy and Refund pages for Stripe review.
 - Delete `~/stripe_temp/keys.txt` on the Pi 5 (keys live in `.env`).
-- Desktop app: Downloads page on the dashboard, hosting (GitHub Releases),
-  auto-update, code signing (SmartScreen warns on the unsigned installer), more tools.
+- Desktop app: code signing with Azure Artifact Signing (owner to set up the account
+  and identity validation), auto-update, start with Windows (editors only work while
+  the app runs), Cursor support (see above).
 - **Team plan**: organisations, invitations, combined analytics, per-seat billing.
 - Rotate the Pi password (it was shared in chat) and move both Pis to SSH key-only login.
 
