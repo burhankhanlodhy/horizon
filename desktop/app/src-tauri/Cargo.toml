@@ -1,6 +1,6 @@
 [package]
 name = "contextshrink-desktop"
-version = "0.4.0"
+version = "0.5.0"
 description = "ContextShrink desktop launcher: run coding tools through the ContextShrink proxy"
 authors = ["ContextShrink"]
 edition = "2021"
@@ -24,9 +24,18 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-keyring = { version = "3", features = ["windows-native"] }
 which = "7"
 dunce = "1"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# Secret Service over D-Bus (GNOME Keyring, KWallet). libdbus is vendored, so
+# users need no extra package and the build needs no libdbus-1-dev.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+# Same crate keyring uses, to create the default collection when it is missing.
+dbus-secret-service = { version = "4.1", features = ["crypto-rust", "vendored"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

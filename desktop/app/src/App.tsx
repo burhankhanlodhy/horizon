@@ -328,8 +328,7 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
 
       <h2 className="section-title">Editors</h2>
       <p className="muted small section-note">
-        Editors stay connected while ContextShrink runs. Minimise it to keep it running in the
-        tray.
+        Editors stay connected while ContextShrink is running, including when it is minimised.
       </p>
       <section className="tools">
         {editors.map((tool) =>

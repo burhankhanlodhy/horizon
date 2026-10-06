@@ -18,7 +18,7 @@ No credentials, tokens or passwords are recorded here.
 | DNS / SSL | Cloudflare (free plan) | HTTPS via Cloudflare certificates |
 | Email | Cloudflare Email Routing | `support@contextshrink.com` forwards to the owner's inbox |
 | Billing | Stripe sandbox (test mode) | Pro checkout, webhooks, savings fee, unpaid-fee handling |
-| Desktop launcher | Windows installer (Tauri), Downloads page on the dashboard | 0.4.0: 12 terminal tools and 4 editors through the proxy |
+| Desktop launcher | Windows installer and Linux .deb/.rpm/AppImage (Tauri), Downloads page on the dashboard | 0.5.0: 12 terminal tools and 4 editors through the proxy |
 
 ## Topology
 
@@ -145,6 +145,28 @@ proxy.contextshrink.com                  -> Cloudflare -> tunnel pi5-proxy (Pi 5
   - **OpenClaw**: its plugin package (`horizon-openclaw`) is not published on npm and its
     source is not in this repo.
 
+### Linux desktop app, 0.5.0 (2026-10-06)
+
+- x86_64 `.deb`, `.rpm` and AppImage, built in an Ubuntu 22.04 container
+  (`desktop/linux/build-in-container.sh`, Podman in WSL) so they run on Ubuntu 22.04,
+  Debian 12, Fedora 38 and newer. `install-deps.sh` is shared with the planned GitHub
+  Actions build.
+- Platform differences in the app (`src-tauri/src/unix.rs`):
+  - tools open in the user's terminal (`$CONTEXTSHRINK_TERMINAL`, `$TERMINAL`,
+    `x-terminal-emulator`, GNOME Terminal, Konsole, ... xterm) via a `launch-<tool>.sh`;
+  - PATH is read from the login shell at startup (nvm, `~/.local/bin`, `~/.npm-global`);
+  - secrets in the Secret Service keyring; the app creates the default collection
+    when a session has none (WSL, minimal desktops), which shows the keyring's prompt;
+  - minimise does not hide to the tray (stock GNOME has no tray icons);
+  - WebKit's DMA-BUF renderer is off (blank windows without a GPU), and under WSL the
+    app uses X11 (WSLg's Wayland bridge mis-placed the window).
+- Checked in WSL (Ubuntu 26.04): install, keyring, forwarder to the live proxy, VS Code
+  Claude connect/restore, all 12 tool wraps in a sandbox, sign-in, and Claude Code
+  through `ANTHROPIC_BASE_URL=http://127.0.0.1:18788`. Not yet checked: real GNOME/KDE
+  desktops in VMs, Fedora, the AppImage.
+- `latest.json` now has an `assets` list (os, arch, kind, file, size, sha256); the old
+  top-level Windows fields stay. Downloads has Windows/Linux tabs.
+
 ### Per-Pi tunnels and LAN lockdown (2026-10-02)
 
 - Tunnel `pi5-proxy` on the Pi 5 with hostnames `proxy` (-> 127.0.0.1:8790) and `api`
@@ -187,10 +209,12 @@ the owner's password, so the owner runs the final command.
 
 ```powershell
 .\desktop\build-installer.ps1
-.\desktop\publish-installer.ps1   # stages it; then: ssh -t raspberrypi4@192.168.0.64 /tmp/cs-publish-release.sh
+wsl -d Ubuntu -u root -- bash desktop/linux/build-in-container.sh   # from the repo, in WSL paths
+.\desktop\publish-installer.ps1   # stages all four; then: ssh -t raspberrypi4@192.168.0.64 /tmp/cs-publish-release.sh
 ```
 
-Output: `desktop\app\src-tauri\target\release\bundle\nsis\ContextShrink_<version>_x64-setup.exe`.
+Outputs: `desktop\app\src-tauri\target\release\bundle\nsis\ContextShrink_<version>_x64-setup.exe`
+and `desktop\dist-linux\` (`.deb`, `.rpm`, `.AppImage`).
 Cloudflare caches installers by file name, so every release needs a version bump.
 
 ## Pending / next steps
@@ -200,8 +224,12 @@ Cloudflare caches installers by file name, so every release needs a version bump
 - Landing page: contact address plus Terms, Privacy and Refund pages for Stripe review.
 - Delete `~/stripe_temp/keys.txt` on the Pi 5 (keys live in `.env`).
 - Desktop app: code signing with Azure Artifact Signing (owner to set up the account
-  and identity validation), auto-update, start with Windows (editors only work while
+  and identity validation), auto-update, start at login (editors only work while
   the app runs), Cursor support (see above).
+- Linux: test on GNOME/KDE VMs and Fedora; move the build to GitHub Actions before
+  launch; ARM64; trim numpy/OpenBLAS (~50 MB) from the frozen client; a terminal-only
+  `contextshrink` command for servers (key file or env var when there is no keyring).
+- macOS after Linux (Keychain, Terminal.app, notarization with an Apple Developer account).
 - **Team plan**: organisations, invitations, combined analytics, per-seat billing.
 - Rotate the Pi password (it was shared in chat) and move both Pis to SSH key-only login.
 

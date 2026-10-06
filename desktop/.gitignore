@@ -13,3 +13,6 @@ app/src-tauri/gen/schemas/
 # case-insensitive filesystems; the app icons are needed to build.
 !app/src-tauri/icons/
 !app/src-tauri/icons/**
+
+# Linux packages (desktop/linux/build-in-container.sh)
+dist-linux/

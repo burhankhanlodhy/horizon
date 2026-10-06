@@ -16,7 +16,7 @@ const ENDPOINTS = [
   { method: "GET", path: "/v1/models", desc: "Model list (passed through)", scope: "messages" },
 ];
 
-const CLAUDE_MANUAL = `# macOS / Linux, or Windows without the app
+const CLAUDE_MANUAL = `# macOS, servers, or any computer without the app
 export ANTHROPIC_BASE_URL=${PROXY_URL}
 export ANTHROPIC_CUSTOM_HEADERS="X-Horizon-Proxy-Token: cs_live_..."
 claude`;
@@ -98,7 +98,7 @@ export default function Documentation() {
           <SectionHeader
             eyebrow="Recommended"
             title="Use the desktop app"
-            action={<Badge tone="green">Windows</Badge>}
+            action={<Badge tone="green">Windows &amp; Linux</Badge>}
           />
           <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm leading-relaxed text-ink-2">
             <li>
@@ -110,11 +110,12 @@ export default function Documentation() {
             </li>
             <li>
               Sign in with this account. The app creates a key for this computer
-              (“Desktop: &lt;PC name&gt;” on{" "}
+              (“Desktop: &lt;computer name&gt;” on{" "}
               <Link to="/keys" className="font-semibold text-ember hover:underline">
                 API Keys
               </Link>
-              ) and keeps it in Windows Credential Manager.
+              ) and keeps it in Windows Credential Manager, or the desktop keyring on
+              Linux.
             </li>
             <li>
               Choose your project folder and click Launch next to one of the supported
@@ -191,7 +192,7 @@ export default function Documentation() {
       <Card hairline className="p-6">
         <SectionHeader
           eyebrow="Manual setup"
-          title="Other tools, macOS and Linux"
+          title="Other tools, macOS and servers"
           action={<Badge tone="slate">Needs an account key</Badge>}
         />
         <p className="mb-4 max-w-3xl text-sm leading-relaxed text-ink-3">

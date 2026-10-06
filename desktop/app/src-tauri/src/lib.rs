@@ -1,12 +1,14 @@
 //! ContextShrink desktop launcher.
 //!
 //! Sign in, get a per-device proxy key (created through the API and kept in
-//! Windows Credential Manager), keep a loopback forwarder running, and launch
+//! the OS credential store), keep a loopback forwarder running, and launch
 //! the user's installed coding tools through the ContextShrink proxy.
 
 mod api;
 mod client;
 mod secrets;
+#[cfg(unix)]
+mod unix;
 
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -78,8 +80,11 @@ struct Session {
 }
 
 fn device_name() -> String {
-    let host = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows PC".into());
-    format!("Desktop: {host}")
+    #[cfg(windows)]
+    let host = std::env::var("COMPUTERNAME").ok();
+    #[cfg(unix)]
+    let host = unix::host_name();
+    format!("Desktop: {}", host.unwrap_or_else(|| "this computer".into()))
 }
 
 /// Makes sure this device has a working proxy key, creating one if needed.
@@ -287,29 +292,40 @@ async fn set_editor_connected(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    unix::display_workarounds();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Desktop-menu launches miss the PATH the user's shell sets up.
+            #[cfg(unix)]
+            unix::import_login_path();
             // Tauri can return verbatim `\\?\C:\...` paths, which cmd.exe cannot
             // run ("The system cannot find the path specified"); use plain ones.
             let exe = dunce::simplified(&app.path().resource_dir()?)
                 .join("horizon")
-                .join("horizon.exe");
+                .join(client::CLIENT_EXE);
             let data_dir = dunce::simplified(&app.path().app_local_data_dir()?).to_path_buf();
             app.manage(AppState {
                 api: Api::new(),
                 client: Client::new(exe, data_dir),
                 forwarders: Mutex::new(HashMap::new()),
             });
-            build_tray(app)?;
+            // On Linux a tray icon needs libayatana-appindicator; without it the
+            // app still runs, just without the icon.
+            if let Err(e) = build_tray(app) {
+                eprintln!("tray icon unavailable: {e}");
+            }
             Ok(())
         })
-        // Minimise sends the app to the tray: the window leaves the taskbar
-        // while the forwarder keeps serving the tools launched from it.
+        // Windows: minimise sends the app to the tray, so the window leaves the
+        // taskbar while the forwarder keeps serving the tools launched from it.
+        // Linux minimises normally: several desktops (stock GNOME) show no tray
+        // icons, so a hidden window could not be brought back.
         .on_window_event(|window, event| {
             if let WindowEvent::Resized(_) = event {
-                if window.is_minimized().unwrap_or(false) {
+                if cfg!(windows) && window.is_minimized().unwrap_or(false) {
                     let _ = window.hide();
                 }
             }

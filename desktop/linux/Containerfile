@@ -1,0 +1,6 @@
+# Build environment for the Linux desktop packages. Ubuntu 22.04 keeps the
+# binaries compatible with 22.04, Debian 12, Fedora 36 and newer.
+FROM docker.io/library/ubuntu:22.04
+COPY install-deps.sh /tmp/install-deps.sh
+RUN bash /tmp/install-deps.sh && rm /tmp/install-deps.sh
+ENV PATH=/root/.cargo/bin:$PATH

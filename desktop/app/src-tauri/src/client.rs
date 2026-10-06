@@ -1,4 +1,4 @@
-//! The bundled Horizon client (`horizon.exe`, a frozen build of the Horizon CLI).
+//! The bundled Horizon client (`horizon`, a frozen build of the Horizon CLI).
 //!
 //! It stores the device key (`vault`), runs the loopback forwarder that adds
 //! the key to every request and relays it to the hosted proxy, and wraps the
@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -14,8 +15,20 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+/// The client executable's file name inside the bundled `horizon` folder.
+pub const CLIENT_EXE: &str = if cfg!(windows) { "horizon.exe" } else { "horizon" };
+
+/// Where the device key is kept, as users know it.
+pub const KEY_STORE: &str = if cfg!(windows) {
+    "Windows Credential Manager"
+} else {
+    "the system keyring"
+};
 
 /// Loopback port of the main forwarder (kept clear of a local proxy's 8787).
 /// It serves every tool that talks to Anthropic or OpenAI.
@@ -378,7 +391,9 @@ impl Client {
     }
 
     fn command(&self) -> Command {
+        #[allow(unused_mut)]
         let mut cmd = Command::new(&self.exe);
+        #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd
     }
@@ -407,7 +422,14 @@ impl Client {
         if status.success() {
             Ok(())
         } else {
-            Err("Could not save the device key to Windows Credential Manager".into())
+            Err(if cfg!(windows) {
+                format!("Could not save the device key to {KEY_STORE}")
+            } else {
+                format!(
+                    "Could not save the device key to {KEY_STORE}. Make sure a keyring \
+                     service such as GNOME Keyring or KWallet is running."
+                )
+            })
         }
     }
 
@@ -536,12 +558,18 @@ impl Client {
         let _ = std::fs::remove_file(self.editors_file());
     }
 
-    /// Opens a console window in `folder` running the wrapped tool, and
+    /// Opens a terminal window in `folder` running the wrapped tool, and
     /// restores the tool's own config when it exits.
     pub fn launch(&self, tool: &Tool, folder: &Path) -> Result<(), String> {
         if !folder.is_dir() {
             return Err("Choose an existing project folder".into());
         }
+        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
+        self.launch_in_terminal(tool, folder)
+    }
+
+    #[cfg(windows)]
+    fn launch_in_terminal(&self, tool: &Tool, folder: &Path) -> Result<(), String> {
         let port = tool.port.to_string();
         let quote = |args: &[&str]| args.join(" ");
         // Tools whose wrap leaves their config untouched have no unwrap step.
@@ -561,7 +589,6 @@ impl Client {
             name = tool.name,
             wrap = quote(tool.wrap),
         );
-        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
         let path = self.data_dir.join(format!("launch-{}.cmd", tool.id));
         std::fs::write(&path, script).map_err(|e| e.to_string())?;
         Command::new("cmd")
@@ -573,5 +600,75 @@ impl Client {
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Could not open a terminal for {}: {e}", tool.name))
+    }
+
+    #[cfg(unix)]
+    fn launch_in_terminal(&self, tool: &Tool, folder: &Path) -> Result<(), String> {
+        use crate::unix::{open_in_terminal, sh_quote};
+
+        let script = unix_launch_script(
+            tool,
+            &sh_quote(&self.exe.to_string_lossy()),
+            folder,
+            &std::env::var("PATH").unwrap_or_default(),
+        );
+        let path = self.data_dir.join(format!("launch-{}.sh", tool.id));
+        open_in_terminal(&script, &path, folder, tool.name)
+    }
+}
+
+/// The `sh` script a terminal runs for `tool`: wrap, then unwrap on exit, and
+/// keep the window open on an error. PATH is the one the app found the tool on
+/// (see `unix::import_login_path`).
+#[cfg(unix)]
+fn unix_launch_script(tool: &Tool, horizon: &str, folder: &Path, path: &str) -> String {
+    use crate::unix::sh_quote;
+
+    let port = tool.port.to_string();
+    let quote = |args: &[&str]| args.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" ");
+    // Tools whose wrap leaves their config untouched have no unwrap step.
+    let unwrap_line = if tool.unwrap.is_empty() {
+        String::new()
+    } else {
+        format!("{horizon} {} --port {port} >/dev/null 2>&1\n", quote(tool.unwrap))
+    };
+    let mut script = String::from("#!/bin/sh\n");
+    script += &format!("printf '\\033]0;%s\\007' {}\n", sh_quote(&format!("ContextShrink - {}", tool.name)));
+    script += &format!("export PATH={}\n", sh_quote(path));
+    script += &format!("cd -- {} || exit 1\n", sh_quote(&folder.to_string_lossy()));
+    script += &format!("echo {}\n", sh_quote(&format!("Starting {} through ContextShrink...", tool.name)));
+    script += &format!("{horizon} {} --port {port}\n", quote(tool.wrap));
+    script += "status=$?\n";
+    script += &unwrap_line;
+    script += "if [ \"$status\" -ne 0 ]; then\n";
+    script += "  echo\n";
+    script += &format!("  echo {}\n", sh_quote(&format!("{} exited with an error.", tool.name)));
+    script += "  printf 'Press Enter to close this window. '\n";
+    script += "  read _\n";
+    script += "fi\n";
+    script
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_script_runs_wrap_then_unwrap_with_quoted_values() {
+        let omp = TOOLS.iter().find(|t| t.id == "omp").unwrap();
+        let script = unix_launch_script(omp, "'/opt/cs/horizon'", Path::new("/home/me/it's here"), "/usr/bin:/x");
+        assert!(script.contains("cd -- '/home/me/it'\\''s here' || exit 1\n"));
+        assert!(script.contains("export PATH='/usr/bin:/x'\n"));
+        assert!(script.contains("'/opt/cs/horizon' 'wrap' 'omp' '--no-proxy' --port 18788\n"));
+        assert!(script.contains("'/opt/cs/horizon' 'unwrap' 'omp' '--no-stop-proxy' --port 18788 >/dev/null 2>&1\n"));
+        let wrap_at = script.find("'wrap'").unwrap();
+        assert!(script.find("'unwrap'").unwrap() > wrap_at);
+    }
+
+    #[test]
+    fn tools_without_unwrap_have_no_unwrap_line() {
+        let aider = TOOLS.iter().find(|t| t.id == "aider").unwrap();
+        let script = unix_launch_script(aider, "'h'", Path::new("/p"), "/usr/bin");
+        assert!(!script.contains("unwrap"));
     }
 }

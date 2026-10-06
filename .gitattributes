@@ -4,3 +4,5 @@
 # CHANGELOG appends conflict on nearly every concurrent PR; union-merge keeps
 # all entries instead of forcing a manual resolution, killing the merge cascade.
 CHANGELOG.md merge=union
+desktop/linux/*.sh text eol=lf
+desktop/linux/Containerfile text eol=lf
