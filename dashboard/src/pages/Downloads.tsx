@@ -29,13 +29,58 @@ const TOOLS = [
     note: "Open-source AI coding agent for the terminal",
     url: "https://opencode.ai/download",
   },
+  {
+    name: "Aider",
+    note: "AI pair programming in your terminal",
+    url: "https://aider.chat/docs/install.html",
+  },
+  {
+    name: "Copilot CLI",
+    note: "GitHub Copilot CLI with your own Anthropic API key",
+    url: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+  },
+  {
+    name: "Goose",
+    note: "Block's open-source on-machine AI agent",
+    url: "https://block.github.io/goose/docs/getting-started/installation",
+  },
+  {
+    name: "Grok CLI",
+    note: "xAI's coding agent for the terminal",
+    url: "https://docs.x.ai/docs/grok-cli",
+  },
+  {
+    name: "Kimi CLI",
+    note: "Moonshot AI's coding agent (run /login once on first launch)",
+    url: "https://github.com/MoonshotAI/kimi-cli",
+  },
+  {
+    name: "Mistral Vibe",
+    note: "Mistral's coding agent for the terminal",
+    url: "https://github.com/mistralai/mistral-vibe",
+  },
+  {
+    name: "Oh My Pi",
+    note: "Pi coding agent with batteries included",
+    url: "https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent",
+  },
+  {
+    name: "OpenClaude",
+    note: "Open-source Claude Code-style agent for any model",
+    url: "https://github.com/Gitlawb/openclaude",
+  },
+  {
+    name: "OpenHands",
+    note: "All Hands AI's software agent in the terminal",
+    url: "https://docs.all-hands.dev/",
+  },
 ];
 
 const STEPS = [
   "Run the installer. It installs for your Windows user only; no administrator rights needed.",
   "Open ContextShrink and sign in with this account. The app creates a key for this computer automatically; it appears on API Keys as “Desktop: <your PC name>”.",
   "Choose your project folder.",
-  "Click Launch next to an installed tool (Claude Code, Codex or OpenCode). It opens in a new window, routed through ContextShrink. Closing it restores the tool's own settings.",
+  "Click Launch next to an installed tool, such as Claude Code, Codex or OpenCode. It opens in a new window, routed through ContextShrink. Closing it restores the tool's own settings.",
 ];
 
 const fmtSize = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(0)} MB`;
@@ -148,7 +193,7 @@ export default function Downloads() {
             The app doesn't include these tools. Install the ones you use; the app finds
             them automatically and keeps using your own provider login or API key.
           </p>
-          <ul className="flex flex-col gap-3">
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {TOOLS.map((tool) => (
               <li
                 key={tool.name}

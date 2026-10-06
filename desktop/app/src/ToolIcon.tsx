@@ -1,32 +1,44 @@
 /**
  * Tool marks for the launcher cards.
  *
- * Claude Code and OpenCode use their marks from Simple Icons
- * (https://simpleicons.org, CC0; the trademarks remain their owners'), shown
- * unaltered to identify the tool. OpenAI's logo is not used for Codex: it is
- * not in Simple Icons and OpenAI restricts third-party use, so Codex gets a
- * neutral terminal glyph drawn for this app.
+ * Marks come from Simple Icons (https://simpleicons.org; CC0, except GitHub
+ * Copilot's, which is MIT from GitHub's Octicons; the trademarks remain their
+ * owners'), shown unaltered to identify the tool. OpenAI's logo is not used
+ * for Codex: it is not in Simple Icons and OpenAI restricts third-party use, so
+ * Codex gets a neutral terminal glyph drawn for this app. Tools without a
+ * freely licensed mark show their initial.
  */
 
-const CLAUDE_CODE =
-  "M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z";
-const OPENCODE = "M22 24H2V0h20zM17 4.8H7v14.4h10z";
+interface Mark {
+  d: string;
+  fill: string;
+  evenOdd?: boolean;
+}
+
+const MARKS: Record<string, Mark> = {
+  claude: {
+    d: "M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z",
+    fill: "#D97757",
+  },
+  opencode: { d: "M22 24H2V0h20zM17 4.8H7v14.4h10z", fill: "currentColor", evenOdd: true },
+  copilot: {
+    d: "M23.922 16.997C23.061 18.492 18.063 22.02 12 22.02 5.937 22.02.939 18.492.078 16.997A.641.641 0 0 1 0 16.741v-2.869a.883.883 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.098 10.098 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952C7.255 2.937 9.248 1.98 11.978 1.98c2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.841.841 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256Zm-11.75-5.992h-.344a4.359 4.359 0 0 1-.355.508c-.77.947-1.918 1.492-3.508 1.492-1.725 0-2.989-.359-3.782-1.259a2.137 2.137 0 0 1-.085-.104L4 11.746v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.359 4.359 0 0 1-.355-.508Zm2.328 3.25c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm-5 0c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm3.313-6.185c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z",
+    fill: "currentColor",
+  },
+  vibe: { d: "M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z", fill: "#FA520F" },
+  kimi: {
+    d: "M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441",
+    fill: "currentColor",
+  },
+};
 
 export function ToolIcon({ id, name }: { id: string; name: string }) {
-  if (id === "claude") {
+  const mark = MARKS[id];
+  if (mark) {
     return (
       <span className="tool-icon" title={name}>
         <svg viewBox="0 0 24 24" role="img" aria-label={name}>
-          <path d={CLAUDE_CODE} fill="#D97757" />
-        </svg>
-      </span>
-    );
-  }
-  if (id === "opencode") {
-    return (
-      <span className="tool-icon" title={name}>
-        <svg viewBox="0 0 24 24" role="img" aria-label={name}>
-          <path d={OPENCODE} fill="currentColor" fillRule="evenodd" />
+          <path d={mark.d} fill={mark.fill} fillRule={mark.evenOdd ? "evenodd" : undefined} />
         </svg>
       </span>
     );

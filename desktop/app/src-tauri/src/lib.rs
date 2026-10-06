@@ -9,6 +9,7 @@ mod client;
 mod secrets;
 
 use std::path::PathBuf;
+use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Mutex;
 
@@ -64,7 +65,9 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 struct AppState {
     api: Api,
     client: Client,
-    forwarder: Mutex<Option<Child>>,
+    /// Forwarders by loopback port: the main one, plus one per provider the
+    /// proxy is not configured for, started the first time a tool needs it.
+    forwarders: Mutex<HashMap<u16, Child>>,
 }
 
 #[derive(Serialize)]
@@ -100,29 +103,31 @@ async fn ensure_device_key(state: &AppState, token: &str) -> Result<(), String> 
     secrets::set_device_key_id(&key.id)
 }
 
-fn ensure_forwarder(state: &AppState) -> Result<(), String> {
-    let mut slot = state.forwarder.lock().unwrap();
-    let running = match slot.as_mut() {
+fn ensure_forwarder(state: &AppState, port: u16, upstream: Option<&str>) -> Result<(), String> {
+    let mut forwarders = state.forwarders.lock().unwrap();
+    let running = match forwarders.get_mut(&port) {
         Some(child) => matches!(child.try_wait(), Ok(None)),
         None => false,
     };
-    if running && Client::forwarder_listening() {
+    if running && Client::forwarder_listening(port) {
         return Ok(());
     }
-    if let Some(mut old) = slot.take() {
+    if let Some(mut old) = forwarders.remove(&port) {
         let _ = old.kill();
     }
-    *slot = Some(state.client.start_forwarder(&api::proxy_url())?);
-    drop(slot);
-    if Client::wait_for_forwarder() {
+    let child = state.client.start_forwarder(&api::proxy_url(), port, upstream)?;
+    forwarders.insert(port, child);
+    drop(forwarders);
+    if Client::wait_for_forwarder(port) {
         Ok(())
     } else {
         Err("The ContextShrink forwarder did not start. Restart the app and try again.".into())
     }
 }
 
-fn stop_forwarder(state: &AppState) {
-    if let Some(mut child) = state.forwarder.lock().unwrap().take() {
+fn stop_forwarders(state: &AppState) {
+    let children: Vec<Child> = state.forwarders.lock().unwrap().drain().map(|(_, c)| c).collect();
+    for mut child in children {
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -133,7 +138,7 @@ async fn open_session(state: &AppState, token: &str, user: User) -> Result<Sessi
         return Err("The ContextShrink client is missing. Reinstall the app.".into());
     }
     ensure_device_key(state, token).await?;
-    ensure_forwarder(state)?;
+    ensure_forwarder(state, client::FORWARDER_PORT, None)?;
     Ok(Session {
         user,
         device: device_name(),
@@ -177,7 +182,7 @@ async fn login(
 
 #[tauri::command]
 async fn logout(state: State<'_, AppState>) -> Result<(), String> {
-    stop_forwarder(&state);
+    stop_forwarders(&state);
     if let Some(token) = secrets::session() {
         if let Some(id) = secrets::device_key_id() {
             let _ = state.api.revoke_key(&token, &id).await;
@@ -209,7 +214,7 @@ fn list_tools() -> Vec<client::ToolInfo> {
 
 #[tauri::command]
 fn forwarder_running() -> bool {
-    Client::forwarder_listening()
+    Client::forwarder_listening(client::FORWARDER_PORT)
 }
 
 #[tauri::command]
@@ -222,10 +227,10 @@ async fn launch_tool(
         .iter()
         .find(|t| t.id == tool)
         .ok_or("Unknown tool")?;
-    if which::which(spec.command).is_err() {
+    if !spec.installed() {
         return Err(format!("{} is not installed on this computer.", spec.name));
     }
-    ensure_forwarder(&state)?;
+    ensure_forwarder(&state, spec.port, spec.upstream)?;
     state.client.launch(spec, &PathBuf::from(folder))
 }
 
@@ -244,7 +249,7 @@ pub fn run() {
             app.manage(AppState {
                 api: Api::new(),
                 client: Client::new(exe, data_dir),
-                forwarder: Mutex::new(None),
+                forwarders: Mutex::new(HashMap::new()),
             });
             build_tray(app)?;
             Ok(())
@@ -272,7 +277,7 @@ pub fn run() {
 
     app.run(|handle: &AppHandle, event| {
         if let RunEvent::Exit = event {
-            stop_forwarder(&handle.state::<AppState>());
+            stop_forwarders(&handle.state::<AppState>());
         }
     });
 }

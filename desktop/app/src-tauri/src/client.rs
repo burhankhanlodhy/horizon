@@ -16,7 +16,8 @@ use serde::Serialize;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-/// Loopback port of the forwarder (kept clear of a local proxy's 8787).
+/// Loopback port of the main forwarder (kept clear of a local proxy's 8787).
+/// It serves every tool that talks to Anthropic or OpenAI.
 pub const FORWARDER_PORT: u16 = 18788;
 
 /// A tool the launcher can wrap. Tools are never shipped with the app; they
@@ -25,21 +26,34 @@ pub struct Tool {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    /// Executable looked up on PATH to decide whether the tool is installed.
-    pub command: &'static str,
+    /// Executables looked up on PATH to decide whether the tool is installed.
+    pub commands: &'static [&'static str],
     pub install_url: &'static str,
     pub wrap: &'static [&'static str],
     pub unwrap: &'static [&'static str],
+    /// Forwarder port the tool talks to.
+    pub port: u16,
+    /// Provider base URL for a tool on a provider the proxy is not configured
+    /// for; its own forwarder tags model calls for it (`forward start --upstream`).
+    pub upstream: Option<&'static str>,
+}
+
+impl Tool {
+    pub fn installed(&self) -> bool {
+        self.commands.iter().any(|c| which::which(c).is_ok())
+    }
 }
 
 // Serena (code memory) needs a local Python and the retrieve MCP needs proxy
 // routes the hosted gateway does not expose, so both stay off for remote use.
+// Every wrap was checked against a sandboxed profile: tools without an unwrap
+// get the forwarder URL from the environment only and write no files.
 pub const TOOLS: &[Tool] = &[
     Tool {
         id: "claude",
         name: "Claude Code",
         description: "Anthropic's agentic coding tool for the terminal",
-        command: "claude",
+        commands: &["claude"],
         install_url: "https://docs.anthropic.com/en/docs/claude-code/setup",
         // Writes the base URL to the project's .claude/settings.local.json for
         // the session; unwrap restores it. --keep-mcp: the app registers no
@@ -47,12 +61,14 @@ pub const TOOLS: &[Tool] = &[
         // code-memory registrations.
         wrap: &["wrap", "claude", "--no-proxy", "--no-mcp", "--code-memory", "none"],
         unwrap: &["unwrap", "claude", "--no-stop-proxy", "--keep-mcp"],
+        port: FORWARDER_PORT,
+        upstream: None,
     },
     Tool {
         id: "codex",
         name: "Codex",
         description: "OpenAI's coding agent for the terminal",
-        command: "codex",
+        commands: &["codex"],
         install_url: "https://github.com/openai/codex",
         // With --no-mcp the wrap only passes the base URL on the command line
         // and in the environment; ~/.codex/config.toml is never touched (HTTP
@@ -61,15 +77,124 @@ pub const TOOLS: &[Tool] = &[
         // Horizon MCP block from that file.
         wrap: &["wrap", "codex", "--no-proxy", "--no-mcp", "--code-memory", "none"],
         unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
     },
     Tool {
         id: "opencode",
         name: "OpenCode",
         description: "Open-source AI coding agent for the terminal",
-        command: "opencode",
+        commands: &["opencode"],
         install_url: "https://opencode.ai/download",
         wrap: &["wrap", "opencode", "--no-proxy", "--no-mcp", "--no-serena"],
         unwrap: &["unwrap", "opencode", "--no-stop-proxy"],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "aider",
+        name: "Aider",
+        description: "AI pair programming in your terminal",
+        commands: &["aider"],
+        install_url: "https://aider.chat/docs/install.html",
+        wrap: &["wrap", "aider", "--no-proxy"],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "copilot",
+        name: "Copilot CLI",
+        description: "GitHub Copilot CLI with your own Anthropic API key",
+        commands: &["copilot"],
+        install_url: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+        // BYOK only: the wrap needs ANTHROPIC_API_KEY (or COPILOT_PROVIDER_API_KEY)
+        // and says so when it is missing. A Copilot subscription sign-in would
+        // need a local proxy holding the user's GitHub token.
+        wrap: &["wrap", "copilot", "--no-proxy"],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "goose",
+        name: "Goose",
+        description: "Block's open-source on-machine AI agent",
+        commands: &["goose"],
+        install_url: "https://block.github.io/goose/docs/getting-started/installation",
+        wrap: &["wrap", "goose", "--no-proxy"],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "grok",
+        name: "Grok CLI",
+        description: "xAI's coding agent for the terminal",
+        commands: &["grok"],
+        install_url: "https://docs.x.ai/docs/grok-cli",
+        // --no-mcp leaves ~/.grok/config.toml alone, so there is nothing to undo.
+        wrap: &["wrap", "grok", "--no-proxy", "--no-mcp", "--code-memory", "none"],
+        unwrap: &[],
+        port: 18791,
+        upstream: Some("https://api.x.ai"),
+    },
+    Tool {
+        id: "kimi",
+        name: "Kimi CLI",
+        description: "Moonshot AI's coding agent (run /login once on first launch)",
+        commands: &["kimi", "kimi-cli"],
+        install_url: "https://github.com/MoonshotAI/kimi-cli",
+        wrap: &["wrap", "kimi", "--no-proxy"],
+        unwrap: &[],
+        port: 18789,
+        upstream: Some("https://api.kimi.com/coding/v1"),
+    },
+    Tool {
+        id: "vibe",
+        name: "Mistral Vibe",
+        description: "Mistral's coding agent for the terminal",
+        commands: &["vibe"],
+        install_url: "https://github.com/mistralai/mistral-vibe",
+        wrap: &["wrap", "vibe", "--no-proxy"],
+        unwrap: &[],
+        port: 18790,
+        upstream: Some("https://api.mistral.ai"),
+    },
+    Tool {
+        id: "omp",
+        name: "Oh My Pi",
+        description: "Pi coding agent with batteries included",
+        commands: &["omp"],
+        install_url: "https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent",
+        // Points ~/.omp/agent/models.yml at the forwarder (backed up first);
+        // unwrap restores the backup.
+        wrap: &["wrap", "omp", "--no-proxy"],
+        unwrap: &["unwrap", "omp", "--no-stop-proxy"],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "openclaude",
+        name: "OpenClaude",
+        description: "Open-source Claude Code-style agent for any model",
+        commands: &["openclaude"],
+        install_url: "https://github.com/Gitlawb/openclaude",
+        wrap: &["wrap", "openclaude", "--no-proxy"],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+    },
+    Tool {
+        id: "openhands",
+        name: "OpenHands",
+        description: "All Hands AI's software agent in the terminal",
+        commands: &["openhands"],
+        install_url: "https://docs.all-hands.dev/",
+        wrap: &["wrap", "openhands", "--no-proxy"],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
     },
 ];
 
@@ -89,7 +214,7 @@ pub fn tools() -> Vec<ToolInfo> {
             id: t.id,
             name: t.name,
             description: t.description,
-            installed: which::which(t.command).is_ok(),
+            installed: t.installed(),
             install_url: t.install_url,
         })
         .collect()
@@ -159,15 +284,28 @@ impl Client {
             .status();
     }
 
-    pub fn start_forwarder(&self, remote: &str) -> Result<Child, String> {
+    pub fn start_forwarder(
+        &self,
+        remote: &str,
+        port: u16,
+        upstream: Option<&str>,
+    ) -> Result<Child, String> {
         std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
         // One log for both streams: uvicorn writes request lines to stdout and
         // startup/errors to stderr.
-        let log = std::fs::File::create(self.data_dir.join("forwarder.log")).ok();
+        let log_name = if port == FORWARDER_PORT {
+            "forwarder.log".to_string()
+        } else {
+            format!("forwarder-{port}.log")
+        };
+        let log = std::fs::File::create(self.data_dir.join(log_name)).ok();
         let mut cmd = self.command();
         cmd.args(["forward", "start", "--remote", remote, "--port"])
-            .arg(FORWARDER_PORT.to_string())
+            .arg(port.to_string())
             .stdin(Stdio::null());
+        if let Some(upstream) = upstream {
+            cmd.args(["--upstream", upstream]);
+        }
         match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
             Some((out, err)) => cmd.stdout(out).stderr(err),
             None => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
@@ -176,8 +314,8 @@ impl Client {
             .map_err(|e| format!("Could not start the ContextShrink forwarder: {e}"))
     }
 
-    pub fn wait_for_forwarder() -> bool {
-        let addr = SocketAddr::from(([127, 0, 0, 1], FORWARDER_PORT));
+    pub fn wait_for_forwarder(port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
         (0..40).any(|_| {
             if TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok() {
                 return true;
@@ -187,8 +325,8 @@ impl Client {
         })
     }
 
-    pub fn forwarder_listening() -> bool {
-        let addr = SocketAddr::from(([127, 0, 0, 1], FORWARDER_PORT));
+    pub fn forwarder_listening(port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
         TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
     }
 
@@ -198,7 +336,7 @@ impl Client {
         if !folder.is_dir() {
             return Err("Choose an existing project folder".into());
         }
-        let port = FORWARDER_PORT.to_string();
+        let port = tool.port.to_string();
         let quote = |args: &[&str]| args.join(" ");
         // Tools whose wrap leaves their config untouched have no unwrap step.
         let unwrap_line = if tool.unwrap.is_empty() {

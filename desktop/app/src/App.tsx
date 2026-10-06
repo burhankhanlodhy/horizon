@@ -173,7 +173,9 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
   const [launching, setLaunching] = useState("");
 
   const refresh = useCallback(async () => {
-    setTools(await invoke<Tool[]>("list_tools"));
+    // Installed tools first; the sort is stable, so each group keeps its order.
+    const all = await invoke<Tool[]>("list_tools");
+    setTools([...all].sort((a, b) => Number(b.installed) - Number(a.installed)));
     setConnected(await invoke<boolean>("forwarder_running"));
     try {
       setSummary(await invoke<Summary>("account_summary"));

@@ -116,7 +116,14 @@ export default function Documentation() {
               </Link>
               ) and keeps it in Windows Credential Manager.
             </li>
-            <li>Choose your project folder and click Launch next to Claude Code, Codex or OpenCode.</li>
+            <li>
+              Choose your project folder and click Launch next to one of the 12 supported
+              tools, such as Claude Code, Codex or OpenCode. The full list is on{" "}
+              <Link to="/downloads" className="font-semibold text-ember hover:underline">
+                Downloads
+              </Link>
+              .
+            </li>
           </ol>
           <p className="mt-4 text-xs leading-relaxed text-ink-3">
             The tool opens in its own window, pointed at ContextShrink for that session
@@ -143,6 +150,23 @@ export default function Documentation() {
               routes every provider you have configured, including custom ones and
               OpenAI with a ChatGPT sign-in, through ContextShrink. Sign-in and model
               catalogue requests still go to the provider directly.
+            </li>
+            <li>
+              <strong className="text-ink">Aider, Goose, OpenClaude, OpenHands and Copilot
+              CLI</strong> are started with their Anthropic and OpenAI addresses set to the
+              app. Copilot CLI needs your own Anthropic API key; a Copilot subscription
+              sign-in is not supported.
+            </li>
+            <li>
+              <strong className="text-ink">Grok CLI, Kimi CLI and Mistral Vibe</strong>{" "}
+              each get their own connection that sends model calls through ContextShrink
+              to xAI, Moonshot or Mistral. Kimi asks you to run{" "}
+              <code className="font-mono text-ember">/login</code> once after the first
+              launch.
+            </li>
+            <li>
+              <strong className="text-ink">Oh My Pi</strong> has its models file pointed at
+              the app for the session; the original is restored when it exits.
             </li>
             <li>
               Your tools are never bundled with the app. Install them yourself; the app
