@@ -54,6 +54,7 @@ def _register_commands() -> None:
         audit,  # noqa: F401
         capture,  # noqa: F401
         copilot_auth,  # noqa: F401
+        desktop,  # noqa: F401
         doctor,  # noqa: F401
         evals,  # noqa: F401
         forward,  # noqa: F401

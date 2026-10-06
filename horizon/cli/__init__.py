@@ -16,6 +16,7 @@ from . import (  # noqa: F401
     audit,
     capture,
     copilot_auth,
+    desktop,
     evals,
     forward,
     init,
