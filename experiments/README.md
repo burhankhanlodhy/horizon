@@ -12,7 +12,10 @@ mixing models (Sonnet, GPT-6.1, Luna, ...) in one account is fine:
 1. The proxy measures the tokens it removed from the request
    (`horizon/proxy/outcome.py`). Only tokens removed **for the first time in
    that conversation** count (`conversation_savings.novel`), so a removed tool
-   result is not counted again on every later turn.
+   result is not counted again on every later turn. This applies only to OpenAI
+   Responses traffic that carries the whole transcript. Codex's incremental
+   frames are already per-request; Claude requests are not deduplicated at all
+   (see caveats).
 2. It prices them with `estimate_request_savings_usd`
    (`horizon/proxy/savings_tracker.py`, model in
    `horizon/pricing/counterfactual.py`):
@@ -34,10 +37,14 @@ discount (which compression does not cause).
 
 Caveats worth knowing:
 
-- **Conservative for long sessions.** A token removed at turn 10 would otherwise
-  have been re-sent (as a cheap cache read) on every later turn; that repeat
-  saving is not counted. In long agent sessions the real saving is higher than
-  shown.
+- **Wrong in both directions for long sessions (test 7).** A removed token stays
+  out of every later request, where it would have been a cheap cache read.
+  - **Codex:** each removal is counted once, so the repeat saving is missed
+    (undercount, 1.5-2.3x).
+  - **Claude:** the "once per conversation" rule never applies (no conversation
+    key on that path). Every request reports its running saving, including about
+    576 tokens of tool-definition trimming, all priced at the cache-write rate
+    instead of the cache-read rate (overcount, 6-19x).
 - **Catalog lag.** A brand-new model not yet in the bundled catalog is priced at
   the $3/M fallback until the proxy image is rebuilt with a newer catalog.
 - **Subscriptions.** ChatGPT / Claude subscription users pay a flat fee, so their
@@ -124,6 +131,108 @@ Caveats worth knowing:
   replacements in frozen prefix" on most requests.
 - **Decision:** do not enable read maturation.
 
+### 7. Uncounted repeat savings (offline, Step 1)
+
+- **Method:** the 32 saved experiment runs, plus local compression replay of
+  26 Codex and 26 Claude transcript files. Use historical cache-read prices;
+  deduplicate model responses and stop transcript retention at recorded
+  compactions. No paid agent runs or provider calls.
+- **Result:** Codex's 24 runs counted $0.281805; the estimated later-read
+  component adds $0.109527 (+38.9%), assuming removals persist. Transcript
+  repeat components are 1.13x the modeled first-removal value for Codex and
+  13.71x for Claude. Transcript dollars are counterfactual benchmark values,
+  not recorded account savings.
+- **Accounting finding:** Claude's saved wire counts include recurring schema
+  reductions and some retained payload reductions already counted on later
+  requests. Weighting those counts as fresh removals would double-count them.
+  The blanket novel-only assumption above needs this caveat.
+- **Pricing finding (`repeat-savings/pricing_gap.py`):** these figures re-price
+  each logged request with the proxy's own estimator, so counted values match the
+  logged `cost_effective_usd` to the cent. Retained and first removals are then
+  priced separately, the way the counterfactual model intends.
+  - **Claude is overcounted 6.4x** ($0.2212 counted vs $0.0345 actual).
+  - **95% of that is tool-definition trimming** (~576 tokens per request,
+    `handlers/anthropic.py:2922`). Its saving lands in `tokens_saved`, so it is
+    priced as live-zone content at the one-hour write rate ($4/M) on every
+    request. Tool definitions are the cached prefix ($0.20/M). The correctly
+    priced `tool_schema` layer is fed only by deferral tags.
+  - Retained payload is overpriced the same way ($0.0088 counted vs $0.0004).
+  - **Codex is undercounted:** actual is 1.5x counted in the logs (0.67x) and
+    2.3x in long transcripts (0.43x, median 0.55x). This is the same direction
+    as Step 1's +38.9%. The difference: here, removals still kept out of a
+    request with no cache hit are priced at that request's write/uncached rate,
+    not the read rate.
+  - Long Claude transcripts: 19.4x overall, median 9.2x per session, if the ledger
+    behaves as in the logs.
+- **Reconciliation of the two analyses:** the $0.2212 comparison includes one
+  pilot alongside the 8 formal Claude sessions. Formal sessions alone record
+  $0.211957 versus $0.031862 when the first schema trim is priced as fresh
+  (6.65x). All 8 formal first requests already report cache reads; using the
+  existing prefix allocation rule throughout gives $0.014352. These are
+  historical pricing scenarios with inferred components, not measured customer
+  bills. On the deduplicated transcript snapshot, the corresponding ratios are
+  18.71x for Claude and 0.47x for Codex. Pricing later Codex requests with their
+  observed cache mix gives +48.0%, compared with the read-only +38.9% scenario.
+  See [the pricing correction](repeat-savings/PRICING_REVIEW.md) for assumptions,
+  per-request reconciliation and the required accounting changes.
+- **Decision:** the gap warrants the persistence check in Step 2 before changing
+  savings accounting or fees. No production or dashboard changes made. Fix the
+  Claude tool-schema pricing before any real Pro fee is charged: it applies to
+  every Claude Code request on the hosted proxy today.
+- **Report, per-session results and reproducible script:**
+  [repeat-savings/REPORT.md](repeat-savings/REPORT.md).
+
+### 8. Persistence on the forwarded wire (Step 2)
+
+- **Method:** 100 increasing full-history requests through an isolated real
+  local proxy, followed by 4 boundary checks. Capture actual inbound and
+  serialized outbound bytes. A local provider stub supplies synthetic cache
+  usage; the normal proxy pipeline and trackers run unchanged.
+- **Result:** 99 tool results compressed; 4,851 later appearances kept exactly
+  the same forwarded hashes; 0 restorations during append-only turns. Editing
+  earlier history restored 98 unchanged older results. Compaction retired the
+  old results; a process restart and tracker expiry each restored another result.
+- **Accounting finding:** the Claude ledger summed 8,679,708 token occurrences,
+  including 173,579 first removals and 8,506,129 retained occurrences. Retained
+  reductions are already counted on this path. A blanket second savings term
+  would double-count them; first separate and price the components correctly.
+- **Live limitation:** the real Claude Code attempt completed only 2 provider
+  requests before HTTP 429s, with the five-hour window reported at 99% usage.
+  The controlled check establishes wire persistence, not real provider cache
+  economics or a completed 100-request live session. Billing is unchanged.
+- **Report and reproducible scripts:**
+  [repeat-savings/persistence/REPORT.md](repeat-savings/persistence/REPORT.md).
+
+### 9. Upstream headroom v0.40.0 vs Horizon (2026-10-07)
+
+- **Question:** does the latest upstream release (our fork is headroom 0.39.1)
+  compress or save more?
+- **Method:** six upstream fixes ported (#3810 retrieval tool injected on the
+  first request, #3880 record-bearing JSON kept out of Kompress, #3938 one
+  compression deadline per Codex request, #3932 quarantine at half the pool,
+  #3881 code fallback judged in tokens, #3770 SmartCrusher recursion). The same
+  9 benchmark payloads and a frozen copy of 26 Codex + 29 Claude Code
+  transcripts compressed by three builds: ours before the ports, ours after,
+  headroom-ai 0.40.0 from PyPI. Scripts: `upstream-compare/`.
+- **Result:**
+
+  | Build | Benchmark | Codex output removed | Claude output removed |
+  |---|---|---|---|
+  | Ours before ports | 31.8% | 39.4% | 12.8% |
+  | Ours with ports | 31.8% | 41.5% (10% faster) | 12.8% |
+  | headroom 0.40.0 | 26.6% | 39.2% | 9.5% |
+
+  0.40.0 compresses less: its Kompress keeps line boundaries (#3119), e.g. a
+  passing pytest log goes 2,894 -> 2,822 tokens there vs 158 in ours.
+- **Cache rewrite (#3810):** before the port, the first compression in a Claude
+  Code session added the retrieval tool to a warm prefix and Anthropic re-wrote
+  the whole cache. In the frozen transcripts 3 sessions hit it (148k tokens,
+  $0.56, about a fifth of all Claude savings in the set); in production it was a
+  single 60k-token rewrite worth 12x that session's real savings.
+- **Decision:** keep our Kompress behaviour; ship the six ports. Revisit #3119
+  only with a task-success test, since it trades about a quarter of Claude
+  savings for line fidelity.
+
 ## Pending tests
 
 | Test | Why | Status |
@@ -134,7 +243,49 @@ Caveats worth knowing:
 | Stale reads in the frozen prefix | Let read lifecycle replace reads of already-edited files even when cached; pays only if the read is large and the session long | Needs a code change + paired test |
 | Long real sessions | Confirm that tool-output savings (26-56% on Codex `exec`) show in total cost of long sessions | Not started |
 | Proxy host before launch | Same speed/live checks as test 1 on the PC host, then the mini PC | Before launch |
-| Savings pricing for long sessions | Measure how much the once-per-conversation count understates real savings | Not started |
+| Savings pricing for long sessions | Separate new and retained removals; validate persistence and cache pricing | Step 1 complete; controlled Step 2 passed; full live check blocked by 429s |
+
+### Planned: uncounted repeat savings
+
+**Step 1 review:** the paragraph below is a persistence hypothesis, not a
+validated statement about every provider's counted savings. The saved Claude
+logs already count some retained reductions repeatedly. The measured historical
+fresh/write-to-read rate ratios are about 22.5 for Codex and 20 for Claude's
+one-hour writes, rather than the illustrative 12-turn crossover below. See test
+7 and its report before using this hypothesis for billing.
+
+A token removed at request *i* stays out of every later request in the same
+session, because cache mode replays the forwarded (compressed) prefix byte for
+byte. Codex over WebSocket gets the same effect: OpenAI keeps the compressed
+context on its side. Only request *i* is priced, at the uncached/write rate.
+Each later request saves the same tokens again at the cache-read rate (about
+0.1x), and none of that is counted. With a 1.25x cache write, the uncounted part
+passes the counted part after about 12 later requests. A long Claude Code session
+has hundreds.
+
+1. **Estimate from data we already have (free).** For each session, add up
+   `removed_i x later_requests_i x cache-read rate` and compare it with the
+   counted `savings_usd`. Inputs:
+   - the 8 Claude and 24 Codex experiment runs: requests.jsonl, grouped by run
+     time window;
+   - the 26 + 26 real transcripts, using the re-send weighting that
+     `context_mix.py` and `exec_compress.py` already apply.
+2. **Check that the removals really persist (cheap).** Run one long session
+   (about 100 requests) through a local proxy and record each request's size as
+   the client sent it and as it was forwarded. Every removed tool result should
+   stay out of later forwarded requests. Count where it comes back: a client
+   compaction, an edited earlier message, a proxy restart or a stale session
+   tracker. Codex already has `HORIZON_CODEX_WIRE_DEBUG`; Claude needs a small
+   size log in `debug_proxy.py`.
+3. **Skip a paired cost A/B.** Tests 2 and 6 showed that agent path noise is
+   larger than this effect.
+
+If the gap is large, add a second term per request: tokens still kept out of
+this request x its cache-read rate, measured on the request rather than assumed.
+Show it separately ("new removals" vs "kept out of later turns"). Do not go back
+to summing cumulative `tokens_saved` at full price, which
+`conversation_savings.py` was written to stop. Raising measured savings raises
+the Pro fee, so the dashboard must show users how both parts were worked out.
 
 ## Re-running
 
