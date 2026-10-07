@@ -2297,3 +2297,98 @@ async def test_ws_session_metrics_track_model_per_response_create():
         "model-a",
         "model-b",
     ]
+
+
+class _TurnByTurnClient(_FakeWebSocket):
+    """Sends frame N only after N responses completed, the way Codex does."""
+
+    async def receive_text(self) -> str:
+        if self._frames:
+            turn = len(self._scripted) - len(self._frames)
+            while sum('"response.completed"' in t for t in self.sent_text) < turn:
+                await asyncio.sleep(0.005)
+            return self._frames.pop(0)
+        raise _FakeWebSocketDisconnect("client closed")
+
+    def script(self, frames: list[str]) -> _TurnByTurnClient:
+        self._scripted = list(frames)
+        self._frames = list(frames)
+        return self
+
+
+class _TurnByTurnUpstream(_FakeUpstream):
+    """Answers each received frame with that turn's events."""
+
+    def __init__(self, turns: list[list[str]]) -> None:
+        super().__init__([])
+        self._turns = turns
+
+    async def _iter(self):
+        for i, events in enumerate(self._turns):
+            while len(self.sent) <= i:
+                await asyncio.sleep(0.005)
+            for ev in events:
+                yield ev
+
+
+def _turn_events(response_id: str, cached: int) -> list[str]:
+    usage = {
+        "input_tokens": cached + 500,
+        "input_tokens_details": {"cached_tokens": cached},
+        "output_tokens": 10,
+    }
+    return [
+        json.dumps({"type": "response.created", "response": {"id": response_id}}),
+        json.dumps({"type": "response.completed", "response": {"id": response_id, "usage": usage}}),
+    ]
+
+
+def _frame(previous: str | None) -> str:
+    response = {"model": "gpt-5.4", "input": "next"}
+    if previous:
+        response["previous_response_id"] = previous
+    return json.dumps({"type": "response.create", "response": response})
+
+
+@pytest.mark.asyncio
+async def test_ws_codex_turns_claim_removals_kept_out_of_server_context(monkeypatch):
+    """Incremental frames send only new items, so removals from earlier turns
+    stay out of the provider-held context. Each turn must report them as
+    retained so the account can price them; the turn's own saving is unchanged."""
+    from horizon.proxy.conversation_savings import reset_conversation_savings
+
+    reset_conversation_savings()
+    upstream = _TurnByTurnUpstream(
+        [_turn_events("r_1", 0), _turn_events("r_2", 900), _turn_events("r_3", 3_000)]
+    )
+    fake_ws_mod = _make_fake_websockets_module(upstream)
+    client_ws = _TurnByTurnClient(
+        headers={"authorization": "Bearer test", "x-client": "codex"}
+    ).script([_frame(None), _frame("r_1"), _frame("r_2")])
+    handler = _DummyOpenAIHandler()
+    handler.config.optimize = True
+    monkeypatch.setattr(openai_module, "COMPRESSION_TIMEOUT_SECONDS", 30.0)
+    savings = iter([464, 2_225, 0])
+
+    def _compress(payload, *, model, request_id, timing=None, client=None):
+        saved = next(savings)
+        if not saved:
+            return payload, False, 0, [], "router_no_compression", 10, 10, 0
+        return dict(payload, input="compressed"), True, saved, ["text"], "compressed", 10, 5, saved
+
+    handler._compress_openai_responses_payload = _compress  # type: ignore[method-assign]
+    outcomes = []
+
+    async def _record(outcome):
+        outcomes.append(outcome)
+
+    handler._record_request_outcome = _record  # type: ignore[method-assign]
+
+    with patch.dict(sys.modules, {"websockets": fake_ws_mod}):
+        await asyncio.wait_for(handler.handle_openai_responses_ws(client_ws), timeout=5.0)
+
+    turns = [o for o in outcomes if o.retained_tokens_saved is not None][:3]
+    assert [o.client for o in turns] == ["codex"] * 3
+    assert [o.tokens_saved for o in turns] == [464, 2_225, 0]
+    assert [o.retained_tokens_saved for o in turns] == [0, 464, 2_689]
+    reset_conversation_savings()

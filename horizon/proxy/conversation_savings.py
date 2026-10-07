@@ -46,7 +46,9 @@ from horizon.proxy.output_savings_policy import _unwrap_response_create_body
 
 __all__ = [
     "ConversationSavings",
+    "ResponseChainSavings",
     "get_conversation_savings",
+    "get_response_chain_savings",
     "reset_conversation_savings",
     "savings_conversation_key",
 ]
@@ -155,6 +157,17 @@ class ConversationSavings:
         distinguish" -- the funnel then falls back to ``tokens_saved``, which
         is already novel-only on providers that freeze their cached prefix.
         """
+        split = self.split(conversation_key, cumulative)
+        return None if split is None else split[0]
+
+    def split(self, conversation_key: str | None, cumulative: int | None) -> tuple[int, int] | None:
+        """``(novel, retained)`` for this request's running removed-token total.
+
+        ``retained`` is the part of the total an earlier turn already removed
+        and counted, which stays out of this request too. It is a saving again
+        on every later turn, at whatever rate the provider would have charged
+        for re-sending it (usually a cache read). ``None`` as for :meth:`novel`.
+        """
         if not conversation_key or cumulative is None:
             return None
 
@@ -170,7 +183,8 @@ class ConversationSavings:
         # compaction, or a client that dropped history. Nothing was removed
         # for the first time, and the next turn counts from the lower base
         # rather than waiting for the old high-water mark to be re-reached.
-        return max(0, total - previous)
+        novel = max(0, total - previous)
+        return novel, total - novel
 
 
 _default = ConversationSavings()
@@ -181,7 +195,56 @@ def get_conversation_savings() -> ConversationSavings:
     return _default
 
 
+# Responses kept before the oldest is forgotten. A turn that continues a
+# forgotten response carries nothing, which undercounts; it never overcounts.
+DEFAULT_MAX_RESPONSES = 4096
+
+
+class ResponseChainSavings:
+    """Removed tokens that stay out of server-held Responses context.
+
+    A request with ``previous_response_id`` sends only new items; the provider
+    rebuilds the earlier context from what it stored, which is what Horizon
+    forwarded -- compressed. Every token removed earlier in the chain is
+    therefore kept out of this request as well, without appearing in its
+    ``tokens_saved``. This maps each completed response id to that running
+    total so the next turn can claim it. An unknown id (another process, a
+    fork the proxy never saw, an evicted entry) carries zero.
+    """
+
+    def __init__(self, max_responses: int = DEFAULT_MAX_RESPONSES) -> None:
+        self._max = max(1, int(max_responses))
+        self._kept: OrderedDict[str, int] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def carried(self, previous_response_key: str | None) -> int:
+        """Tokens already kept out of the context ``previous_response_key`` names."""
+        if not previous_response_key:
+            return 0
+        with self._lock:
+            return self._kept.get(previous_response_key, 0)
+
+    def record(self, response_key: str | None, kept: int) -> None:
+        """Remember how many removed tokens the context of ``response_key`` excludes."""
+        if not response_key:
+            return
+        with self._lock:
+            self._kept[response_key] = max(0, int(kept))
+            self._kept.move_to_end(response_key)
+            while len(self._kept) > self._max:
+                self._kept.popitem(last=False)
+
+
+_default_chain = ResponseChainSavings()
+
+
+def get_response_chain_savings() -> ResponseChainSavings:
+    """Process-wide ledger. A chain can outlive the connection that began it."""
+    return _default_chain
+
+
 def reset_conversation_savings() -> None:
-    """Forget every conversation. Test helper only."""
-    global _default
+    """Forget every conversation and response chain. Test helper only."""
+    global _default, _default_chain
     _default = ConversationSavings()
+    _default_chain = ResponseChainSavings()

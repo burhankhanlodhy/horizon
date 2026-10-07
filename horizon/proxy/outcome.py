@@ -201,8 +201,14 @@ class RequestOutcome:
     #     compressor reports every turn because it recompresses the whole
     #     transcript. Not the same quantity as ``tokens_saved`` on the WS
     #     path, where the outcome carries a per-turn delta.
+    # retained_tokens_saved: tokens an EARLIER turn removed that stay out of
+    #     this request because the provider holds the compressed context
+    #     (``previous_response_id`` on the Codex WS path). Not part of
+    #     ``tokens_saved``. ``None`` where the handler cannot tell; keyed
+    #     conversations derive it from ``conversation_savings`` instead.
     conversation_key: str | None = None
     conversation_tokens_saved: int | None = None
+    retained_tokens_saved: int | None = None
     transforms_applied: tuple[str, ...] = ()
     waste_signals: dict[str, int] | None = None
     num_messages: int = 0
@@ -622,17 +628,32 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     # already the novel figure there. See ``conversation_savings``.
     from horizon.proxy.account_analytics import record_account_outcome, tenant_key
 
-    novel_tokens_saved = get_conversation_savings().novel(
+    split = get_conversation_savings().split(
         tenant_key(outcome.conversation_key), outcome.conversation_tokens_saved
     )
-    if novel_tokens_saved is None:
-        novel_tokens_saved = outcome.tokens_saved
+    novel_tokens_saved, ledger_retained = split if split is not None else (outcome.tokens_saved, 0)
+    # A handler that tracks retention itself (the WS path, whose conversation
+    # key can be stale on rows that are not turns) wins over the ledger.
+    retained_tokens_saved = outcome.retained_tokens_saved
+    if retained_tokens_saved is None:
+        retained_tokens_saved = ledger_retained
+    # Retained removals are priced only for Codex for now: other clients'
+    # repeated savings are already inside ``tokens_saved`` and need their own
+    # fix before a second term can be added without double counting.
+    if outcome.client != "codex":
+        retained_tokens_saved = 0
 
     # Tool-schema savings (deferral + turn-hook tool shrink) live in per-request
     # tags and never move tok_before/after; aggregate them into Metrics so the
     # session summary / cost summary / all-layers total can surface the layer.
     tool_search_saved = tool_schema_saved_from_tags(outcome.tags or {})
-    await record_account_outcome(outcome, saved=novel_tokens_saved, tool_saved=tool_search_saved, project=project)
+    await record_account_outcome(
+        outcome,
+        saved=novel_tokens_saved,
+        tool_saved=tool_search_saved,
+        retained=retained_tokens_saved,
+        project=project,
+    )
     savings_breakdown = from_tags(outcome.tags)
 
     # Stage timings contributed from OUTSIDE the handler, folded in here rather

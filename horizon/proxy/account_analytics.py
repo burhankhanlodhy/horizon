@@ -182,7 +182,7 @@ class AccountAnalytics:
             return 503, None
 
 
-async def record_account_outcome(outcome, *, saved=0, tool_saved=0, project=None):
+async def record_account_outcome(outcome, *, saved=0, tool_saved=0, retained=0, project=None):
     context = _account.get()
     if context is None or outcome.request_id in context.emitted:
         return
@@ -203,6 +203,7 @@ async def record_account_outcome(outcome, *, saved=0, tool_saved=0, project=None
                 outcome.model,
                 compression_tokens_saved=saved,
                 tool_schema_tokens_saved=tool_saved,
+                retained_tokens_saved=retained,
                 cache_read_tokens=outcome.cache_read_tokens,
                 cache_write_tokens=outcome.cache_write_tokens,
                 cache_write_5m_tokens=outcome.cache_write_5m_tokens,
@@ -254,7 +255,9 @@ async def record_account_outcome(outcome, *, saved=0, tool_saved=0, project=None
         "latency_ms": max(0, outcome.total_latency_ms),
         "overhead_ms": max(0, outcome.overhead_ms),
         "ttfb_ms": max(0, outcome.ttfb_ms),
-        "savings_usd": prices.get("compression", 0) + prices.get("tool_schema", 0),
+        "savings_usd": prices.get("compression", 0)
+        + prices.get("tool_schema", 0)
+        + prices.get("retained", 0),
         "cost_usd": cost,
         "pricing_basis": prices.get("basis", "unavailable"),
         "transforms": [str(t)[:150] for t in outcome.transforms_applied][:100],

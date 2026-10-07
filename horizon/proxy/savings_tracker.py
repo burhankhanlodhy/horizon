@@ -441,6 +441,7 @@ def estimate_request_savings_usd(
     *,
     compression_tokens_saved: int = 0,
     tool_schema_tokens_saved: int = 0,
+    retained_tokens_saved: int = 0,
     output_tokens_saved: int = 0,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
@@ -464,6 +465,9 @@ def estimate_request_savings_usd(
     * ``compression`` — live-zone content, which was never a cache read.
     * ``tool_schema`` — prefix content, which on a warm turn was *entirely* a
       cache read.
+    * ``retained`` — tokens an earlier turn removed that stay out of this one.
+      They sit in the earlier, cached part of the context, so they price like
+      the prefix: cache reads first, fresh input only past the request's reads.
 
     Both also report a ``*_list`` companion: the same tokens at flat list price.
     That is the upper bound, the figure this function used to return for both
@@ -516,12 +520,15 @@ def estimate_request_savings_usd(
 
     compression = _price(compression_tokens_saved, Region.LIVE_ZONE)
     tool_schema = _price(tool_schema_tokens_saved, Region.PREFIX)
+    retained = _price(retained_tokens_saved, Region.PREFIX)
 
     return {
         "compression": compression.usd,
         "compression_list": compression.usd_list,
         "tool_schema": tool_schema.usd,
         "tool_schema_list": tool_schema.usd_list,
+        "retained": retained.usd,
+        "retained_list": retained.usd_list,
         "output_shaping": _estimate_output_savings_usd(
             model, max(_coerce_int(output_tokens_saved), 0)
         ),
@@ -534,6 +541,7 @@ def estimate_request_savings_usd(
         "basis": weakest_basis(
             compression.basis if compression.tokens else None,
             tool_schema.basis if tool_schema.tokens else None,
+            retained.basis if retained.tokens else None,
         ),
     }
 

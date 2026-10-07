@@ -25,7 +25,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlparse
 
-from horizon.proxy.conversation_savings import savings_conversation_key
+from horizon.proxy.conversation_savings import (
+    get_response_chain_savings,
+    savings_conversation_key,
+)
 from horizon.proxy.helpers import (
     COMPRESSION_TIMEOUT_SECONDS,
     _horizon_bypass_enabled,
@@ -7437,6 +7440,13 @@ class OpenAIHandlerMixin:
 
             ws_conversation_key: str | None = None
             ws_conversation_tokens_saved: int | None = None
+            # The turn in flight: the response it continues and what this
+            # frame's compression removed. A frame with ``previous_response_id``
+            # sends only new items, so every removal earlier in its chain stays
+            # out of the request without showing in ``tokens_saved``; the turn's
+            # record claims those from the response chain ledger.
+            ws_turn_previous_response_id: str | None = None
+            ws_turn_frame_saved = 0
             try:
                 body = json.loads(first_msg_raw)
             except json.JSONDecodeError:
@@ -7445,6 +7455,9 @@ class OpenAIHandlerMixin:
             if isinstance(body, dict) and body:
                 ws_response_body_for_store = (
                     body["response"] if isinstance(body.get("response"), dict) else body
+                )
+                ws_turn_previous_response_id = (
+                    ws_response_body_for_store.get("previous_response_id") or None
                 )
                 if _ensure_chatgpt_responses_store_false(
                     ws_response_body_for_store,
@@ -7939,6 +7952,7 @@ class OpenAIHandlerMixin:
                                 )
                                 _record_ws_compression_overhead(_rewrite_ms)
                                 tokens_saved += int(_ws_saved)
+                                ws_turn_frame_saved = int(_ws_saved)
                                 ws_conversation_tokens_saved = int(_ws_saved)
                                 ws_conversation_key = savings_conversation_key(
                                     _send_body, session_id=f"ws:{session_id}"
@@ -8171,6 +8185,7 @@ class OpenAIHandlerMixin:
                         nonlocal tokens_saved, transforms_applied, attempted_input_tokens_total
                         nonlocal ws_conversation_key, ws_conversation_tokens_saved
                         nonlocal ws_frames_compressed
+                        nonlocal ws_turn_previous_response_id, ws_turn_frame_saved
                         _preflight_started = time.perf_counter()
                         try:
                             parsed_frame = json.loads(raw_msg)
@@ -8206,6 +8221,11 @@ class OpenAIHandlerMixin:
                                 frame_type="response.create",
                             )
                             return raw_msg, False, "invalid_inner_payload"
+                        # A new turn starts here, compressed or not.
+                        ws_turn_previous_response_id = (
+                            inner_payload.get("previous_response_id") or None
+                        )
+                        ws_turn_frame_saved = 0
                         # Learn from this turn's newly appended tool results.
                         # Dedup against the per-connection baseline so the
                         # replayed transcript prefix is not re-counted.
@@ -8432,6 +8452,7 @@ class OpenAIHandlerMixin:
                         )
                         _record_ws_compression_overhead(_rewrite_ms)
                         tokens_saved += int(frame_saved)
+                        ws_turn_frame_saved = int(frame_saved)
                         ws_conversation_tokens_saved = int(frame_saved)
                         ws_conversation_key = savings_conversation_key(
                             new_inner, session_id=f"ws:{session_id}"
@@ -8705,6 +8726,7 @@ class OpenAIHandlerMixin:
 
                         response_started_ms: float | None = None
                         completed_response_model = "unknown"
+                        completed_response_id: str | None = None
 
                         async def _record_ws_response_metrics() -> None:
                             """Record one completed Responses turn on long-lived WS sessions."""
@@ -8716,6 +8738,24 @@ class OpenAIHandlerMixin:
                             nonlocal ws_recorded_tokens_saved_total
                             nonlocal ws_recorded_attempted_input_tokens_total
                             nonlocal ws_recorded_overhead_ms_total, ws_recorded_ttfb_ms
+                            nonlocal completed_response_id
+                            from horizon.proxy.account_analytics import tenant_key
+
+                            # Removals made earlier in the chain this turn
+                            # continues: kept out of the server-held context,
+                            # so saved again on this request. The completed
+                            # response then carries them plus this frame's own.
+                            chain = get_response_chain_savings()
+                            retained_tokens = (
+                                chain.carried(tenant_key(ws_turn_previous_response_id))
+                                if ws_turn_previous_response_id
+                                else 0
+                            )
+                            chain.record(
+                                tenant_key(completed_response_id),
+                                retained_tokens + ws_turn_frame_saved,
+                            )
+                            completed_response_id = None
 
                             input_delta = ws_input_tokens_total - ws_recorded_input_tokens_total
                             output_delta = ws_output_tokens_total - ws_recorded_output_tokens_total
@@ -8812,6 +8852,7 @@ class OpenAIHandlerMixin:
                                     tags=ws_tags,
                                     conversation_key=ws_conversation_key,
                                     conversation_tokens_saved=ws_conversation_tokens_saved,
+                                    retained_tokens_saved=retained_tokens,
                                     client=client,
                                 )
                             )
@@ -8922,6 +8963,8 @@ class OpenAIHandlerMixin:
                                     if isinstance(response, dict)
                                     else "unknown"
                                 )
+                                if isinstance(response, dict) and response.get("id"):
+                                    completed_response_id = str(response["id"])
 
                                 if event_type == "response.created":
                                     response_started_ms = time.perf_counter() * 1000.0
@@ -9436,6 +9479,8 @@ class OpenAIHandlerMixin:
                         tags=ws_session_tags,
                         conversation_key=ws_conversation_key,
                         conversation_tokens_saved=ws_conversation_tokens_saved,
+                        # Not a turn: nothing was re-sent, so nothing retained.
+                        retained_tokens_saved=0,
                         client=client,
                         request_messages=ws_messages_for_log
                         if getattr(self.config, "log_full_messages", False)
