@@ -275,3 +275,9 @@ horizon-managed/
 
 # frontend app sources -- the Python-template lib/ rule above must not swallow them
 !**/src/lib/
+
+# Experiment working files
+experiments/**/runs/
+experiments/**/results.jsonl
+experiments/**/batch.log
+experiments/claude-code/read-maturation/template/
