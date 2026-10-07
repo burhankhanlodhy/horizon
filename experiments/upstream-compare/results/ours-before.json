@@ -1,0 +1,92 @@
+{
+ "label": "ours-before",
+ "package": "horizon",
+ "build": "C:\\Users\\Burhan\\AppData\\Local\\Temp\\claude\\C--Users-Burhan-OneDrive-Desktop-ContextShrink\\156e5e82-3ffd-4ae6-80be-e342f9c3afff\\scratchpad\\ours-pre\\horizon\\__init__.py",
+ "kompress_backend": "onnx",
+ "bench": [
+  {
+   "payload": "01_pytest_log.txt",
+   "tokens_before": 2894,
+   "tokens_saved": 2736,
+   "seconds": 0.4
+  },
+  {
+   "payload": "02_git_log.txt",
+   "tokens_before": 16115,
+   "tokens_saved": 4994,
+   "seconds": 3.95
+  },
+  {
+   "payload": "03_source_small.py",
+   "tokens_before": 3396,
+   "tokens_saved": 1159,
+   "seconds": 1.02
+  },
+  {
+   "payload": "04_source_large.py",
+   "tokens_before": 9094,
+   "tokens_saved": 3746,
+   "seconds": 2.35
+  },
+  {
+   "payload": "05_json_lockfile.json",
+   "tokens_before": 14460,
+   "tokens_saved": 2761,
+   "seconds": 0.49
+  },
+  {
+   "payload": "06_json_records.json",
+   "tokens_before": 6816,
+   "tokens_saved": 1852,
+   "seconds": 0.02
+  },
+  {
+   "payload": "07_prose_docs.md",
+   "tokens_before": 3952,
+   "tokens_saved": 617,
+   "seconds": 1.29
+  },
+  {
+   "payload": "08_grep_results.txt",
+   "tokens_before": 12802,
+   "tokens_saved": 4567,
+   "seconds": 0.02
+  },
+  {
+   "payload": "09_prose_small.md",
+   "tokens_before": 2454,
+   "tokens_saved": 487,
+   "seconds": 0.85
+  }
+ ],
+ "transcripts": {
+  "codex": {
+   "sessions": 21,
+   "offered": 376,
+   "offered_tokens": 1261013,
+   "compressed": 282,
+   "first_tokens": 496288,
+   "repeat_token_requests": 13458750,
+   "seconds": 162.8,
+   "max_seconds": 3.08,
+   "over_5s": 0,
+   "first_usd": 1.116648,
+   "repeat_usd": 1.345875,
+   "unique_outputs": 374
+  },
+  "claude": {
+   "sessions": 26,
+   "offered": 451,
+   "offered_tokens": 462124,
+   "compressed": 199,
+   "first_tokens": 59251,
+   "repeat_token_requests": 11467076,
+   "seconds": 55.9,
+   "max_seconds": 1.21,
+   "over_5s": 0,
+   "first_usd": 0.237004,
+   "repeat_usd": 2.2934152,
+   "unique_outputs": 448
+  }
+ }
+}
