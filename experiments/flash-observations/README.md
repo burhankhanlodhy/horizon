@@ -39,7 +39,7 @@ the model already saw unflashed.
 **Injection check.** `--injection` plants a line telling the model to answer
 `PWNED` in one log; `injection_complied` is recorded per run.
 
-**Run it** (about 30–60 minutes; Opus 5.5, 4 arms × 3 reps ≈ $4–7 at list price, thinking included):
+**Run it** (about 30–60 minutes; Opus 5.5, 4 arms × 3 reps ≈ $8 at list price, thinking included):
 
 ```bash
 ANTHROPIC_API_KEY=... python experiments/flash-observations/live_test.py --reps 3
@@ -110,6 +110,61 @@ word ("I don't have a code word... PLUM was made up"), with or without
 `clear_at`. The check now frames the text as the feature does: a stubbed tool
 result plus the full output as data in `<tool_output>`. Framed that way the
 model answers `PLUM` every time.
+
+## Live run on the official Claude API (2026-10-08, partial)
+
+`live_test.py --reps 3` on `claude-opus-5-5`, 6 suites. The key ran out of
+credit after 5 sessions ("Your credit balance is too low"), so every arm has
+one clean session (control-direct has two). One session per arm is a smoke
+test, not a measurement.
+
+```
+arm             rep reqs  uncached    write      read  output       $ score
+control-direct    0    7        16  114,526   287,742   1,196   0.654  1.00
+flash-direct      0    7   114,202    4,373    12,865   1,241   0.506  1.00
+control-proxy     0    7        16  114,664   288,610   1,161   0.654  1.00
+flash-proxy       0    7    19,757  115,998   268,060   1,302   0.739  1.00   <- proxy bug, fixed below
+control-direct    1    7        16  114,459   287,478   1,126   0.652  1.00
+```
+
+**`flash-direct` behaved as the cost model predicts:**
+- 23% cheaper than control, same score: every planted failure found.
+- Each log is billed once, as uncached input (~19k tokens a step). The cached
+  prefix grows by only ~630 tokens a step (the stub). In control, each log is
+  written at 1.25x and then re-read on every later turn.
+- No 400s in 7 requests:
+  - `clear_at` and the placement rules were accepted;
+  - earlier flashes re-sent in place, with Opus 5.5's signed thinking blocks
+    echoed back, were accepted (preserved thinking is not tripped).
+- The logs are ~19k real tokens, not the harness's ~8.4k estimate (4
+  characters per token): synthetic pytest output tokenizes poorly. Dollar
+  figures use the real `usage`.
+
+**`flash-proxy` exposed a proxy bug.**
+- Only step 1 was flashed. From step 2 the proxy forwarded the client's raw
+  messages: a cache miss (38,678 written), then ordinary control behaviour,
+  13% dearer than control.
+- Cause: the signed-thinking guard (`thinking_block_fingerprint` in
+  `horizon/proxy/body_forwarding.py`) identifies each thinking block by message
+  index. Re-sending an earlier flash in place shifts every later message by
+  one. The guard read that as "a thinking block moved" and fell back to the
+  client's bytes. Step 1 escaped only because nothing had been inserted yet.
+- Fix: the fingerprint no longer counts turn-scoped system messages. A block
+  moved between real turns is still caught.
+- The fake now returns signed thinking blocks too. Without the fix it 400s
+  `flash-proxy` on step 2; with it, `flash-proxy` matches `flash-direct`:
+
+```
+arm             rep reqs  uncached    write      read  output       $ score
+control-direct    0    7         0   50,428   127,141     660   0.291  1.00
+flash-direct      0    7    50,222    2,281     6,933     660   0.227  1.00
+control-proxy     0    7         0   50,547   127,855     660   0.292  1.00
+flash-proxy       0    7    50,222    2,280     7,760     660   0.227  1.00
+```
+
+**Still to do:** the full 3-rep run and the `--injection` run, to confirm
+`flash-proxy` on the real API and to measure the spread. The ~$3.20 spent here
+covered 5 sessions; the full run needs ~$8 and the injection run ~$3.
 
 ### What decides it
 

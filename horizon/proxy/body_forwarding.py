@@ -205,12 +205,22 @@ def thinking_block_fingerprint(body: Any) -> list[tuple[int, int, str]]:
     was added, removed, reordered, or moved between messages. Keys are sorted so
     a dict rebuilt in a different order is not mistaken for an edit -- the wire
     contract is over parsed values, not key order.
+
+    Turn-scoped system messages (``clear_at``) are not counted in
+    ``message_index``. Flash Observations re-sends each earlier one where it
+    first appeared, which shifts every later message by one without moving any
+    thinking block between turns; the live API accepts that history with the
+    signed blocks unchanged.
     """
     out: list[tuple[int, int, str]] = []
     messages = body.get("messages") if isinstance(body, dict) else None
     if not isinstance(messages, list):
         return out
-    for message_index, message in enumerate(messages):
+    message_index = -1
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "system" and "clear_at" in message:
+            continue
+        message_index += 1
         if not isinstance(message, dict):
             continue
         content = message.get("content")

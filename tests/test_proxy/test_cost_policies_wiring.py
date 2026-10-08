@@ -119,14 +119,14 @@ def test_cache_miss_watch_off_by_default(monkeypatch) -> None:
 _LOG = "\n".join(f"tests/test_io.py::test_{i} PASSED" for i in range(800))
 
 
-def _flash_turns(n: int) -> list[dict]:
+def _flash_turns(n: int, *, thinking: bool = False) -> list[dict]:
     messages: list[dict] = [{"role": "user", "content": "run the test suite and fix failures"}]
     for t in range(n):
+        content: list[dict] = [{"type": "tool_use", "id": f"call{t}", "name": "Bash", "input": {}}]
+        if thinking:  # as Opus 5.5 returns them, echoed back by the client
+            content.insert(0, {"type": "thinking", "thinking": "", "signature": f"sig{t}"})
         messages += [
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": f"call{t}", "name": "Bash", "input": {}}],
-            },
+            {"role": "assistant", "content": content},
             {
                 "role": "user",
                 "content": [
@@ -153,9 +153,10 @@ def _flash_app(monkeypatch, tmp_path, mode: str):
     return create_app(config)
 
 
+@pytest.mark.parametrize("thinking", [False, True])
 @pytest.mark.parametrize("mode", ["cache", "token"])
 def test_flash_observations_are_append_only_through_the_handler(
-    monkeypatch, tmp_path, mode
+    monkeypatch, tmp_path, mode, thinking
 ) -> None:
     app = _flash_app(monkeypatch, tmp_path, mode)
     forwarded: list[dict] = []
@@ -163,7 +164,11 @@ def test_flash_observations_are_append_only_through_the_handler(
     with TestClient(app) as client:
         http = _install_fake_client(client.app.state.proxy)
         for turns in (1, 2, 3):
-            body = {"model": "claude-opus-5-5", "max_tokens": 16, "messages": _flash_turns(turns)}
+            body = {
+                "model": "claude-opus-5-5",
+                "max_tokens": 16,
+                "messages": _flash_turns(turns, thinking=thinking),
+            }
             assert client.post(MESSAGES, json=body).status_code == 200
             forwarded.append(_forwarded_body(http)["messages"])
             headers.append(http.post.call_args.kwargs["headers"])

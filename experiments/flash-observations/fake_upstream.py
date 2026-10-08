@@ -189,7 +189,11 @@ async def messages_endpoint(request: Request) -> JSONResponse:
         visible = _text(rendered[-1].get("content"))
     found = FAIL_RE.findall(visible)
     note = "Failures: " + "; ".join(f"{t} | {e}" for t, e in found) if found else "Failures: none"
-    content: list[dict[str, Any]] = []
+    # Opus 5.5 returns a signed thinking block first; clients echo it back, which
+    # is what trips a proxy that guards thinking blocks too strictly.
+    content: list[dict[str, Any]] = [
+        {"type": "thinking", "thinking": "", "signature": f"sig_{CALLS['n']:05d}"}
+    ]
     if done:
         content.append({"type": "text", "text": note})
     if done < len(suites):
@@ -217,7 +221,7 @@ async def messages_endpoint(request: Request) -> JSONResponse:
                     test, err = item.split(" | ", 1)
                     suite = test.split("_")[1]
                     answer.append({"suite": suite, "test": test, "error": err})
-        content = [{"type": "text", "text": json.dumps(answer)}]
+        content = [content[0], {"type": "text", "text": json.dumps(answer)}]
         stop = "end_turn"
     return JSONResponse(
         {
