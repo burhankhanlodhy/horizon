@@ -37,6 +37,8 @@ services:
       - HORIZON_WORKSPACE_DIR=/home/nonroot/.horizon
       - HORIZON_CONFIG_DIR=/home/nonroot/.horizon/config
       - CONTEXTSHRINK_API_URL=${CONTEXTSHRINK_API_URL:-http://127.0.0.1:8788}
+      # Cache keep-alive (horizon/proxy/cache_keeper.py): off unless .env sets 1.
+      - HORIZON_CACHE_KEEPALIVE=${HORIZON_CACHE_KEEPALIVE:-0}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
     volumes:
       - horizon_workspace:/home/nonroot/.horizon
