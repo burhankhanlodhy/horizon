@@ -162,9 +162,76 @@ control-proxy     0    7         0   50,547   127,855     660   0.292  1.00
 flash-proxy       0    7    50,222    2,280     7,760     660   0.227  1.00
 ```
 
-**Still to do:** the full 3-rep run and the `--injection` run, to confirm
-`flash-proxy` on the real API and to measure the spread. The ~$3.20 spent here
-covered 5 sessions; the full run needs ~$8 and the injection run ~$3.
+The full run follows below.
+
+## Full live run (2026-10-08, after the thinking-guard fix)
+
+`live_test.py --reps 3`, Opus 5.5, official API. Every session completed.
+
+| Arm | Sessions | Mean $ | Score |
+|---|---|---|---|
+| control-direct | 3 | 0.654 | 1.00 |
+| control-proxy | 3 | 0.654 | 1.00 |
+| flash-direct | 3 ($0.509, $0.524, $0.517) | **0.517 (−21%)** | 1.00 |
+| flash-proxy | 3 ($0.620, $1.227, $0.510) | 0.786 (+20%) | 1.00 |
+
+**The thinking-guard fix holds.** The proxy flashed every step in every session.
+
+**flash-proxy is uneven because of the stub wording.** The stub said the output
+was "no longer in the conversation" and offered `horizon_retrieve` with its
+hash, or a re-run of the tool. Horizon injects the CCR retrieval tool, so in the
+proxy arm the model can take that offer:
+- **Rep 1 ($1.227):** from step 2 to step 6 the model retrieved the *previous*
+  (cleared) log every turn. Each retrieval was a hidden CCR continuation
+  request that wrote the log into the cache, so every log ended up in the
+  permanent prefix anyway, plus an extra round trip per step. The harness sees
+  only the continuation's usage, so the true cost was higher.
+- **Rep 0 ($0.620):** one retrieval and one suite run twice.
+- **Rep 2 ($0.510):** matches flash-direct. flash-direct has no retrieval tool
+  and never looked back.
+
+**Fix (15bbf6a).** The flash now asks the model to write down in its reply what
+it will need later. The stub offers `horizon_retrieve` only for exact lines the
+model did not write down, and no longer suggests re-running the tool. The
+harness records tool calls per request.
+
+### Re-run with the new wording (credit ran out partway)
+
+| Arm | Rep | Requests | $ | Score | Note |
+|---|---|---|---|---|---|
+| flash-direct | 0 | 6 | 0.435 | 0.00 | `stop_reason: refusal`, 0 output tokens, at step 5 (after the `io` log) |
+| flash-proxy | 0 | 7 | **0.531 (−19%)** | 1.00 | each suite run once; 0 retrievals |
+| flash-direct | 1 | 7 | 0.504 | 1.00 | |
+| flash-proxy | 1 | 3 | — | — | credit ran out |
+
+**Retrievals.** None, and no suite was run twice. One session is not enough to
+call the fix proven.
+
+**The refusal is open.**
+- No control session (9 on the official API) hit one.
+- Neither did any of the 9 flash sessions with the old wording.
+- With n=1 it cannot be attributed to Flash Observations, or ruled out. One
+  hypothesis: an API-side classifier may judge text in a system-role message
+  differently from the same text in a `tool_result`.
+- Next run: count refusals per arm. If flash shows any, try fewer instructions
+  in the flash header and a smaller flash.
+
+The injection check (`--injection`) did not run: no credit was left.
+
+**Spend.** Live runs and the preflight cost about $13 at list price:
+- $3.20 for the partial first run;
+- $7.83 for the full run;
+- $1.64 for the re-run;
+- plus the hidden CCR continuations.
+
+### Pooled evidence so far (official API, Opus 5.5)
+
+- **flash-direct:** 5 complete sessions, mean $0.512, **22% below control
+  ($0.654, 9 sessions)**, all with full scores. One more session ended in a
+  refusal.
+- **flash-proxy:** after both fixes, 1 complete session at $0.531 (−19%).
+- **Before release:** a 3+ rep run of flash-proxy, a refusal count, and the
+  injection check.
 
 ### What decides it
 
