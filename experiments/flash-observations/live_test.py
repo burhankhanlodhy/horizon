@@ -221,6 +221,10 @@ def run_session(client: Any, arm: str, rep: int, args: argparse.Namespace) -> Ru
         content = block_dicts(resp.content)
         messages.append({"role": "assistant", "content": content})
         calls = [b for b in content if b.get("type") == "tool_use"]
+        # A suite run twice means the agent went back for an output it lost.
+        result.requests[-1]["tool_calls"] = [
+            f"{c.get('name')}:{c.get('input', {}).get('suite', '')}" for c in calls
+        ]
         if resp.stop_reason != "tool_use" or not calls:
             result.final_text = "".join(
                 b.get("text", "") for b in content if b.get("type") == "text"
