@@ -281,3 +281,5 @@ experiments/**/runs/
 experiments/**/results.jsonl
 experiments/**/batch.log
 experiments/claude-code/read-maturation/template/
+experiments/compaction-paired/template/
+experiments/cache-keeper/live.log

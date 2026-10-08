@@ -3854,10 +3854,29 @@ class AnthropicHandlerMixin:
                 # the cache_control markers Anthropic will actually evaluate --
                 # and the ordering rule spans tools/system/messages, which no
                 # single transform is in a position to check (#2939).
+                from horizon.proxy.cache_keeper import (
+                    EXTENDED_TTL_BETA,
+                    add_beta,
+                    ttl_upgrade_enabled,
+                    upgrade_cache_ttl_to_1h,
+                )
                 from horizon.proxy.helpers import (
                     enforce_cache_control_ttl_order,
                     log_cache_breakpoints,
                 )
+
+                # Opt-in (HORIZON_CACHE_TTL_UPGRADE=1h): a tool-carrying turn the
+                # client put on the 5-minute lane moves to the 1-hour lane, so an
+                # ordinary pause no longer rewrites the whole context. Told to the
+                # guard below as a 1h request, which it now is.
+
+                if not client_uses_1h and body.get("tools") and ttl_upgrade_enabled():
+                    _ttl_upgraded = upgrade_cache_ttl_to_1h(body)
+                    if _ttl_upgraded:
+                        client_uses_1h = True
+                        add_beta(headers, EXTENDED_TTL_BETA)
+                        body_mutation_tracker.mark_mutated("cache_ttl_upgrade")
+                        tags["cache_ttl_upgrade"] = str(_ttl_upgraded)
 
                 (
                     _ttl_system,
@@ -3941,6 +3960,19 @@ class AnthropicHandlerMixin:
                         body.get("system"), body.get("messages"), body.get("tools")
                     ),
                 )
+
+                # The exact request about to be sent: what the cache keeper
+                # re-sends as a pre-warm if this session then goes idle.
+                if getattr(self, "cache_keeper", None) is not None:
+                    from horizon.proxy.cache_keeper import LIVENESS_HEADER
+
+                    self.cache_keeper.record_request(
+                        request_id,
+                        url=url,
+                        headers=dict(headers),
+                        body=body,
+                        liveness_id=request.headers.get(LIVENESS_HEADER),
+                    )
 
                 if stream and not buffered_stream_ccr:
                     self.pipeline_extensions.emit(

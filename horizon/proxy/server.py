@@ -1978,6 +1978,41 @@ class HorizonProxy(
         threading.Thread(target=_warm, name="kompress-warmup", daemon=True).start()
         return True
 
+    cache_keeper: Any = None
+
+    def _build_cache_keeper(self) -> Any:
+        """Keep idle sessions' prompt caches warm (HORIZON_CACHE_KEEPALIVE=1). Off by default."""
+        if os.environ.get("HORIZON_CACHE_KEEPALIVE", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return None
+        from horizon.proxy.cache_keeper import CacheKeeper
+
+        workspace = os.environ.get("HORIZON_WORKSPACE_DIR")
+        keeper = CacheKeeper(
+            self._cache_keeper_send,
+            max_idle_seconds=float(os.environ.get("HORIZON_CACHE_KEEPALIVE_MAX_IDLE_S", 8 * 3600)),
+            min_context=int(os.environ.get("HORIZON_CACHE_KEEPALIVE_MIN_CONTEXT", 20_000)),
+            ledger_path=Path(workspace) / "cache_keeper.jsonl" if workspace else None,
+        )
+        logger.info("Cache keep-alive: ENABLED (max idle %.0f s)", keeper.max_idle_seconds)
+        return keeper
+
+    async def _cache_keeper_send(
+        self, url: str, headers: dict[str, str], body: dict[str, Any]
+    ) -> tuple[int, dict[str, Any]]:
+        """Send one pre-warm request with the session's own forwarded headers."""
+        drop = {"content-length", "accept", "accept-encoding", "transfer-encoding", "host"}
+        out = {k: v for k, v in headers.items() if k.lower() not in drop}
+        out["accept"] = "application/json"
+        out["content-type"] = "application/json"
+        response = await self.http_client.post(
+            url, headers=out, content=json.dumps(body).encode("utf-8"), timeout=120.0
+        )
+        try:
+            usage = (response.json() or {}).get("usage") or {}
+        except ValueError:
+            usage = {}
+        return response.status_code, usage
+
     async def startup(self):
         """Initialize async resources."""
         self._get_shutdown_event().clear()
@@ -2010,6 +2045,7 @@ class HorizonProxy(
             else install_upstream_pinning(httpx.AsyncClient(http2=False, **_client_kwargs))
         )
         logger.info("Horizon Proxy started (version %s)", __version__)
+        self.cache_keeper = self._build_cache_keeper()
         logger.info(f"Optimization: {'ENABLED' if self.config.optimize else 'DISABLED'}")
         self.config.mode = normalize_proxy_mode(self.config.mode)
         logger.info(f"Mode: {self.config.mode}")
@@ -3121,6 +3157,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         app.state.startup_error = None
         app.state.periodic_toin_stats_task = None
         app.state.periodic_malloc_trim_task = None
+        app.state.cache_keeper_task = None
 
         try:
             try:
@@ -3144,6 +3181,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                     await proxy.traffic_learner.start()
                 if proxy._background_compression_enabled:
                     await proxy._background_compressor.start()
+                if proxy.cache_keeper is not None:
+                    app.state.cache_keeper_task = asyncio.create_task(proxy.cache_keeper.run())
 
                 # Elect the single owner worker (first worker wins the lock).
                 _beacon_is_owner[0] = _try_acquire_beacon_lock()
@@ -3197,6 +3236,16 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                     timeout=3.0,
                 )
                 app.state.periodic_toin_stats_task = None
+
+            cache_keeper_task = getattr(app.state, "cache_keeper_task", None)
+            if cache_keeper_task is not None:
+                cache_keeper_task.cancel()
+                await _timed(
+                    asyncio.gather(cache_keeper_task, return_exceptions=True),
+                    label="cache_keeper.stop",
+                    timeout=3.0,
+                )
+                app.state.cache_keeper_task = None
 
             periodic_malloc_trim_task = app.state.periodic_malloc_trim_task
             if periodic_malloc_trim_task is not None:
@@ -5644,6 +5693,18 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                 store.get_entry_status(hash_key, clean_expired=True)
             ),
         )
+
+    @app.post("/v1/horizon/keepalive/end", dependencies=[Depends(_require_loopback)])
+    async def cache_keeper_end(request: Request):
+        """``wrap`` reports that its tool exited: stop keeping that session's cache warm."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        liveness_id = str((payload or {}).get("id") or "")
+        if not liveness_id or proxy.cache_keeper is None:
+            return {"ended": False}
+        return {"ended": proxy.cache_keeper.end(liveness_id)}
 
     # CCR Tool Call Handler - for agent frameworks to call when LLM uses horizon_retrieve
     @app.post("/v1/retrieve/tool_call", dependencies=[Depends(_require_loopback)])

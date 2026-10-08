@@ -33,6 +33,8 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.request
+import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from functools import wraps
@@ -2999,6 +3001,44 @@ def _apply_project_header_env(env: dict[str, str]) -> None:
         env["ANTHROPIC_CUSTOM_HEADERS"] = header_line
 
 
+# Liveness tag for the proxy's cache keep-alive (horizon.proxy.cache_keeper):
+# one random id per launch, so the proxy keeps a session's prompt cache warm
+# only while the tool that owns it is still running.
+_KEEPALIVE_HEADER_NAME = "X-Horizon-Keepalive-Id"
+
+
+def _apply_keepalive_header_env(env: dict[str, str]) -> str | None:
+    """Add a per-launch keep-alive id to ``ANTHROPIC_CUSTOM_HEADERS``; returns it.
+
+    A user-supplied header of the same name wins, and then wrap does not end
+    that session on exit either (returns None).
+    """
+    existing = env.get("ANTHROPIC_CUSTOM_HEADERS") or ""
+    for line in existing.splitlines():
+        if line.split(":", 1)[0].strip().lower() == _KEEPALIVE_HEADER_NAME.lower():
+            return None
+    keepalive_id = uuid.uuid4().hex
+    header_line = f"{_KEEPALIVE_HEADER_NAME}: {keepalive_id}"
+    env["ANTHROPIC_CUSTOM_HEADERS"] = f"{existing}\n{header_line}" if existing else header_line
+    return keepalive_id
+
+
+def _end_keepalive(proxy_url: str | None, keepalive_id: str | None) -> None:
+    """Tell the proxy the wrapped tool exited. Best effort: never delays or fails the exit."""
+    if not proxy_url or not keepalive_id:
+        return
+    request = urllib.request.Request(
+        proxy_url.rstrip("/") + "/v1/horizon/keepalive/end",
+        data=json.dumps({"id": keepalive_id}).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=2).close()
+    except (OSError, ValueError):
+        pass
+
+
 # Codex's own built-in providers plus Horizon's injected one — never treated
 # as a "custom upstream to preserve" by _detect_custom_codex_upstream_base_url.
 _CODEX_BUILTIN_PROVIDER_NAMES = frozenset({"openai", "anthropic", "azure", "horizon"})
@@ -5551,6 +5591,7 @@ def claude(
         # Per-project savings attribution: tag every request with the launch
         # directory's name via X-Horizon-Project (user override wins).
         _apply_project_header_env(env)
+        _keepalive_id = _apply_keepalive_header_env(env)
 
         # Issue #746: keep Claude Code's on-demand tool loading on through the
         # proxy so tool schemas are not eagerly materialized into local context.
@@ -5597,6 +5638,7 @@ def claude(
                 )
 
         result = subprocess.run([claude_bin, *claude_args], env=env)
+        _end_keepalive(proxy_url, _keepalive_id)
         raise SystemExit(result.returncode)
 
     except SystemExit:

@@ -654,6 +654,15 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
         retained=retained_tokens_saved,
         project=project,
     )
+    keeper = getattr(handler, "cache_keeper", None)
+    if keeper is not None and outcome.provider == "anthropic" and outcome.status_code < 400:
+        keeper.record_usage(
+            outcome.request_id,
+            model=outcome.model,
+            cache_read=outcome.cache_read_tokens,
+            cache_write=outcome.cache_write_tokens,
+            uncached=outcome.uncached_input_tokens,
+        )
     savings_breakdown = from_tags(outcome.tags)
 
     # Stage timings contributed from OUTSIDE the handler, folded in here rather
