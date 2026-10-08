@@ -250,6 +250,34 @@ def flash_enabled() -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+#: Upstreams known to pass turn-scoped messages and prompt caching through.
+OFFICIAL_HOSTS = frozenset({"api.anthropic.com"})
+
+
+def upstream_supports_flash(api_url: str) -> bool:
+    """Whether Flash Observations may run against ``api_url``.
+
+    Only the official Claude API by default. A third-party gateway tested on
+    2026-10-08 accepted ``clear_at`` without the beta, billed the "cleared"
+    text in full, and did no prompt caching, which turns the feature into a
+    cost increase. ``HORIZON_FLASH_ANY_UPSTREAM=1`` overrides this for an
+    upstream that ``experiments/flash-observations/preflight.py`` has passed
+    (or the local fake used in tests).
+    """
+    from urllib.parse import urlparse
+
+    from horizon.proxy import runtime_env
+
+    override = (runtime_env.getenv("HORIZON_FLASH_ANY_UPSTREAM", "") or "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    try:
+        host = (urlparse(api_url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in OFFICIAL_HOSTS
+
+
 def flash_policy() -> FlashPolicy:
     """``HORIZON_FLASH_TOOLS`` (comma list) and ``HORIZON_FLASH_MIN_CHARS``."""
     from horizon.proxy import runtime_env

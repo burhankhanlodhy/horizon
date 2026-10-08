@@ -878,6 +878,10 @@ class AnthropicHandlerMixin:
 
         if not flash.flash_enabled() or getattr(self, "anthropic_backend", None) is not None:
             return False, None
+        if not flash.upstream_supports_flash(self.ANTHROPIC_API_URL):
+            # A gateway that rewrites system messages or drops caching would
+            # bill the flashed text on every turn: a cost increase.
+            return False, None
         from horizon.proxy.helpers import (
             _MID_CONVERSATION_SYSTEM_FAMILIES,
             _model_in_families,

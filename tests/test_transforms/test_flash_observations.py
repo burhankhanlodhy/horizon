@@ -231,3 +231,21 @@ def test_prefix_tracker_counts_cached_messages_in_their_stubbed_form() -> None:
 
     assert flashed.get_frozen_message_count() == len(messages)
     assert plain.get_frozen_message_count() < len(messages)
+
+
+@pytest.mark.parametrize(
+    ("url", "override", "expected"),
+    [
+        ("https://api.anthropic.com", "", True),
+        ("https://modelflare.dev", "", False),
+        ("http://127.0.0.1:18890", "", False),
+        ("http://127.0.0.1:18890", "1", True),
+    ],
+)
+def test_flash_runs_only_against_the_official_api_unless_overridden(
+    monkeypatch, url, override, expected
+) -> None:
+    from horizon.transforms.flash_observations import upstream_supports_flash
+
+    monkeypatch.setenv("HORIZON_FLASH_ANY_UPSTREAM", override)
+    assert upstream_supports_flash(url) is expected

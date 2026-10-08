@@ -6,10 +6,10 @@ hits. Any of those would make live_test.py measure the gateway, not the
 feature. A few small requests (a few cents on Opus 5.5) check that:
 
   1. usage reports cache_creation_input_tokens / cache_read_input_tokens
-  2. prompt caching hits: the same ~3k-token prefix, read back 3 times
+  2. prompt caching hits: the same multi-thousand-token prefix, read back 3 times
   3. the beta header reaches Anthropic: a turn-scoped (clear_at) message is
      REJECTED without the beta and accepted with it
-  4. a cleared turn-scoped message is not billed: adding a cleared ~4k-token
+  4. a cleared turn-scoped message is not billed: adding a large cleared
      message changes billed input by (almost) nothing
   5. the newest turn-scoped message renders: the model can read a code word
      that appears only there
@@ -65,7 +65,7 @@ def main() -> int:
         results.append((name, ok, detail))
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
 
-    # 1 + 2: usage fields and cache hits on a ~3k-token system prompt.
+    # 1 + 2: usage fields and cache hits on a multi-thousand-token system prompt.
     system = [
         {
             "type": "text",
@@ -157,13 +157,26 @@ def main() -> int:
         check(
             "cleared message is not billed",
             abs(delta) < 200,
-            f"billed input without it {_billed(plain.usage)}, with a cleared ~4k-token message "
+            f"billed input without it {_billed(plain.usage)}, with a large cleared message "
             f"{_billed(cleared.usage)} (delta {delta})",
         )
     except anthropic.APIError as exc:
         check("cleared message is not billed", False, f"{type(exc).__name__}: {exc}"[:300])
 
     failed = [name for name, ok, _ in results if not ok]
+    if "beta reaches Anthropic" in failed and "cleared message is not billed" in failed:
+        print(
+            "\nDiagnosis: clear_at is accepted without its beta and the 'cleared' text is "
+            "billed, yet the model reads it. The endpoint most likely moves role=system "
+            "messages into the top-level system prompt and drops clear_at. Flash "
+            "Observations would then bill every flashed output on every turn."
+        )
+    if "prompt cache hits" in failed:
+        print(
+            "Diagnosis: no cache reads on identical repeats. The endpoint ignores "
+            "cache_control or spreads requests over many accounts; cost comparisons "
+            "through it do not reflect Claude API billing."
+        )
     print("\nPREFLIGHT " + ("PASSED" if not failed else "FAILED: " + ", ".join(failed)))
     return 0 if not failed else 1
 

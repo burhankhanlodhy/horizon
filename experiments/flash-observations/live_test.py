@@ -275,6 +275,9 @@ def start_proxy(arm: str, workdir: Path, upstream: str | None = None) -> subproc
         HORIZON_WORKSPACE_DIR=str(workdir / arm),
         HORIZON_FLASH_OBSERVATIONS="1" if arm == "flash-proxy" else "0",
         HORIZON_FLASH_TOOLS="run_tests",
+        # The proxy flashes only against api.anthropic.com unless told otherwise;
+        # the fake and a preflight-passed gateway need the override.
+        HORIZON_FLASH_ANY_UPSTREAM="1" if upstream else "0",
     )
     log = open(workdir / f"{arm}.log", "w")  # noqa: SIM115 - closed with the process
     cmd = [
@@ -387,7 +390,9 @@ def main() -> int:
         for rep in range(args.reps):
             for arm in arms:  # interleave arms so drift hits every arm alike
                 base_url = (
-                    f"http://127.0.0.1:{PROXY_PORTS[arm]}" if arm.endswith("-proxy") else upstream_url
+                    f"http://127.0.0.1:{PROXY_PORTS[arm]}"
+                    if arm.endswith("-proxy")
+                    else upstream_url
                 )
                 client = anthropic.Anthropic(base_url=base_url, max_retries=4, timeout=600)
                 res = run_session(client, arm, rep, args)

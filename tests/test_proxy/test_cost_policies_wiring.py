@@ -197,3 +197,15 @@ def test_flash_observations_skip_unsupported_models(monkeypatch, tmp_path) -> No
         assert client.post(MESSAGES, json=body).status_code == 200
         forwarded = _forwarded_body(http)["messages"]
     assert not any(m.get("role") == "system" for m in forwarded)
+
+
+def test_flash_observations_skip_third_party_upstreams(monkeypatch, tmp_path) -> None:
+    app = _flash_app(monkeypatch, tmp_path, "cache")
+    with TestClient(app) as client:
+        proxy = client.app.state.proxy
+        proxy.ANTHROPIC_API_URL = "https://gateway.example"
+        http = _install_fake_client(proxy)
+        body = {"model": "claude-opus-5-5", "max_tokens": 16, "messages": _flash_turns(1)}
+        assert client.post(MESSAGES, json=body).status_code == 200
+        forwarded = _forwarded_body(http)["messages"]
+    assert not any(m.get("role") == "system" for m in forwarded)

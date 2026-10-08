@@ -76,6 +76,24 @@ python experiments/flash-observations/live_test.py --base-url https://gateway.ex
 Dollar figures assume Anthropic list prices; a gateway's own rates may differ.
 Compare the arms by token buckets.
 
+**ModelFlare preflight (2026-10-08, run by the owner): failed.** No live run
+was made through it.
+
+| Check | Result |
+|---|---|
+| Cache fields in `usage` | Present |
+| Caching | None: `write=0 read=0` on the first request, `read=0` on three repeats |
+| `clear_at` without its beta | Accepted |
+| Turn-scoped message renders | Yes (`PLUM`) |
+| "Cleared" message | Billed in full (+14,746 tokens) |
+
+The likeliest cause is that the gateway moves `role: "system"` messages into
+the top-level system prompt and drops `clear_at`, and it does no prompt
+caching. Through it, Flash Observations would bill every flashed output on
+every turn. The proxy therefore now flashes only when its upstream is
+`api.anthropic.com`. `HORIZON_FLASH_ANY_UPSTREAM=1` overrides that for an
+upstream that passed this preflight, and for the local fake.
+
 ### What decides it
 
 1. **Zero 400s in the flash arms.** No `clear_at` placement error, no
