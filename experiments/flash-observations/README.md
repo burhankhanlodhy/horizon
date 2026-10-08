@@ -94,6 +94,23 @@ every turn. The proxy therefore now flashes only when its upstream is
 `api.anthropic.com`. `HORIZON_FLASH_ANY_UPSTREAM=1` overrides that for an
 upstream that passed this preflight, and for the local fake.
 
+**Official Claude API preflight (2026-10-08): passed.**
+
+| Check | Result |
+|---|---|
+| Cache fields in `usage` | Present (`write=10,875` on the first request) |
+| Caching | `read=10,875` on each of three repeats |
+| `clear_at` without its beta | Rejected: `messages.1.clear_at: Extra inputs are not permitted` |
+| Turn-scoped message renders | Yes (`PLUM`) |
+| "Cleared" message | Not billed (45 vs 46 input tokens with ~4k tokens cleared) |
+
+The first version of the render check sent a bare `The code word is PLUM.`
+system message. Opus 5.5 saw it but declined to vouch for an unexplained code
+word ("I don't have a code word... PLUM was made up"), with or without
+`clear_at`. The check now frames the text as the feature does: a stubbed tool
+result plus the full output as data in `<tool_output>`. Framed that way the
+model answers `PLUM` every time.
+
 ### What decides it
 
 1. **Zero 400s in the flash arms.** No `clear_at` placement error, no
