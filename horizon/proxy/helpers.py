@@ -1043,6 +1043,61 @@ def _system_message_to_blocks(message: dict[str, Any]) -> list[Any]:
     return []
 
 
+#: Models that accept text-bearing ``role: "system"`` messages inside
+#: ``messages`` (no beta header). Claude Sonnet 5 does NOT; Sonnet 5.5 and
+#: Haiku 5.5 do.
+_MID_CONVERSATION_SYSTEM_FAMILIES = (
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5-5",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+)
+
+#: Models that accept an effort-only system message
+#: (``{"role": "system", "content": [], "output_config": {"effort": ...}}``,
+#: beta ``mid-conversation-output-config-2026-07-01``), which changes effort
+#: from the next user turn while keeping the prompt cache.
+_PER_MESSAGE_EFFORT_FAMILIES = (
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+)
+
+
+def _model_in_families(model_id: str, families: tuple[str, ...]) -> bool:
+    """Whether ``model_id`` names one of ``families``, respecting version boundaries.
+
+    ``claude-sonnet-5`` must not match ``claude-sonnet-5-5`` (a different
+    model), but a family still matches with a date or platform suffix:
+    ``claude-opus-5-20260301``, ``global.anthropic.claude-opus-5-v1:0``.
+    """
+    for family in families:
+        start = model_id.find(family)
+        while start != -1:
+            rest = model_id[start + len(family) :]
+            if not (rest[:1].isdigit() or re.match(r"-\d{1,2}(?!\d)", rest)):
+                return True
+            start = model_id.find(family, start + 1)
+    return False
+
+
+def _is_effort_only_system_message(message: object) -> bool:
+    return (
+        isinstance(message, dict)
+        and message.get("role") == _ROLE_SYSTEM
+        and isinstance(message.get("output_config"), dict)
+        and not message.get("content")
+    )
+
+
 def relocate_system_messages_to_top_level(
     messages: list[dict[str, Any]],
     system: Any,
@@ -1067,16 +1122,20 @@ def relocate_system_messages_to_top_level(
     the common path is untouched.
     """
     model_id = str(model or "").lower()
-    supports_mid_conversation = any(
-        family in model_id
-        for family in (
-            "claude-fable-5",
-            "claude-mythos-5",
-            "claude-opus-4-8",
-            "claude-opus-5",
-            "claude-sonnet-5",
-        )
-    )
+    supports_mid_conversation = _model_in_families(model_id, _MID_CONVERSATION_SYSTEM_FAMILIES)
+    # Effort-only system messages (no content, just ``output_config.effort``)
+    # are exempt from placement rules on per-message-effort models: they may
+    # sit anywhere, typically between an assistant turn and the next user turn.
+    # Dropping or hoisting them would silently undo the client's effort change.
+    keep_effort_only = _model_in_families(model_id, _PER_MESSAGE_EFFORT_FAMILIES)
+
+    def _skippable(message: object) -> bool:
+        return keep_effort_only and _is_effort_only_system_message(message)
+
+    def _neighbour(position: int, step: int) -> object:
+        while 0 <= position < len(messages) and _skippable(messages[position]):
+            position += step
+        return messages[position] if 0 <= position < len(messages) else None
 
     def _assistant_ends_in_server_tool_result(message: object) -> bool:
         if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -1094,7 +1153,11 @@ def relocate_system_messages_to_top_level(
     index = 0
     while index < len(messages):
         message = messages[index]
-        if not isinstance(message, dict) or message.get("role") != _ROLE_SYSTEM:
+        if (
+            not isinstance(message, dict)
+            or message.get("role") != _ROLE_SYSTEM
+            or _skippable(message)
+        ):
             index += 1
             continue
 
@@ -1103,12 +1166,13 @@ def relocate_system_messages_to_top_level(
             index + 1 < len(messages)
             and isinstance(messages[index + 1], dict)
             and messages[index + 1].get("role") == _ROLE_SYSTEM
+            and not _skippable(messages[index + 1])
         ):
             index += 1
         section_end = index
 
-        previous = messages[section_start - 1] if section_start > 0 else None
-        following = messages[section_end + 1] if section_end + 1 < len(messages) else None
+        previous = _neighbour(section_start - 1, -1)
+        following = _neighbour(section_end + 1, 1)
         valid_previous = (
             isinstance(previous, dict) and previous.get("role") == "user"
         ) or _assistant_ends_in_server_tool_result(previous)

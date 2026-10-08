@@ -42,7 +42,7 @@ def test_disabled_by_default(monkeypatch) -> None:
     ],
 )
 def test_superseded_models_move_to_their_successor(monkeypatch, requested, served) -> None:
-    body = {"model": requested}
+    body = {"model": requested, "thinking": {"type": "adaptive"}}
     decision = _modernizer(monkeypatch).apply(body)
     assert decision.changed
     assert body["model"] == served
@@ -86,16 +86,22 @@ def test_every_turn_of_a_conversation_gets_the_same_model(monkeypatch) -> None:
 
 def test_fast_mode_is_dropped_when_the_old_model_ignored_it(monkeypatch) -> None:
     mapping = json.dumps({"claude-opus-4-6": "claude-opus-5-5"})
-    body = {"model": "claude-opus-4-6", "speed": "fast"}
+    body = {"model": "claude-opus-4-6", "speed": "fast", "thinking": {"type": "adaptive"}}
     _modernizer(monkeypatch, HORIZON_MODEL_MODERNIZE_MAP=mapping).apply(body)
     assert body["model"] == "claude-opus-5-5"
     assert "speed" not in body
 
 
 def test_fast_mode_is_kept_when_the_old_model_honoured_it(monkeypatch) -> None:
-    body = {"model": "claude-opus-5", "speed": "fast"}
+    body = {
+        "model": "claude-opus-5",
+        "speed": "fast",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"},
+    }
     _modernizer(monkeypatch).apply(body)
-    assert body == {"model": "claude-opus-5-5", "speed": "fast"}
+    assert body["model"] == "claude-opus-5-5"
+    assert body["speed"] == "fast"
 
 
 def test_fast_mode_support() -> None:
@@ -146,3 +152,60 @@ def test_stats_report_requested_and_served_pairs(monkeypatch) -> None:
             "holdout": 0,
         }
     ]
+
+
+# -- thinking and effort carried over -----------------------------------------
+
+
+def test_haiku_side_call_without_thinking_stays_without_thinking(monkeypatch) -> None:
+    """Haiku 5.5 thinks by default; a Haiku 4.5 side call did not."""
+    body = {"model": "claude-haiku-4-5", "max_tokens": 512}
+    _modernizer(monkeypatch).apply(body)
+    assert body["model"] == "claude-haiku-5-5"
+    assert body["thinking"] == {"type": "disabled"}
+
+
+def test_sonnet_without_thinking_gets_sonnet_5_5_lowest_setting(monkeypatch) -> None:
+    body = {"model": "claude-sonnet-4-6", "thinking": {"type": "disabled"}}
+    _modernizer(monkeypatch).apply(body)
+    assert body["model"] == "claude-sonnet-5-5"
+    assert body["thinking"] == {"type": "between_tools"}
+
+
+def test_sonnet_without_thinking_at_xhigh_keeps_its_model(monkeypatch) -> None:
+    body = {"model": "claude-sonnet-4-6", "output_config": {"effort": "max"}}
+    decision = _modernizer(monkeypatch).apply(body)
+    assert not decision.changed
+    assert body == {"model": "claude-sonnet-4-6", "output_config": {"effort": "max"}}
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    [None, {"type": "disabled"}, {"type": "enabled", "budget_tokens": 4096}],
+)
+def test_requests_opus_5_5_cannot_express_keep_their_model(monkeypatch, thinking) -> None:
+    body = {"model": "claude-opus-5"}
+    if thinking is not None:
+        body["thinking"] = thinking
+    before = dict(body)
+    decision = _modernizer(monkeypatch).apply(body)
+    assert not decision.changed
+    assert body == before
+
+
+def test_opus_effort_default_is_carried_over(monkeypatch) -> None:
+    """Opus 5 defaulted to high; Opus 5.5 defaults to medium."""
+    body = {"model": "claude-opus-5", "thinking": {"type": "adaptive"}}
+    _modernizer(monkeypatch).apply(body)
+    assert body["model"] == "claude-opus-5-5"
+    assert body["output_config"] == {"effort": "high"}
+
+
+def test_an_explicit_effort_is_left_alone(monkeypatch) -> None:
+    body = {
+        "model": "claude-opus-4-8",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "low"},
+    }
+    _modernizer(monkeypatch).apply(body)
+    assert body["output_config"] == {"effort": "low"}

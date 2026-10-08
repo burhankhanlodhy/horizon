@@ -17,17 +17,21 @@ output tokens, so every lever here works by reshaping the request:
    asks we leave it alone. For legacy models still sending
    ``thinking.budget_tokens`` we clamp the budget to the API floor instead.
 
-   **Design rule — never change effort per turn.** Anthropic renders
-   ``output_config.effort`` (and the thinking configuration) into the prompt,
-   so changing it invalidates every cached message block. Lowering effort on
-   one mechanical turn saves about 500 thinking tokens ($0.01 on Opus 5.5)
-   but forces the whole conversation to be re-written: $0.38 at 80k context,
-   $0.72 at 150k, a 38-72x loss at 0.05x cache reads. Effort routing may
-   therefore change effort only (a) once, on a conversation's first request,
-   or (b) on a request that misses the cache anyway (idle past the TTL, a
-   model or tool change, a client compaction), which
-   :mod:`horizon.proxy.cache_miss_watch` detects. Effort routing is not
-   implemented yet; this rule binds whoever builds it.
+   **Design rule — change effort per turn only through per-message effort.**
+   A change to the top-level ``output_config.effort`` (or the thinking
+   configuration) is rendered into the prompt and invalidates every cached
+   message block. Lowering it on one mechanical turn saves about 500 thinking
+   tokens ($0.01 on Opus 5.5) but re-writes the conversation: $0.38 at 80k
+   context, $0.72 at 150k, a 38-72x loss at 0.05x cache reads. On models with
+   per-message effort (Fable 5.1, Mythos 5.1, Opus 5.5, Opus 5, Sonnet 5.5,
+   Haiku 5.5; beta ``mid-conversation-output-config-2026-07-01``) an
+   effort-only system message (``{"role": "system", "content": [],
+   "output_config": {"effort": "low"}}``) changes effort from the next user
+   turn and keeps the cache, so per-turn routing is cache-free there, provided
+   every inserted message is replayed byte for byte on later requests. On any
+   other model, change effort only on a conversation's first request or on a
+   request that misses the cache anyway (:mod:`horizon.proxy.cache_miss_watch`).
+   Effort routing is not implemented yet; this rule binds whoever builds it.
 
 Safety rules (each prevents a concrete failure mode):
 - Never INJECT ``output_config.effort`` where the client didn't send it —

@@ -15,7 +15,9 @@ model                     everything (a new model has no cache entry)
 tool definitions          everything (tools render first)
 ``speed`` (fast mode)     system prompt and messages
 system prompt             system prompt and messages
-``output_config.effort``  messages
+``output_config.effort``  messages (top-level value only; a per-message
+                          effort change is an appended system message and
+                          keeps the cache on models that support it)
 thinking settings         messages
 ``tool_choice``           messages
 an earlier message        that message and everything after it

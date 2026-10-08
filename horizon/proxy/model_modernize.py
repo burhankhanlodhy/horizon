@@ -24,6 +24,24 @@ THE DEFAULT MAP ONLY HOLDS STRICT PRICE CUTS
     cheaper. Opus 4.5 / 4.6 to Opus 5.5 is not a clear cut once the tokenizer
     is counted (output +4%), so it is left out; an operator can add it.
 
+THINKING AND EFFORT ARE CARRIED OVER, NOT RE-DEFAULTED
+    The successors default differently. Haiku 5.5 and Sonnet 5.5 think by
+    default; Opus 5.5 always thinks and rejects ``thinking: disabled``; Opus
+    5.5 and Haiku 5.5 default to ``medium`` effort where their predecessors
+    ran at ``high``. A request is therefore adapted so it asks the successor
+    for the behaviour the old model gave it (:func:`adapt_request`):
+
+    * no ``thinking`` field (the old model did not think) -> the successor's
+      lowest setting: ``disabled`` on Haiku 5.5, ``between_tools`` on Sonnet
+      5.5. Opus 5.5 cannot stop thinking, so such a request keeps its model.
+    * ``thinking: disabled`` -> the same lowest setting; kept model on Opus 5.5.
+    * manual ``thinking: enabled`` with ``budget_tokens`` -> kept model (the
+      successors use adaptive thinking).
+    * no effort, onto Opus 5.5 from an Opus that defaulted to ``high`` ->
+      ``output_config.effort: high``, the level the client was getting.
+
+    A request that cannot be expressed on the successor keeps its own model.
+
 FAST MODE
     Opus 4.6 accepts ``speed: "fast"`` but runs and bills at standard speed;
     Opus 5.5 honours it at 2x price. A mapping from a model that does not
@@ -101,6 +119,51 @@ def _matches(model: str, prefix: str) -> bool:
 
 def supports_fast_mode(model: str) -> bool:
     return any(_matches(model, p) for p in FAST_MODE_MODELS)
+
+
+#: The lowest thinking setting each successor accepts, or ``None`` when it
+#: cannot stop thinking at all.
+_NO_THINKING: dict[str, dict[str, str] | None] = {
+    "claude-haiku-5-5": {"type": "disabled"},
+    "claude-sonnet-5-5": {"type": "between_tools"},
+    "claude-opus-5-5": None,
+}
+#: Successors whose default effort is lower than their predecessors' ``high``.
+_MEDIUM_DEFAULT = ("claude-opus-5-5", "claude-haiku-5-5")
+#: Predecessors that defaulted to ``high`` effort.
+_HIGH_DEFAULT_OPUS = ("claude-opus-4-7", "claude-opus-4-8", "claude-opus-5")
+#: Efforts at which the lowest thinking setting is rejected.
+_HIGH_EFFORTS = ("xhigh", "max")
+
+
+def adapt_request(body: dict[str, Any], source: str, target: str) -> bool:
+    """Adapt ``body`` in place so ``target`` behaves as ``source`` did.
+
+    Returns ``False`` (and leaves ``body`` untouched) when the request cannot
+    be expressed on ``target``; the caller then keeps the original model.
+    """
+    thinking = body.get("thinking")
+    mode = thinking.get("type") if isinstance(thinking, dict) else None
+    if mode == "enabled":
+        return False  # manual budget_tokens: the successors think adaptively
+    output_config = body.get("output_config")
+    effort = output_config.get("effort") if isinstance(output_config, dict) else None
+    target_family = next((f for f in _NO_THINKING if _matches(target, f)), None)
+
+    changes: dict[str, Any] = {}
+    if target_family is not None and (thinking is None or mode == "disabled"):
+        lowest = _NO_THINKING[target_family]
+        if lowest is None or effort in _HIGH_EFFORTS:
+            return False
+        changes["thinking"] = dict(lowest)
+    if (
+        effort is None
+        and any(_matches(target, f) for f in _MEDIUM_DEFAULT)
+        and any(_matches(source, f) for f in _HIGH_DEFAULT_OPUS)
+    ):
+        changes["output_config"] = {**(output_config or {}), "effort": "high"}
+    body.update(changes)
+    return True
 
 
 @dataclass(frozen=True)
@@ -184,10 +247,15 @@ class ModelModernizer:
             logger.debug("model modernize failed for %s", model, exc_info=True)
             return ModernizeDecision(model, model, "error")
         if decision.changed:
-            body["model"] = decision.served
-            if body.get("speed") == "fast" and not supports_fast_mode(model):
-                # The client was billed standard speed; keep it that way.
-                body.pop("speed", None)
+            if not adapt_request(body, model, decision.served):
+                decision = ModernizeDecision(
+                    model, model, f"kept: request not expressible on {decision.served}"
+                )
+            else:
+                body["model"] = decision.served
+                if body.get("speed") == "fast" and not supports_fast_mode(model):
+                    # The client was billed standard speed; keep it that way.
+                    body.pop("speed", None)
         if decision.changed or decision.holdout:
             key = (decision.requested, decision.served, decision.holdout)
             with self._lock:
