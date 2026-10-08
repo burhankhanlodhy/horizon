@@ -7,6 +7,20 @@ go in the code. Some come from published work. Others are new and come with
 their own cost math. All numbers come from `experiments/cost-model/calc.py`
 unless a source is cited.
 
+> **Status and corrections (later on 2026-10-08).** Options 1 (telemetry
+> part), 2, 3, 4, 5 (OpenAI Flex) and the keep-alive fix in 7 are implemented
+> and off by default; see [the implementation guide](2026-10-08-implementation-guide.md),
+> which also describes a new algorithm (Flash Observations). Corrections to
+> this report:
+> - The per-turn effort warning applies to the top-level `output_config.effort`
+>   only. On Fable 5.1, Mythos 5.1, Opus 5.5, Opus 5, Sonnet 5.5 and Haiku 5.5,
+>   per-message effort (an effort-only system message, beta) changes effort
+>   and keeps the cache, so per-turn effort routing is viable there.
+> - Stable tool order (option 1) already exists (`_sort_tools_deterministically`).
+> - Modernizing to the 5.5 models must carry thinking and effort over: Haiku
+>   and Sonnet 5.5 think by default, and Opus 5.5 always thinks and defaults to
+>   `medium`. The shipped mapper does this.
+
 ## 1. What Horizon does today
 
 Horizon is a proxy between coding agents (Claude Code, Codex, Copilot, OpenCode,
