@@ -336,6 +336,12 @@ def main() -> int:
     ap.add_argument("--injection", action="store_true")
     ap.add_argument("--plan", action="store_true", help="print the plan; no API calls")
     ap.add_argument(
+        "--base-url",
+        default=None,
+        help="an Anthropic-compatible gateway (e.g. https://gateway.example/v1); "
+        "run preflight.py against it first",
+    )
+    ap.add_argument(
         "--fake",
         action="store_true",
         help="dry run against fake_upstream.py (a strict local fake of the API); no key needed",
@@ -369,17 +375,19 @@ def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="flash-live-"))
     proxies: dict[str, subprocess.Popen] = {}
     results: list[RunResult] = []
-    fake_url = f"http://127.0.0.1:{FAKE_PORT}" if args.fake else None
+    upstream_url = f"http://127.0.0.1:{FAKE_PORT}" if args.fake else None
+    if args.base_url and not args.fake:
+        upstream_url = args.base_url.rstrip("/").removesuffix("/v1")  # upstream for every arm
     try:
         if args.fake:
             proxies["fake"] = start_fake(workdir)
         for arm in arms:
             if arm.endswith("-proxy"):
-                proxies[arm] = start_proxy(arm, workdir, fake_url)
+                proxies[arm] = start_proxy(arm, workdir, upstream_url)
         for rep in range(args.reps):
             for arm in arms:  # interleave arms so drift hits every arm alike
                 base_url = (
-                    f"http://127.0.0.1:{PROXY_PORTS[arm]}" if arm.endswith("-proxy") else fake_url
+                    f"http://127.0.0.1:{PROXY_PORTS[arm]}" if arm.endswith("-proxy") else upstream_url
                 )
                 client = anthropic.Anthropic(base_url=base_url, max_retries=4, timeout=600)
                 res = run_session(client, arm, rep, args)

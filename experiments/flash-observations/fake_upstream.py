@@ -154,8 +154,29 @@ async def messages_endpoint(request: Request) -> JSONResponse:
     uncached = sum(sizes[breakpoint_at + 2 :])
     CACHE.update(prefix_keys[: breakpoint_at + 2])
 
-    # Scripted model.
-    suites = SUITE_RE.search(_text(messages[0].get("content"))).group(1).split(", ")
+    # Scripted model. Outside the triage task it echoes what it can see, so a
+    # check can tell whether a message rendered.
+    task = SUITE_RE.search(_text(messages[0].get("content")))
+    if task is None:
+        seen_text = " ".join(_text(m.get("content")) for m in rendered)
+        return JSONResponse(
+            {
+                "id": f"msg_{CALLS['n']:05d}",
+                "type": "message",
+                "role": "assistant",
+                "model": body.get("model"),
+                "content": [{"type": "text", "text": "I can see: " + seen_text[-400:]}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": uncached,
+                    "cache_creation_input_tokens": cache_write,
+                    "cache_read_input_tokens": cache_read,
+                    "output_tokens": 20,
+                },
+            }
+        )
+    suites = task.group(1).split(", ")
     done = sum(
         1
         for m in messages

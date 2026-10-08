@@ -49,6 +49,33 @@ ANTHROPIC_API_KEY=... python experiments/flash-observations/live_test.py --reps 
 **Output.** `runs/<timestamp>/results.jsonl`: per run, usage per request,
 totals, $, score, final answer, injection outcome. `summary.txt` has the table.
 
+### Through a third-party gateway
+
+An Anthropic-compatible gateway works only if it passes requests through
+unchanged:
+- beta headers forwarded;
+- `clear_at` system messages intact;
+- prompt caching on one account rather than a key pool.
+
+`preflight.py` checks exactly that with a few small requests (a few cents):
+- cache fields in `usage`;
+- cache hits on repeats;
+- `clear_at` rejected without the beta (proof of raw pass-through);
+- the newest turn-scoped message renders;
+- a cleared message adds no billed input.
+
+Run the live test only if it prints `PREFLIGHT PASSED`:
+
+```bash
+export ANTHROPIC_API_KEY=...            # the gateway's key
+python experiments/flash-observations/preflight.py --base-url https://gateway.example/v1
+python experiments/flash-observations/live_test.py --base-url https://gateway.example/v1 --reps 3
+```
+
+`--base-url` is used for the direct arms and as the upstream of both proxies.
+Dollar figures assume Anthropic list prices; a gateway's own rates may differ.
+Compare the arms by token buckets.
+
 ### What decides it
 
 1. **Zero 400s in the flash arms.** No `clear_at` placement error, no
