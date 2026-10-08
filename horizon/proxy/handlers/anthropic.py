@@ -856,6 +856,35 @@ class AnthropicHandlerMixin:
             "content": copy.deepcopy(resp_json.get("content", "")),
         }
 
+    def _maybe_modernize_model(
+        self,
+        model: str,
+        body: dict[str, Any],
+        body_mutation_tracker: Any,
+        bypass: bool,
+        request_id: str = "",
+    ) -> str:
+        """Serve a superseded model id on its cheaper successor (opt-in).
+
+        Direct Anthropic API only: a Bedrock or other backend names models
+        differently and may not carry the successor. Mapping depends only on
+        the id the client sent, so a conversation never changes model midway
+        (see :mod:`horizon.proxy.model_modernize`).
+        """
+        modernizer = getattr(self, "model_modernizer", None)
+        if modernizer is None or not modernizer.enabled or bypass:
+            return model
+        if getattr(self, "anthropic_backend", None) is not None:
+            return model
+        from horizon.proxy.output_savings_policy import conversation_key_from_body
+
+        decision = modernizer.apply(body, conversation_key_from_body(body))
+        if not decision.changed:
+            return model
+        body_mutation_tracker.mark_mutated("model_modernize")
+        logger.info(f"[{request_id}] model modernize: {decision.reason}")
+        return decision.served
+
     def _maybe_route_model(
         self,
         model: str,
@@ -1174,9 +1203,23 @@ class AnthropicHandlerMixin:
             # comes from a provider URL (for example Vertex rawPredict), where
             # rewriting body["model"] would not change the upstream model.
             if model_override is None:
+                model = self._maybe_modernize_model(
+                    model, body, body_mutation_tracker, _bypass, request_id
+                )
                 model = self._maybe_route_model(
                     model, messages, body, body_mutation_tracker, _bypass
                 )
+
+            # Fast-mode governor (opt-in, HORIZON_FAST_MODE_POLICY): drop the
+            # 2x fast-mode premium where nobody is waiting. The decision is
+            # fixed per client launch, so it never flips speed mid-session.
+            if not _bypass:
+                from horizon.proxy.fast_mode_policy import govern as _govern_fast_mode
+
+                _fast_reason = _govern_fast_mode(body, request.headers)
+                if _fast_reason:
+                    body_mutation_tracker.mark_mutated("fast_mode_policy")
+                    logger.info(f"[{request_id}] {_fast_reason}")
 
             # NOTE: Upstream temporarily disabled broad image compression due to
             # token-counting inaccuracies. We only compress the latest non-frozen

@@ -213,8 +213,31 @@ def test_five_minute_lane_pings_inside_the_window() -> None:
     assert _run(keeper.tick()) == 1
 
 
-@pytest.mark.parametrize(("ttl", "step", "expected"), [("1h", 3400, 9), (None, 270, 5)])
-def test_pings_stop_when_they_cost_more_than_they_can_save(ttl, step, expected) -> None:
+def _rates_at(read_multiplier: float):
+    base = 4e-6
+    return lambda model: {
+        "read": base * read_multiplier,
+        "w5m": base * 1.25,
+        "w1h": base * 2,
+        "input": base,
+        "basis": "catalog",
+    }
+
+
+@pytest.mark.parametrize(
+    ("ttl", "step", "read_multiplier", "expected"),
+    [
+        ("1h", 3400, 0.1, 9),
+        (None, 270, 0.1, 5),
+        # 0.05x reads (Opus / Sonnet 5.5): a ping costs half, so twice as many pay.
+        ("1h", 3400, 0.05, 19),
+        (None, 270, 0.05, 12),
+    ],
+)
+def test_pings_stop_when_they_cost_more_than_they_can_save(
+    ttl, step, read_multiplier, expected, monkeypatch
+) -> None:
+    monkeypatch.setattr("horizon.proxy.cache_keeper._rates", _rates_at(read_multiplier))
     clock, up = _Clock(), _Upstream()
     keeper = _keeper(
         up, clock, max_idle_seconds=10**6
@@ -224,6 +247,16 @@ def test_pings_stop_when_they_cost_more_than_they_can_save(ttl, step, expected) 
         clock.t += step
         _run(keeper.tick())
     assert len(up.sent) == expected
+
+
+def test_an_unpriced_model_uses_the_structural_ratio(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "horizon.proxy.cache_keeper._rates",
+        lambda model: {"read": 0.0, "w5m": 0.0, "w1h": 0.0, "input": 0.0, "basis": "fallback"},
+    )
+    keeper = _keeper(_Upstream(), _Clock())
+    assert keeper.max_pings(TTL_1H, "mystery-model") == 9
+    assert keeper.max_pings(TTL_5M, "mystery-model") == 5
 
 
 def test_idle_cap_stops_pinging() -> None:

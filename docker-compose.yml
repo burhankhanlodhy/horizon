@@ -39,6 +39,12 @@ services:
       - CONTEXTSHRINK_API_URL=${CONTEXTSHRINK_API_URL:-http://127.0.0.1:8788}
       # Cache keep-alive (horizon/proxy/cache_keeper.py): off unless .env sets 1.
       - HORIZON_CACHE_KEEPALIVE=${HORIZON_CACHE_KEEPALIVE:-0}
+      # Cost policies (wiki/plans/2026-10-08-cost-savings-research.md), all off by default:
+      # superseded model ids -> cheaper successors; fast-mode premium on headless runs;
+      # OpenAI Flex tier on headless API-key traffic.
+      - HORIZON_MODEL_MODERNIZE=${HORIZON_MODEL_MODERNIZE:-0}
+      - HORIZON_FAST_MODE_POLICY=${HORIZON_FAST_MODE_POLICY:-allow}
+      - HORIZON_OPENAI_FLEX_POLICY=${HORIZON_OPENAI_FLEX_POLICY:-off}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
     volumes:
       - horizon_workspace:/home/nonroot/.horizon

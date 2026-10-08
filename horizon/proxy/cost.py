@@ -133,12 +133,6 @@ _CACHE_ECONOMICS = {
 }
 
 
-#: Context size at which the major catalogs publish a second, higher price
-#: tier (LiteLLM spells it ``*_above_200k_tokens``). A request's billed prompt
-#: is compared against this to pick which rate applies.
-_LONG_CONTEXT_THRESHOLD_TOKENS = 200_000
-
-
 def _bucket_by_cache_mix(
     tokens: int,
     *,
@@ -1084,7 +1078,11 @@ class CostTracker:
         write_5m_eff = 0 if cache_inferred else max(0, cache_write_5m_tokens)
         write_1h_eff = 0 if cache_inferred else max(0, cache_write_1h_tokens)
         billed_prompt = max(0, cache_read_tokens) + write_eff + max(0, uncached_tokens)
-        long_context = max(billed_prompt, tokens_sent) > _LONG_CONTEXT_THRESHOLD_TOKENS
+        from horizon.pricing.counterfactual import is_long_context_for
+
+        # Per-model tier: Haiku 5.5 changes price above 100k, GPT-6.x above
+        # 272k, Opus / Sonnet 4.6+ never.
+        long_context = is_long_context_for(model, max(billed_prompt, tokens_sent))
         if tokens_saved > 0:
             # Message compression works the LIVE ZONE only: handlers freeze the
             # cached prefix (system + prior turns) byte-for-byte for prefix-cache
@@ -1373,7 +1371,10 @@ class CostTracker:
             info = litellm.model_cost.get(resolved, {})
             base = info.get("output_cost_per_token")
             if long_context:
-                return info.get("output_cost_per_token_above_200k_tokens") or base or None
+                from horizon.pricing.counterfactual import long_context_suffix
+
+                suffix = long_context_suffix(model)
+                return info.get(f"output_cost_per_token{suffix}") or base or None
             return base or None
         except Exception:
             return None

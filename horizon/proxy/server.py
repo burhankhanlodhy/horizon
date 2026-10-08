@@ -895,6 +895,17 @@ class HorizonProxy(
         # Cost-aware model routing (issue #1706). Disabled unless configured, so
         # the default request path is unchanged.
         self.model_router = ModelRouter(config.model_router)
+        # Superseded model ids -> cheaper successors (opt-in,
+        # HORIZON_MODEL_MODERNIZE). Fixed per model id, so never mid-session.
+        from horizon.proxy.model_modernize import ModelModernizer, ModernizeConfig
+        from horizon.proxy.routing_stats import (
+            has_routing_stats_provider,
+            set_routing_stats_provider,
+        )
+
+        self.model_modernizer = ModelModernizer(ModernizeConfig.from_env())
+        if self.model_modernizer.enabled and not has_routing_stats_provider():
+            set_routing_stats_provider(self.model_modernizer.stats)
 
         # Initialize transforms based on routing mode.
         #
@@ -2493,7 +2504,8 @@ class HorizonProxy(
         construct their body from scratch, so canonical serialization is
         correct and original bytes do not exist).
         """
-        from horizon.proxy.body_forwarding import select_outbound_body
+        from horizon.proxy.body_forwarding import select_outbound_body, serialize_body_canonical
+        from horizon.proxy.flex_policy import fallback_body
         from horizon.proxy.helpers import log_outbound_request
 
         last_error = None
@@ -2534,6 +2546,16 @@ class HorizonProxy(
                     response = await self.http_client.post(  # type: ignore[union-attr]
                         url, **post_kwargs
                     )
+
+                    # A Flex tier Horizon added ran out of capacity: retry once,
+                    # immediately, at the standard tier (flex_policy).
+                    flex_retry = fallback_body(body, response.status_code)
+                    if flex_retry is not None:
+                        body = flex_retry
+                        post_kwargs["content"] = serialize_body_canonical(body)
+                        response = await self.http_client.post(  # type: ignore[union-attr]
+                            url, **post_kwargs
+                        )
 
                     # Transient overloads (429 rate-limit, 529 overloaded):
                     # retry honoring Retry-After, but return verbatim once

@@ -6256,6 +6256,19 @@ class OpenAIHandlerMixin:
             except Exception:
                 pass
 
+        # OpenAI Flex tier (opt-in, HORIZON_OPENAI_FLEX_POLICY): Batch-rate
+        # pricing on API-key traffic nobody is waiting on. Last body change
+        # before forwarding; the forwarders retry once at the standard tier
+        # on a Flex 429 (horizon.proxy.flex_policy.fallback_body).
+        if not _bypass:
+            from horizon.proxy.flex_policy import MUTATION_REASON as _FLEX_REASON
+            from horizon.proxy.flex_policy import apply_flex
+
+            if apply_flex(body, url=url, headers=request.headers, chatgpt_auth=is_chatgpt_auth):
+                body_mutation_tracker.mark_mutated(_FLEX_REASON)
+                transforms_applied.append("service_tier:flex")
+                logger.info(f"[{request_id}] OpenAI Flex tier applied")
+
         # CCR: a stream:true request whose tool list carries horizon_retrieve
         # can't be intercepted mid-SSE-stream without full event-level
         # splicing (#1877 proposals B/C, out of scope here). Instead, force
