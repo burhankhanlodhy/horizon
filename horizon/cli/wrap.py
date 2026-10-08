@@ -5362,6 +5362,10 @@ def claude(
         except Exception as e:
             click.echo(f"  Warning: memory sync failed: {e}")
 
+    # Set once Claude Code is tagged for keep-alive; ended in `finally`, so a
+    # crash or Ctrl+C stops the pings too, not only a normal exit.
+    proxy_url: str | None = None
+    _keepalive_id: str | None = None
     try:
         click.echo()
         click.echo("  ╔═══════════════════════════════════════════════╗")
@@ -5638,7 +5642,6 @@ def claude(
                 )
 
         result = subprocess.run([claude_bin, *claude_args], env=env)
-        _end_keepalive(proxy_url, _keepalive_id)
         raise SystemExit(result.returncode)
 
     except SystemExit:
@@ -5647,6 +5650,7 @@ def claude(
         click.echo(f"  Error: {e}")
         raise SystemExit(1) from e
     finally:
+        _end_keepalive(proxy_url, _keepalive_id)
         if _saved_tool_search[0] is not _tool_search_not_written:
             _restore_claude_wrap_tool_search(
                 cast(str | None, _saved_tool_search[0]),

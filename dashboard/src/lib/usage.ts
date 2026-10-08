@@ -8,6 +8,11 @@ interface LedgerTotals {
   savings_usd: number;
   tokens_before: number;
   tokens_after: number;
+  /** Cache keep-alive: pings sent, what they cost, and the rewrites they avoided. */
+  keepalive_pings?: number;
+  keepalive_spend_usd?: number;
+  keepalive_resumes?: number;
+  keepalive_avoided_usd?: number;
 }
 interface UsageResponse {
   days: number;
@@ -112,6 +117,10 @@ const mapped = (r?: LedgerTotals) => ({
   savingsUsd: Number(r?.savings_usd ?? 0),
   tokensBefore: Number(r?.tokens_before ?? 0),
   tokensAfter: Number(r?.tokens_after ?? 0),
+  keepalivePings: Number(r?.keepalive_pings ?? 0),
+  keepaliveSpendUsd: Number(r?.keepalive_spend_usd ?? 0),
+  keepaliveResumes: Number(r?.keepalive_resumes ?? 0),
+  keepaliveAvoidedUsd: Number(r?.keepalive_avoided_usd ?? 0),
 });
 export const pct = (current: number, previous: number) =>
   previous > 0 ? ((current - previous) / previous) * 100 : undefined;

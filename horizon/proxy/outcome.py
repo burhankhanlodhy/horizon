@@ -647,22 +647,28 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     # tags and never move tok_before/after; aggregate them into Metrics so the
     # session summary / cost summary / all-layers total can surface the layer.
     tool_search_saved = tool_schema_saved_from_tags(outcome.tags or {})
-    await record_account_outcome(
-        outcome,
-        saved=novel_tokens_saved,
-        tool_saved=tool_search_saved,
-        retained=retained_tokens_saved,
-        project=project,
-    )
+    # Before the account row: a request that resumes a session the keep-alive
+    # held warm carries the rewrite it avoided in its own savings.
+    keepalive_usd = 0.0
     keeper = getattr(handler, "cache_keeper", None)
     if keeper is not None and outcome.provider == "anthropic" and outcome.status_code < 400:
-        keeper.record_usage(
+        resume = keeper.record_usage(
             outcome.request_id,
             model=outcome.model,
             cache_read=outcome.cache_read_tokens,
             cache_write=outcome.cache_write_tokens,
             uncached=outcome.uncached_input_tokens,
         )
+        if resume is not None:
+            keepalive_usd = float(resume.get("avoided_usd") or 0.0)
+    await record_account_outcome(
+        outcome,
+        saved=novel_tokens_saved,
+        tool_saved=tool_search_saved,
+        retained=retained_tokens_saved,
+        keepalive_usd=keepalive_usd,
+        project=project,
+    )
     savings_breakdown = from_tags(outcome.tags)
 
     # Stage timings contributed from OUTSIDE the handler, folded in here rather

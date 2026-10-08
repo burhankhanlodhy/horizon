@@ -125,6 +125,19 @@
   for `/internal/*`, `/docs`, raw `/stats`, global transformation feeds,
   admin/settings and provider response retrieval endpoints. Other provider
   surfaces must receive an explicit identity/isolation review before exposure.
+- Cache keep-alive (proxy `HORIZON_CACHE_KEEPALIVE=1`, off by default): only
+  sessions that send `X-Horizon-Keepalive-Id` (`wrap claude` and the desktop
+  app do) on an account whose plan still allows savings are kept warm. The
+  session group is that id hashed with the verified account UUID. Each ping is
+  its own `metrics.proxy_events` row (`kind: "keepalive"`, its cost as
+  `cost_usd` and as negative `savings_usd`), so pings for sessions nobody
+  resumes still count against savings. A request that resumes a kept-warm
+  session adds the avoided rewrite to its `savings_usd` (`keepalive_usd`).
+  Request counts and latency averages exclude ping rows. When the tool exits,
+  `wrap` posts `/v1/horizon/keepalive/end` through the forwarder; the gateway
+  allows that one path, the account middleware requires the account key, and
+  the proxy ends only that account's session with that id. Ping rows need an
+  API that knows `kind`; deploy the API before turning keep-alive on.
 - Revocation immediately blocks new requests/connections and the next incoming
   WebSocket turn (revalidated before forwarding). An inference operation already
   sent upstream can finish.

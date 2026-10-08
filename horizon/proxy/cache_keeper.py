@@ -13,19 +13,24 @@ cache"). So while a session is idle this re-sends its last forwarded request as
 a pre-warm shortly before the entry would expire. It never changes what the
 user's own requests contain.
 
-Which request: per group (the liveness id ``wrap`` attaches, else a hash of the
-credential), the most recent request that carried tools and a context of at
-least ``min_context`` tokens. At idle that is the agent's main conversation, not
-a finished subagent or a title/side call. How long: while the expected saving
-stays positive. A rewrite costs ``write - read`` per token and each ping
-``read``, so with a ``return_odds`` chance the user resumes, pinging pays for
+Which request: per group, the most recent completed request that carried tools,
+cache markers and a context of at least ``min_context`` tokens. At idle that is
+the agent's main conversation, not a title or side call. A group is the
+liveness id ``wrap`` attaches (scoped to the verified account on a hosted
+proxy, where a request without one is never kept warm), else, on a local proxy,
+a hash of the provider credential. How long: while the expected saving stays
+positive. A rewrite costs ``write - read`` per token and each ping ``read``, so
+with a ``return_odds`` chance the user resumes, pinging pays for
 ``return_odds * (write - read) / read`` pings: about 9 on the 1-hour lane
-(~8 hours) and 5 on the 5-minute lane (~20 minutes). A ping that misses (it had
-to write the prefix) stops the group: the cache was already gone.
+(~8 hours) and 5 on the 5-minute lane (~20 minutes). A ping that misses (had to
+write, or read nothing) stops the group: the cache was already gone. So does a
+window the scheduler missed: a late ping would only pay to rebuild it.
 
-Measurement: a request that resumes a group after a gap longer than the entry's
-lifetime, and still reads the cache, records the rewrite it avoided net of the
-pings spent. Credentials stay in memory only and are dropped with the group.
+Measurement: every ping is billed to its owner as it happens (``reporter``),
+whether or not the user ever returns, so abandoned sessions count against the
+feature. A request that resumes a group after a gap longer than the entry's
+lifetime, and still reads the cache, records the rewrite it avoided. Credentials
+stay in memory only and are dropped when a group stops or ends.
 """
 
 from __future__ import annotations
@@ -48,24 +53,31 @@ TTL_5M, TTL_1H = 300, 3600
 # Ping this long before the entry would expire: early enough to absorb a slow
 # ping, late enough not to spend pings an active session makes unnecessary.
 MARGINS = {TTL_5M: 45, TTL_1H: 300}
+# Too close to expiry to be sure the ping lands first: treat the window as missed.
+LATE = 5
 WRITE_MULTIPLIER = {TTL_5M: 1.25, TTL_1H: 2.0}
 READ_MULTIPLIER = 0.1
 LIVENESS_HEADER = "x-horizon-keepalive-id"
 
 # (status, usage) for one pre-warm request; usage is the response's usage block.
 Sender = Callable[[str, dict[str, str], dict[str, Any]], Awaitable[tuple[int, dict[str, Any]]]]
+# (owner, ping record): bills one ping to the account that owns the session.
+Reporter = Callable[[Any, dict[str, Any]], Awaitable[None]]
 
 
-def ttl_of(body: dict[str, Any]) -> int:
-    """Lifetime of the entries this body writes: 1 hour if any marker asks for it."""
-    found = False
+def ttl_of(body: dict[str, Any]) -> int | None:
+    """Lifetime of the shortest cache entry this body writes; ``None`` if it writes none.
+
+    The shortest entry is the one that expires first: with 1-hour tools and
+    5-minute messages, the conversation itself lives five minutes.
+    """
+    ttls: list[int] = []
 
     def visit(node: Any) -> None:
-        nonlocal found
         if isinstance(node, dict):
             cc = node.get("cache_control")
-            if isinstance(cc, dict) and cc.get("ttl") == "1h":
-                found = True
+            if isinstance(cc, dict) and cc.get("type", "ephemeral") == "ephemeral":
+                ttls.append(TTL_1H if cc.get("ttl") == "1h" else TTL_5M)
             for value in node.values():
                 if isinstance(value, (dict, list)):
                     visit(value)
@@ -73,8 +85,16 @@ def ttl_of(body: dict[str, Any]) -> int:
             for value in node:
                 visit(value)
 
-    visit([body.get("tools"), body.get("system"), body.get("messages")])
-    return TTL_1H if found else TTL_5M
+    # Top-level ``cache_control`` is automatic caching: it marks the last block.
+    visit(
+        [
+            {"cache_control": body.get("cache_control")},
+            body.get("tools"),
+            body.get("system"),
+            body.get("messages"),
+        ]
+    )
+    return min(ttls) if ttls else None
 
 
 def prewarm_body(body: dict[str, Any]) -> dict[str, Any] | None:
@@ -100,29 +120,51 @@ def prewarm_body(body: dict[str, Any]) -> dict[str, Any] | None:
     return warm
 
 
-def group_of(headers: dict[str, str], liveness_id: str | None = None) -> str:
-    """Liveness id when ``wrap`` sent one, else a one-way hash of the credential."""
+def group_of(
+    headers: dict[str, str], liveness_id: str | None = None, owner_id: str | None = None
+) -> str:
+    """Owner-scoped liveness id when ``wrap`` sent one, else a one-way hash of the credential.
+
+    Hashing the owner in means two accounts that send the same id never share a
+    group, and an end request can only reach its own account's sessions.
+    """
     if liveness_id:
-        return f"live:{liveness_id[:100]}"
+        scoped = f"{owner_id or ''}\0{liveness_id[:200]}"
+        return "live:" + hashlib.sha256(scoped.encode("utf-8", "ignore")).hexdigest()[:24]
     lowered = {k.lower(): v for k, v in headers.items()}
     credential = lowered.get("x-api-key") or lowered.get("authorization") or ""
     return "cred:" + hashlib.sha256(credential.encode("utf-8", "ignore")).hexdigest()[:24]
 
 
 @dataclass
+class _Pending:
+    group: str
+    url: str
+    headers: dict[str, str]
+    body: dict[str, Any]
+    started: float
+    owner: Any
+    meta: dict[str, Any]
+
+
+@dataclass
 class _Group:
     key: str
+    owner: Any = None  # who pays for the pings (the verified account), if anyone
+    meta: dict[str, Any] = field(default_factory=dict)  # project / agent for attribution
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
-    body: dict[str, Any] = field(default_factory=dict)
+    body: dict[str, Any] = field(default_factory=dict)  # emptied once the group stops pinging
     model: str = ""
     ttl: int = TTL_5M
     context_tokens: int = 0
     last_request_at: float = 0.0  # start of the last real request (monotonic)
     last_touch_at: float = 0.0  # start of the last request or ping that read the cache
+    generation: int = 0  # bumped whenever a newer request becomes the target
     pings: int = 0
-    ping_read_tokens: int = 0
-    stopped: bool = False
+    ping_cost_usd: float = 0.0
+    inflight: bool = False
+    stopped: bool = False  # the cache is gone (or unknown): never credit a resume
     # Not credited on resume: what the group's first request already found warm,
     # or at least the tool definitions, which other sessions on the account
     # (same tools, any project) commonly keep warm. A resume would read those anyway.
@@ -138,24 +180,32 @@ class CacheKeeper:
         sender: Sender,
         *,
         clock: Callable[[], float] = time.monotonic,
+        reporter: Reporter | None = None,
         min_context: int = 20_000,
         return_odds: float = 0.5,
         max_idle_seconds: float = 8 * 3600,
         max_groups: int = 256,
+        max_context_tokens: int = 25_000_000,
+        concurrency: int = 8,
+        ping_timeout: float = 60.0,
         ledger_path: Path | None = None,
     ) -> None:
         self._send = sender
         self._clock = clock
+        self._reporter = reporter
         self.min_context = min_context
         self.return_odds = return_odds
         self.max_idle_seconds = max_idle_seconds
         self._max_groups = max_groups
+        # Bounds the request bodies held for pinging (~4 bytes a token).
+        self._max_context_tokens = max_context_tokens
+        self._ping_timeout = ping_timeout
+        self._concurrency = concurrency
         self._groups: OrderedDict[str, _Group] = OrderedDict()
-        self._pending: OrderedDict[str, tuple[str, str, dict[str, str], dict[str, Any], float]] = (
-            OrderedDict()
-        )
+        self._pending: OrderedDict[str, _Pending] = OrderedDict()
+        self._ended: OrderedDict[str, None] = OrderedDict()
         self._ledger_path = ledger_path
-        self._ended: set[str] = set()
+        self._tasks: set[asyncio.Task] = set()
 
     # -- real traffic -------------------------------------------------------
 
@@ -167,19 +217,32 @@ class CacheKeeper:
         headers: dict[str, str],
         body: dict[str, Any],
         liveness_id: str | None = None,
+        owner: Any = None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         """Remember a forwarded request until its usage says whether it is worth keeping.
 
         ``headers`` are the ones sent upstream (the proxy strips its own
         ``x-horizon-*`` headers first), so the caller passes the liveness id
-        from the client's request separately.
+        from the client's request separately. ``owner`` is the verified account
+        on a hosted proxy (anything with ``user_id``): its sessions are kept
+        warm only when the client sent a liveness id, which is also what lets
+        the client end them, and never once its plan has paused savings.
         """
         if not body.get("tools") or body.get("max_tokens") == 0:
             return  # side calls (titles, quick questions) and our own pings
-        group = group_of(headers, liveness_id)
+        if ttl_of(body) is None:
+            return  # nothing cached, nothing to keep warm
+        if owner is not None and (
+            not liveness_id or getattr(owner, "compression_allowed", True) is False
+        ):
+            return
+        group = group_of(headers, liveness_id, getattr(owner, "user_id", None))
         if group in self._ended:
             return
-        self._pending[request_id] = (group, url, dict(headers), body, self._clock())
+        self._pending[request_id] = _Pending(
+            group, url, dict(headers), body, self._clock(), owner, dict(meta or {})
+        )
         while len(self._pending) > 64:
             self._pending.popitem(last=False)
 
@@ -187,39 +250,73 @@ class CacheKeeper:
         self, request_id: str, *, model: str, cache_read: int, cache_write: int, uncached: int
     ) -> dict[str, Any] | None:
         """Adopt a completed request as its group's warm target; report a kept-warm resume."""
-        pending = self._pending.pop(request_id, None)
-        if pending is None:
+        p = self._pending.pop(request_id, None)
+        if p is None or p.group in self._ended:
             return None
-        group_key, url, headers, body, started = pending
         context = cache_read + cache_write + uncached
         if context < self.min_context:
             return None
-        g = self._groups.get(group_key)
+        g = self._groups.get(p.group)
+        if g is not None and p.started < g.last_request_at:
+            return None  # finished after a newer request: that one is the target
         event = None
         if g is not None and g.pings and not g.stopped:
-            idle = started - g.last_request_at
+            idle = p.started - g.last_request_at
             if idle > g.ttl and cache_read >= 0.5 * context:
                 event = self._resume_event(g, idle, cache_read)
         if g is None:
-            g = _Group(key=group_key, baseline_read=cache_read)
-            self._groups[group_key] = g
-        g.url, g.headers, g.body, g.model = url, headers, copy.deepcopy(body), model
-        g.ttl = ttl_of(body)
-        g.tools_tokens = len(json.dumps(body.get("tools") or [])) // 4
+            g = _Group(key=p.group, baseline_read=cache_read)
+            self._groups[p.group] = g
+        g.owner, g.meta = p.owner, p.meta
+        g.url, g.headers, g.body, g.model = p.url, p.headers, copy.deepcopy(p.body), model
+        g.ttl = ttl_of(p.body) or TTL_5M
+        g.tools_tokens = len(json.dumps(p.body.get("tools") or [])) // 4
         g.context_tokens = context
-        g.last_request_at = g.last_touch_at = started
-        g.pings = g.ping_read_tokens = 0
+        g.last_request_at = g.last_touch_at = p.started
+        g.generation += 1
+        g.pings, g.ping_cost_usd = 0, 0.0
         g.stopped = False
-        self._groups.move_to_end(group_key)
-        while len(self._groups) > self._max_groups:
-            self._groups.popitem(last=False)
+        self._groups.move_to_end(p.group)
+        self._enforce_limits()
         return event
 
-    def end(self, liveness_id: str) -> bool:
-        """The wrapped tool exited: stop keeping its session warm."""
-        key = f"live:{liveness_id[:100]}"
-        self._ended.add(key)
-        return self._groups.pop(key, None) is not None
+    def end(self, liveness_id: str, owner_id: str | None = None) -> bool:
+        """The wrapped tool exited: stop keeping its session warm, for good."""
+        key = group_of({}, liveness_id, owner_id)
+        self._ended[key] = None
+        while len(self._ended) > 4096:
+            self._ended.popitem(last=False)
+        for request_id in [r for r, p in self._pending.items() if p.group == key]:
+            del self._pending[request_id]
+        g = self._groups.pop(key, None)
+        if g is not None:
+            self._log({"event": "cache_keeper_end", "group": key[:16], "pings": g.pings})
+        return g is not None
+
+    def _enforce_limits(self) -> None:
+        while len(self._groups) > self._max_groups:
+            self._groups.popitem(last=False)
+        held = sum(g.context_tokens for g in self._groups.values() if g.body)
+        for g in list(self._groups.values()):  # oldest first
+            if held <= self._max_context_tokens:
+                break
+            if g.body:
+                held -= g.context_tokens
+                self._release(g, "memory")
+
+    def _release(self, g: _Group, reason: str) -> None:
+        """Stop pinging ``g`` and drop its request and credentials; keep its accounting."""
+        if not g.body:
+            return
+        g.body, g.headers = {}, {}
+        self._log(
+            {
+                "event": "cache_keeper_release",
+                "group": g.key[:16],
+                "reason": reason,
+                "pings": g.pings,
+            }
+        )
 
     # -- pinging --------------------------------------------------------------
 
@@ -229,73 +326,122 @@ class CacheKeeper:
     def due(self) -> list[_Group]:
         now = self._clock()
         out = []
-        for g in self._groups.values():
-            if g.stopped or not g.body:
+        for g in list(self._groups.values()):
+            if g.stopped or not g.body or g.inflight:
                 continue
-            if now - g.last_request_at > self.max_idle_seconds or g.pings >= self.max_pings(g.ttl):
-                continue
-            if now >= g.last_touch_at + g.ttl - MARGINS[g.ttl]:
+            if now - g.last_request_at > self.max_idle_seconds:
+                self._release(g, "idle")
+            elif g.pings >= self.max_pings(g.ttl):
+                self._release(g, "budget")
+            elif now >= g.last_touch_at + g.ttl - LATE:
+                g.stopped = True  # the scheduler fell behind; a ping now would rebuild
+                self._release(g, "missed")
+            elif now >= g.last_touch_at + g.ttl - MARGINS[g.ttl]:
                 out.append(g)
         return out
 
     async def tick(self) -> int:
-        """Send every due pre-warm; returns how many were sent."""
-        sent = 0
-        for g in self.due():
+        """Send every due pre-warm, a few at a time; returns how many were sent."""
+        due = self.due()
+        for g in due:
+            g.inflight = True
+        slots = asyncio.Semaphore(self._concurrency)
+        results = await asyncio.gather(*(self._ping(g, slots) for g in due))
+        return sum(results)
+
+    async def run(self, interval: float = 15.0) -> None:
+        """Tick forever. Each tick runs as its own task, so one slow ping never
+        holds up another session's deadline (in-flight groups are skipped)."""
+        try:
+            while True:
+                task = asyncio.create_task(self._safe_tick())
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+                await asyncio.sleep(interval)
+        finally:
+            for task in list(self._tasks):
+                task.cancel()
+
+    async def _safe_tick(self) -> None:
+        try:
+            await self.tick()
+        except Exception:  # pragma: no cover - the loop must survive anything
+            logger.exception("event=cache_keeper_tick_failed")
+
+    async def _ping(self, g: _Group, slots: asyncio.Semaphore) -> int:
+        """One pre-warm for ``g``; bills it whatever happens and stops the group on a miss."""
+        try:
             body = prewarm_body(g.body)
             if body is None:
                 g.stopped = True
-                continue
+                self._release(g, "unsupported")
+                return 0
+            generation, owner, meta, model, ttl = g.generation, g.owner, g.meta, g.model, g.ttl
+            rates = _rates(model)
             started = self._clock()
+            status, usage, estimated = 0, {}, False
             try:
-                status, usage = await self._send(g.url, g.headers, body)
-            except Exception as exc:  # network errors: try again next tick, never raise
+                async with slots:
+                    status, usage = await asyncio.wait_for(
+                        self._send(g.url, g.headers, body), self._ping_timeout
+                    )
+            except Exception as exc:  # timeout or network error: the outcome is unknown
                 logger.warning(
                     "event=cache_keeper_ping_error group=%s error=%s",
                     g.key[:16],
                     type(exc).__name__,
                 )
-                continue
-            sent += 1
+                # The provider may have billed it: book a full read of the context.
+                usage = {"cache_read_input_tokens": g.context_tokens}
+                estimated = True
             read = int(usage.get("cache_read_input_tokens") or 0)
             write = int(usage.get("cache_creation_input_tokens") or 0)
-            if status != 200 or write > max(read, 1):
-                # Rejected, or the cache was already gone and this ping rebuilt it.
-                g.stopped = True
-                self._log(
-                    {
-                        "event": "cache_keeper_stop",
-                        "group": g.key[:16],
-                        "status": status,
-                        "read": read,
-                        "write": write,
-                        "pings": g.pings,
-                    }
-                )
-                continue
-            g.pings += 1
-            g.ping_read_tokens += read
-            g.last_touch_at = started
-            self._log(
-                {
-                    "event": "cache_keeper_ping",
-                    "group": g.key[:16],
-                    "model": g.model,
-                    "ttl": g.ttl,
-                    "read": read,
-                    "ping": g.pings,
-                    "idle_s": round(started - g.last_request_at),
-                }
-            )
-        return sent
+            uncached = int(usage.get("input_tokens") or 0)
+            write_rate = rates["w1h"] if ttl == TTL_1H else rates["w5m"]
+            cost = read * rates["read"] + write * write_rate + uncached * rates["input"]
+            if status and status != 200:
+                cost = 0.0  # rejected requests are not billed
+            current = self._groups.get(g.key) is g and g.generation == generation
+            missed = estimated or status != 200 or write > 0 or read == 0
+            record = {
+                "event": "cache_keeper_stop" if missed else "cache_keeper_ping",
+                "group": g.key[:16],
+                "model": model,
+                "ttl": ttl,
+                "status": status,
+                "read": read,
+                "write": write,
+                "uncached": uncached,
+                "cost_usd": round(cost, 6),
+                "estimated": estimated,
+                "pricing_basis": rates["basis"],
+                "latency_ms": round((self._clock() - started) * 1000, 1),
+                "idle_s": round(started - g.last_request_at),
+                "superseded": not current,
+                "meta": meta,
+            }
+            if current:
+                if missed:
+                    g.stopped = True
+                    self._release(g, "miss")
+                else:
+                    g.pings += 1
+                    g.ping_cost_usd += cost
+                    g.last_touch_at = started
+                record["ping"] = g.pings
+            self._log({k: v for k, v in record.items() if k != "meta"})
+            await self._report(owner, record)
+            return 1
+        finally:
+            g.inflight = False
 
-    async def run(self, interval: float = 15.0) -> None:
-        while True:
-            try:
-                await self.tick()
-            except Exception:  # pragma: no cover - the loop must survive anything
-                logger.exception("event=cache_keeper_tick_failed")
-            await asyncio.sleep(interval)
+    async def _report(self, owner: Any, record: dict[str, Any]) -> None:
+        if self._reporter is None or owner is None:
+            return
+        try:
+            await self._reporter(owner, record)
+        except Exception as exc:  # billing must never break the keeper
+            logger.warning("event=cache_keeper_report_failed error=%s", type(exc).__name__)
 
     # -- accounting -----------------------------------------------------------
 
@@ -306,7 +452,7 @@ class CacheKeeper:
             0, cache_read - max(g.baseline_read, g.tools_tokens)
         )  # only what would have expired
         avoided = kept * (write_rate - rates["read"])
-        spent = g.ping_read_tokens * rates["read"]
+        spent = g.ping_cost_usd
         event = {
             "event": "cache_keeper_resume",
             "group": g.key[:16],
@@ -319,6 +465,7 @@ class CacheKeeper:
             "avoided_usd": round(avoided, 6),
             "ping_cost_usd": round(spent, 6),
             "net_usd": round(avoided - spent, 6),
+            "pricing_basis": rates["basis"],
         }
         self._log(event)
         return event
@@ -334,18 +481,30 @@ class CacheKeeper:
                 pass
 
 
-def _rates(model: str) -> dict[str, float]:
-    """Per-token read / 5-minute write / 1-hour write rates for ``model``."""
+def _rates(model: str) -> dict[str, Any]:
+    """Per-token read / 5-minute write / 1-hour write / uncached rates for ``model``."""
     try:
         from horizon.pricing.counterfactual import resolve_rates
 
         r = resolve_rates(model, long_context=False, provider="anthropic")
         if r is not None:
-            return {"read": r.read, "w5m": r.write_5m, "w1h": r.write_1h}
+            return {
+                "read": r.read,
+                "w5m": r.write_5m,
+                "w1h": r.write_1h,
+                "input": r.uncached,
+                "basis": r.basis,
+            }
     except Exception:  # pragma: no cover - pricing must never break the keeper
         pass
-    base = 3e-6
-    return {"read": base * READ_MULTIPLIER, "w5m": base * 1.25, "w1h": base * 2}
+    base = 3e-6  # unknown model: a mid-range list price, labelled as such
+    return {
+        "read": base * READ_MULTIPLIER,
+        "w5m": base * 1.25,
+        "w1h": base * 2,
+        "input": base,
+        "basis": "fallback",
+    }
 
 
 # -- 1-hour lane ---------------------------------------------------------------

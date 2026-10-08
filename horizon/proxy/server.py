@@ -1984,11 +1984,14 @@ class HorizonProxy(
         """Keep idle sessions' prompt caches warm (HORIZON_CACHE_KEEPALIVE=1). Off by default."""
         if os.environ.get("HORIZON_CACHE_KEEPALIVE", "").strip().lower() not in ("1", "true", "yes", "on"):
             return None
+        from horizon.proxy.account_analytics import record_keepalive_ping
         from horizon.proxy.cache_keeper import CacheKeeper
 
         workspace = os.environ.get("HORIZON_WORKSPACE_DIR")
         keeper = CacheKeeper(
             self._cache_keeper_send,
+            # Hosted proxy: each ping is billed to the account that owns the session.
+            reporter=record_keepalive_ping,
             max_idle_seconds=float(os.environ.get("HORIZON_CACHE_KEEPALIVE_MAX_IDLE_S", 8 * 3600)),
             min_context=int(os.environ.get("HORIZON_CACHE_KEEPALIVE_MIN_CONTEXT", 20_000)),
             ledger_path=Path(workspace) / "cache_keeper.jsonl" if workspace else None,
@@ -2005,7 +2008,7 @@ class HorizonProxy(
         out["accept"] = "application/json"
         out["content-type"] = "application/json"
         response = await self.http_client.post(
-            url, headers=out, content=json.dumps(body).encode("utf-8"), timeout=120.0
+            url, headers=out, content=json.dumps(body).encode("utf-8"), timeout=55.0
         )
         try:
             usage = (response.json() or {}).get("usage") or {}
@@ -5694,17 +5697,33 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             ),
         )
 
-    @app.post("/v1/horizon/keepalive/end", dependencies=[Depends(_require_loopback)])
+    def _require_keepalive_owner(request: Request) -> None:
+        """Hosted proxy: the account middleware verified the caller's key. Local: loopback."""
+        from horizon.proxy.account_analytics import account_id
+
+        if account_analytics.enabled:
+            if account_id() is None:
+                raise HTTPException(status_code=404)
+            return
+        _require_loopback(request)
+
+    @app.post("/v1/horizon/keepalive/end", dependencies=[Depends(_require_keepalive_owner)])
     async def cache_keeper_end(request: Request):
-        """``wrap`` reports that its tool exited: stop keeping that session's cache warm."""
+        """``wrap`` reports that its tool exited: stop keeping that session's cache warm.
+
+        On a hosted proxy the id is scoped to the verified account, so a caller
+        can end only its own sessions.
+        """
+        from horizon.proxy.account_analytics import account_id
+
         try:
             payload = await request.json()
         except ValueError:
             payload = {}
-        liveness_id = str((payload or {}).get("id") or "")
+        liveness_id = str((payload or {}).get("id") or "") if isinstance(payload, dict) else ""
         if not liveness_id or proxy.cache_keeper is None:
             return {"ended": False}
-        return {"ended": proxy.cache_keeper.end(liveness_id)}
+        return {"ended": proxy.cache_keeper.end(liveness_id[:200], account_id())}
 
     # CCR Tool Call Handler - for agent frameworks to call when LLM uses horizon_retrieve
     @app.post("/v1/retrieve/tool_call", dependencies=[Depends(_require_loopback)])

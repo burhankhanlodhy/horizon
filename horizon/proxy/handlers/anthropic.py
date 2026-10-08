@@ -3964,14 +3964,20 @@ class AnthropicHandlerMixin:
                 # The exact request about to be sent: what the cache keeper
                 # re-sends as a pre-warm if this session then goes idle.
                 if getattr(self, "cache_keeper", None) is not None:
+                    from horizon.proxy.account_analytics import _account
                     from horizon.proxy.cache_keeper import LIVENESS_HEADER
+                    from horizon.proxy.project_context import get_current_project
 
+                    # On a hosted proxy the verified account owns the session
+                    # (its pings are billed to it, and only it can end them).
                     self.cache_keeper.record_request(
                         request_id,
                         url=url,
                         headers=dict(headers),
                         body=body,
                         liveness_id=request.headers.get(LIVENESS_HEADER),
+                        owner=_account.get(),
+                        meta={"project": get_current_project(), "agent": client},
                     )
 
                 if stream and not buffered_stream_ccr:

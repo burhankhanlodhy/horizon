@@ -69,6 +69,9 @@ INFERENCE = re.compile(
 AUXILIARY = re.compile(
     r"^(?:/p/[^/]+)?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"
 )
+# Session lifecycle: ``wrap`` reports its tool exited (cache keep-alive). The
+# route ends only sessions owned by the verified account.
+LIFECYCLE = re.compile(r"^/v1/horizon/keepalive/end/?$")
 
 
 class AccountAnalytics:
@@ -182,7 +185,9 @@ class AccountAnalytics:
             return 503, None
 
 
-async def record_account_outcome(outcome, *, saved=0, tool_saved=0, retained=0, project=None):
+async def record_account_outcome(
+    outcome, *, saved=0, tool_saved=0, retained=0, keepalive_usd=0.0, project=None
+):
     context = _account.get()
     if context is None or outcome.request_id in context.emitted:
         return
@@ -255,12 +260,59 @@ async def record_account_outcome(outcome, *, saved=0, tool_saved=0, retained=0, 
         "latency_ms": max(0, outcome.total_latency_ms),
         "overhead_ms": max(0, outcome.overhead_ms),
         "ttfb_ms": max(0, outcome.ttfb_ms),
+        # ``keepalive_usd``: the cache rewrite this request avoided because the
+        # keep-alive held its session warm. The pings that paid for it are
+        # their own rows (``record_keepalive_ping``), so this is the gross figure.
         "savings_usd": prices.get("compression", 0)
         + prices.get("tool_schema", 0)
-        + prices.get("retained", 0),
+        + prices.get("retained", 0)
+        + (keepalive_usd if success else 0),
         "cost_usd": cost,
         "pricing_basis": prices.get("basis", "unavailable"),
         "transforms": [str(t)[:150] for t in outcome.transforms_applied][:100],
+    }
+    if success and keepalive_usd > 0:
+        # Only when present: an ordinary row keeps the shape older APIs accept.
+        event["keepalive_usd"] = keepalive_usd
+    await asyncio.to_thread(context.service._enqueue, event)
+
+
+async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
+    """Bill one cache keep-alive ping to the account that owns the session.
+
+    A ping is real spend whether or not the user comes back, so it lands as its
+    own ledger row with negative savings. The rewrite a resumed session avoids
+    is credited on that request (``keepalive_usd``); summed, the account sees
+    the feature's net effect, abandoned sessions included.
+    """
+    meta = record.get("meta") or {}
+    request_id = "keepalive_" + uuid4().hex
+    cost = max(0.0, float(record.get("cost_usd") or 0))
+    read, write, uncached = (int(record.get(k) or 0) for k in ("read", "write", "uncached"))
+    status = int(record.get("status") or 0)
+    event = {
+        "event_id": str(uuid5(UUID(context.service.runtime_id), context.key_id + ":" + request_id)),
+        "user_id": context.user_id,
+        "key_id": context.key_id,
+        "runtime_id": context.service.runtime_id,
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "request_id": request_id,
+        "provider": "anthropic",
+        "model": str(record.get("model") or "unknown")[:200],
+        "project": str(meta["project"])[:100] if meta.get("project") else None,
+        "agent": str(meta["agent"])[:100] if meta.get("agent") else None,
+        # A ping whose outcome never arrived (timeout) is booked as a full read.
+        "status": status if 100 <= status <= 599 else 504,
+        "tokens_in": read + write + uncached,
+        "cache_read": read,
+        "cache_write": write,
+        "latency_ms": max(0.0, float(record.get("latency_ms") or 0)),
+        "savings_usd": -cost,
+        "cost_usd": cost,
+        "pricing_basis": str(record.get("pricing_basis") or "unavailable")[:100]
+        + (":estimated" if record.get("estimated") else ""),
+        "transforms": ["cache_keepalive:ping"],
+        "kind": "keepalive",
     }
     await asyncio.to_thread(context.service._enqueue, event)
 
@@ -276,7 +328,8 @@ class AccountMiddleware:
         path = scope["path"]
         is_inference = bool(INFERENCE.fullmatch(path))
         is_auxiliary = bool(AUXILIARY.fullmatch(path))
-        if not is_inference and not is_auxiliary:
+        is_lifecycle = bool(LIFECYCLE.fullmatch(path))
+        if not is_inference and not is_auxiliary and not is_lifecycle:
             # Only operator/UI paths remain accessible to the inner loopback guards.
             # Deny any unmatched provider/catch-all request in account mode.
             if (
@@ -301,7 +354,7 @@ class AccountMiddleware:
                 return await self.app(scope, receive, send)
             return await self._deny(scope, send, 404, "Unsupported account proxy endpoint")
         if (scope["type"] == "websocket" and not path.rstrip("/").endswith("responses")) or (
-            scope["type"] == "http" and is_inference and scope["method"] != "POST"
+            scope["type"] == "http" and (is_inference or is_lifecycle) and scope["method"] != "POST"
         ):
             return await self._deny(scope, send, 405, "Method not allowed")
         headers = {

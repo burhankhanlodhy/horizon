@@ -60,10 +60,16 @@ class EventIn(BaseModel):
     latency_ms: float = Field(default=0, ge=0)
     overhead_ms: float = Field(default=0, ge=0)
     ttfb_ms: float = Field(default=0, ge=0)
+    # Net of keep-alive pings: a ping row carries its own cost as negative savings.
     savings_usd: float = 0
     cost_usd: float = Field(default=0, ge=0)
-    pricing_basis: str = Field(default="unavailable", max_length=100)
+    pricing_basis: str = Field(default="unavailable", max_length=120)
     transforms: list[str] = Field(default_factory=list, max_length=100)
+    # "keepalive": a cache keep-alive ping the proxy sent for the account, not
+    # a request the user made. ``keepalive_usd``: on a request, the cache
+    # rewrite it avoided because a ping kept its session warm (in savings_usd).
+    kind: Literal["request", "keepalive"] = "request"
+    keepalive_usd: float = Field(default=0, ge=0)
 
 
 class BatchIn(BaseModel):
@@ -135,12 +141,16 @@ async def compression_entitlement(user_id) -> dict:
     }
 
 
-# No untrusted string enters these SQL expressions.
-TOTALS = """
- count(*)::bigint AS requests,
- count(*) FILTER (WHERE status < 400)::bigint AS completed,
- count(*) FILTER (WHERE status >= 400 AND status <> 429)::bigint AS failed,
- count(*) FILTER (WHERE status = 429)::bigint AS rate_limited,
+# Rows the user's own tools sent; keep-alive pings count in tokens, cost and
+# (negative) savings, never as requests. No untrusted string enters these SQL
+# expressions.
+REQUEST = "data->>'kind' IS DISTINCT FROM 'keepalive'"
+KEEPALIVE = "data->>'kind' = 'keepalive'"
+TOTALS = f"""
+ count(*) FILTER (WHERE {REQUEST})::bigint AS requests,
+ count(*) FILTER (WHERE {REQUEST} AND status < 400)::bigint AS completed,
+ count(*) FILTER (WHERE {REQUEST} AND status >= 400 AND status <> 429)::bigint AS failed,
+ count(*) FILTER (WHERE {REQUEST} AND status = 429)::bigint AS rate_limited,
  COALESCE(sum((data->>'tokens_in')::bigint),0)::bigint AS tokens_in,
  COALESCE(sum((data->>'tokens_out')::bigint),0)::bigint AS tokens_out,
  COALESCE(sum((data->>'tokens_saved')::bigint),0)::bigint AS tokens_saved,
@@ -150,9 +160,15 @@ TOTALS = """
  COALESCE(sum((data->>'cache_write')::bigint),0)::bigint AS cache_write,
  COALESCE(sum((data->>'savings_usd')::double precision),0) AS savings_usd,
  COALESCE(sum((data->>'cost_usd')::double precision),0) AS cost_usd,
- COALESCE(avg((data->>'latency_ms')::double precision),0) AS latency_ms,
- COALESCE(avg((data->>'overhead_ms')::double precision),0) AS overhead_ms,
- count(*) FILTER (WHERE (data->>'response_cached')::boolean)::bigint AS response_cached
+ COALESCE(avg((data->>'latency_ms')::double precision) FILTER (WHERE {REQUEST}),0) AS latency_ms,
+ COALESCE(avg((data->>'overhead_ms')::double precision) FILTER (WHERE {REQUEST}),0) AS overhead_ms,
+ count(*) FILTER (WHERE (data->>'response_cached')::boolean)::bigint AS response_cached,
+ count(*) FILTER (WHERE {KEEPALIVE})::bigint AS keepalive_pings,
+ COALESCE(sum((data->>'cost_usd')::double precision) FILTER (WHERE {KEEPALIVE}),0)
+   AS keepalive_spend_usd,
+ count(*) FILTER (WHERE (data->>'keepalive_usd')::double precision > 0)::bigint
+   AS keepalive_resumes,
+ COALESCE(sum((data->>'keepalive_usd')::double precision),0) AS keepalive_avoided_usd
 """
 
 
@@ -199,7 +215,7 @@ async def basic_usage(user, days):
         )
         models = await conn.fetch(
             f"SELECT model AS name,count(*)::bigint AS requests FROM metrics.proxy_events "
-            f"WHERE {current} GROUP BY 1 ORDER BY requests DESC,name",
+            f"WHERE {current} AND {REQUEST} GROUP BY 1 ORDER BY requests DESC,name",
             *args,
         )
         providers = await conn.fetch(
@@ -248,7 +264,8 @@ def install(app, current_user):
         rows = await db._conn().fetch(
             """
             SELECT k.id,k.name,k.prefix,k.scopes,k.created_at,k.last_used_at,k.revoked_at,
-                   (SELECT count(*) FROM metrics.proxy_events e WHERE e.key_id=k.id AND e.user_id=$1) AS requests
+                   (SELECT count(*) FROM metrics.proxy_events e WHERE e.key_id=k.id AND e.user_id=$1
+                    AND e.data->>'kind' IS DISTINCT FROM 'keepalive') AS requests
             FROM core.api_keys k WHERE k.user_id=$1 ORDER BY k.created_at DESC
         """,
             user["user_id"],

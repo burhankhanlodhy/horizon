@@ -92,6 +92,30 @@ function FunnelBar({
   );
 }
 
+function Figure({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+}) {
+  return (
+    <div className="rounded-lg border border-ink/10 bg-ink/5 px-4 py-3">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-3">
+        {label}
+      </div>
+      <div className="mt-1 font-display text-2xl font-semibold text-ink">
+        {value}
+      </div>
+      <div className="mt-0.5 text-xs text-ink-3">{sub}</div>
+    </div>
+  );
+}
+
+const signedUsd = (n: number) => (n < 0 ? `−${fmtUsd(-n)}` : fmtUsd(n));
+
 export default function Usage() {
   const [range, setRange] = useState<(typeof RANGES)[number]>(14);
   const { series, t, previous, pieData, sessions, error, loaded, loading } =
@@ -334,6 +358,33 @@ export default function Usage() {
           />
         </div>
       </Card>
+
+      {/* cache keep-alive: shown once the proxy has pinged for this account */}
+      {t.keepalivePings > 0 && (
+        <Card className="p-6">
+          <SectionHeader
+            eyebrow="Keep-alive"
+            title="Cache kept warm through pauses"
+          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Figure
+              label="Rewrites avoided"
+              value={fmtUsd(t.keepaliveAvoidedUsd)}
+              sub={`${fmtCompact(t.keepaliveResumes)} sessions resumed warm`}
+            />
+            <Figure
+              label="Spent on pings"
+              value={fmtUsd(t.keepaliveSpendUsd)}
+              sub={`${fmtCompact(t.keepalivePings)} pings, including sessions never resumed`}
+            />
+            <Figure
+              label="Net"
+              value={signedUsd(t.keepaliveAvoidedUsd - t.keepaliveSpendUsd)}
+              sub="Already included in Est. savings"
+            />
+          </div>
+        </Card>
+      )}
 
       {/* sessions table */}
       <Card className="overflow-hidden">

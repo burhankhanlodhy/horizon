@@ -64,6 +64,23 @@ differed), which caching does not cause.
 - Savings scale with context: these sessions held ~92k tokens on Sonnet. The
   same pause on a 500k-token Opus session saves about $4 per avoided rewrite for
   a $0.10 ping (feature-research Round 3).
-- Hosted proxy: the end call is loopback-only, so on the Pi it needs a route
-  through the gateway and account auth; until then the idle cap and the price
-  budget bound wasted pings.
+- Hosted proxy: covered since, below.
+
+## Hosted proxy and review follow-up (2026-10-08)
+
+Codex's review ([REVIEW.md](REVIEW.md)) found nine issues. What changed:
+
+| Finding | Change |
+|---|---|
+| F1 ping spend incomplete | Every ping is priced from its full usage (read, write, uncached) at the model's own rates. Any write, a read of zero, a non-200 or a timeout stops the group. A timeout is billed as a full read of the context, labelled estimated. |
+| F2 groups not tenant-scoped | A group is the liveness id hashed with the verified account UUID. On a hosted proxy a request without a liveness id is never kept warm, and neither is an account whose plan has paused savings. |
+| F3 ended sessions revived | `end` drops the session's in-flight requests, and a completion for an ended group is ignored. |
+| F4 races | A completion older than the current target is ignored. A ping that returns after a newer request replaced its target is billed but changes nothing. |
+| F5 hosted lifecycle | `POST /v1/horizon/keepalive/end` is allowed by the Pi 5 gateway, needs the account key at the account middleware, and ends only that account's session. `wrap` calls it from `finally`, so Ctrl+C and crashes end the session too. A killed `wrap` still relies on the idle cap and the ping budget; no heartbeat lease, because a laptop that sleeps would then lose exactly the pauses keep-alive is for. |
+| F6 mixed TTLs, late pings | The lane is the shortest marker's TTL, top-level automatic caching counts, and a body with no markers is skipped. A group whose window was missed is stopped instead of paying to rebuild. |
+| F7 abandoned sessions | Each ping is its own account ledger row with negative savings; a resumed request carries the avoided rewrite. The dashboard total is therefore net, abandoned sessions included. |
+| F8 operations | Each tick runs as its own task with a concurrency cap and a 60 s ping timeout, so a slow ping never delays another session. Idle, budget-spent and stopped groups drop their request and credentials. Held bodies are capped at 25M tokens (oldest released first) and end tombstones at 4,096. The Pi runs one proxy worker. |
+| F9 prices | Rates come from the catalog per model. An unknown model falls back to $3/M and the row says `fallback`. The 0.5 return odds stay a fixed assumption until the hosted ledger has enough resumes and abandons to calibrate it. |
+
+Dashboard: the Usage page shows rewrites avoided, ping spend and net once an
+account has pings; Advanced Analytics has a "Cache kept warm (net)" card.
