@@ -906,6 +906,13 @@ class HorizonProxy(
         self.model_modernizer = ModelModernizer(ModernizeConfig.from_env())
         if self.model_modernizer.enabled and not has_routing_stats_provider():
             set_routing_stats_provider(self.model_modernizer.stats)
+        # Client-caused cache misses, priced per cause (opt-in telemetry).
+        self.cache_miss_watch = None
+        _miss_watch_flag = os.environ.get("HORIZON_CACHE_MISS_WATCH", "").strip().lower()
+        if _miss_watch_flag in ("1", "true", "yes", "on"):
+            from horizon.proxy.cache_miss_watch import CacheMissWatch
+
+            self.cache_miss_watch = CacheMissWatch()
 
         # Initialize transforms based on routing mode.
         #
@@ -4755,6 +4762,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             "summary": summary,
             "agent_usage": agent_usage,
             "routing": get_routing_stats(),
+            "cache_misses": (
+                proxy.cache_miss_watch.stats()
+                if getattr(proxy, "cache_miss_watch", None) is not None
+                else None
+            ),
             "savings": {
                 "total_tokens": total_tokens_all_layers,
                 "per_project": persistent_savings.get("projects", {}),

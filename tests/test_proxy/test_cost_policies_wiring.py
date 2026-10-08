@@ -76,3 +76,38 @@ def test_fast_mode_kept_for_interactive_launch(monkeypatch) -> None:
     monkeypatch.setenv("HORIZON_FAST_MODE_POLICY", "headless")
     forwarded = _send(headers={"x-horizon-interactive": "1"}, model="claude-opus-5-5", speed="fast")
     assert forwarded["speed"] == "fast"
+
+
+def test_cache_miss_watch_reports_an_effort_change_in_stats(monkeypatch) -> None:
+    monkeypatch.setenv("HORIZON_CACHE_MISS_WATCH", "1")
+    first = {
+        "model": "claude-opus-5-5",
+        "max_tokens": 16,
+        "output_config": {"effort": "xhigh"},
+        "messages": [{"role": "user", "content": "fix the bug " * 50}],
+    }
+    second = {
+        **first,
+        "output_config": {"effort": "low"},
+        "messages": first["messages"]
+        + [
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "go on"},
+        ],
+    }
+    app = create_app(_config())
+    with TestClient(app) as client:
+        _install_fake_client(client.app.state.proxy)
+        assert client.post(MESSAGES, json=first).status_code == 200
+        assert client.post(MESSAGES, json=second).status_code == 200
+        stats = client.get("/stats").json()
+    misses = stats["cache_misses"]
+    assert misses["predicted_misses"] == 1
+    assert set(misses["by_cause"]) == {"effort"}
+
+
+def test_cache_miss_watch_off_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("HORIZON_CACHE_MISS_WATCH", raising=False)
+    app = create_app(_config())
+    with TestClient(app) as client:
+        assert client.app.state.proxy.cache_miss_watch is None

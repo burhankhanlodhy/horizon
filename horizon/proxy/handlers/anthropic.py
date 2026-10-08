@@ -1807,6 +1807,24 @@ class AnthropicHandlerMixin:
                     from horizon.proxy.helpers import COMPRESSION_TIMEOUT_SECONDS
 
                     context_limit = self.anthropic_provider.get_context_limit(model)
+                    # Price-cliff guard (opt-in, HORIZON_PRICE_CLIFF_GUARD): near a
+                    # model's whole-request price tier (Haiku 5.5 at 100k), run
+                    # this request's compression with tighter knobs.
+                    from horizon.proxy import price_cliff as _price_cliff
+
+                    _pipeline_kwargs = proxy_pipeline_kwargs(self.config)
+                    _cliff_overhead = estimate_input_tokens(
+                        None, body.get("tools"), body.get("system")
+                    )
+                    _cliff = _price_cliff.guard(
+                        model, original_tokens + _cliff_overhead, _pipeline_kwargs
+                    )
+                    if _cliff is not None:
+                        _pipeline_kwargs = _cliff.kwargs
+                        logger.info(
+                            f"[{request_id}] price cliff guard: ~{_cliff.projected_tokens} "
+                            f"tokens near the {_cliff.threshold} tier of {model}"
+                        )
                     result = None
                     biases = (
                         self.config.hooks.compute_biases(messages, _hook_ctx)
@@ -1895,7 +1913,7 @@ class AnthropicHandlerMixin:
                                     request_id=request_id,
                                     compression_policy=compression_policy,
                                     cache_ttl_seconds=_cc_ttl,
-                                    **proxy_pipeline_kwargs(self.config),
+                                    **_pipeline_kwargs,
                                 ),
                                 lambda bg_result: comp_cache.update_from_result(
                                     messages, bg_result.messages
@@ -1943,7 +1961,7 @@ class AnthropicHandlerMixin:
                                             compression_policy=compression_policy,
                                             cache_ttl_seconds=_cc_ttl,
                                             skip_kompress=True,
-                                            **proxy_pipeline_kwargs(self.config),
+                                            **_pipeline_kwargs,
                                         ),
                                         timeout=COLD_START_FAST_PASS_TIMEOUT_SECONDS,
                                     )
@@ -1995,7 +2013,7 @@ class AnthropicHandlerMixin:
                                         request_id=request_id,
                                         compression_policy=compression_policy,
                                         cache_ttl_seconds=_cc_ttl,
-                                        **proxy_pipeline_kwargs(self.config),
+                                        **_pipeline_kwargs,
                                     ),
                                     timeout=COMPRESSION_TIMEOUT_SECONDS,
                                 )
@@ -2039,7 +2057,7 @@ class AnthropicHandlerMixin:
                                     request_id=request_id,
                                     compression_policy=compression_policy,
                                     cache_ttl_seconds=_cc_ttl,
-                                    **proxy_pipeline_kwargs(self.config),
+                                    **_pipeline_kwargs,
                                 ),
                                 timeout=COMPRESSION_TIMEOUT_SECONDS,
                             )
@@ -2101,7 +2119,7 @@ class AnthropicHandlerMixin:
                                         protect=protect,
                                         request_id=request_id,
                                         compression_policy=compression_policy,
-                                        **proxy_pipeline_kwargs(self.config),
+                                        **_pipeline_kwargs,
                                     ),
                                     timeout=COMPRESSION_TIMEOUT_SECONDS,
                                 )
@@ -2175,7 +2193,7 @@ class AnthropicHandlerMixin:
                                         request_id=request_id,
                                         compression_policy=compression_policy,
                                         cache_ttl_seconds=_cc_ttl,
-                                        **proxy_pipeline_kwargs(self.config),
+                                        **_pipeline_kwargs,
                                     ),
                                     timeout=COMPRESSION_TIMEOUT_SECONDS,
                                 )
@@ -2214,6 +2232,12 @@ class AnthropicHandlerMixin:
 
                     if result and result.waste_signals:
                         waste_signals_dict = result.waste_signals.to_dict()
+                    if _cliff is not None:
+                        _cliff_outcome = _price_cliff.outcome(
+                            _cliff, optimized_tokens, _cliff_overhead
+                        )
+                        transforms_applied.append(f"{_cliff.label}:{_cliff_outcome}")
+                        logger.info(f"[{request_id}] price cliff guard: {_cliff_outcome}")
                 except Exception as e:
                     # Include type so TimeoutError vs other failures is distinguishable
                     # in bug reports — str(asyncio.TimeoutError()) is empty otherwise.
@@ -3449,6 +3473,21 @@ class AnthropicHandlerMixin:
                                 f"[{request_id}] OutputShaper(L{_level}/{_src}): "
                                 f"{shape_result.labels}"
                             )
+
+            # Predicted cache misses caused by the client (opt-in telemetry,
+            # HORIZON_CACHE_MISS_WATCH=1): compares this forwarded body with the
+            # session's previous one and prices any setting change that will
+            # make the provider re-write its cache. Never changes the request.
+            _miss_watch = getattr(self, "cache_miss_watch", None)
+            if _miss_watch is not None:
+                from horizon.proxy.cache_miss_watch import session_key as _miss_session_key
+
+                _miss = _miss_watch.observe(_miss_session_key(body, request.headers), body)
+                if _miss is not None:
+                    logger.info(
+                        f"[{request_id}] predicted cache miss ({'+'.join(_miss.causes)}): "
+                        f"~{_miss.tokens} tokens re-written, ~${_miss.usd:.4f}"
+                    )
 
             # Params stage: the last chance to change what the model WRITES.
             # Emitted here, after every message mutation and after the built-in

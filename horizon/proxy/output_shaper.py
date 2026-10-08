@@ -17,6 +17,18 @@ output tokens, so every lever here works by reshaping the request:
    asks we leave it alone. For legacy models still sending
    ``thinking.budget_tokens`` we clamp the budget to the API floor instead.
 
+   **Design rule — never change effort per turn.** Anthropic renders
+   ``output_config.effort`` (and the thinking configuration) into the prompt,
+   so changing it invalidates every cached message block. Lowering effort on
+   one mechanical turn saves about 500 thinking tokens ($0.01 on Opus 5.5)
+   but forces the whole conversation to be re-written: $0.38 at 80k context,
+   $0.72 at 150k, a 38-72x loss at 0.05x cache reads. Effort routing may
+   therefore change effort only (a) once, on a conversation's first request,
+   or (b) on a request that misses the cache anyway (idle past the TTL, a
+   model or tool change, a client compaction), which
+   :mod:`horizon.proxy.cache_miss_watch` detects. Effort routing is not
+   implemented yet; this rule binds whoever builds it.
+
 Safety rules (each prevents a concrete failure mode):
 - Never INJECT ``output_config.effort`` where the client didn't send it —
   models without effort support 400 on it. Lowering an existing value is
