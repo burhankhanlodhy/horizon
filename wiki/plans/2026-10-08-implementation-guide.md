@@ -343,6 +343,22 @@ prior use of turn-scoped messages for tool output (searches on 2026-10-08).
    system message. It may spend extra tokens noting what it needs; the
    simulation charges up to 300 per flash. Measure this.
 
+### Status (later on 2026-10-08)
+
+Implemented behind `HORIZON_FLASH_OBSERVATIONS=1`:
+- `horizon/transforms/flash_observations.py`;
+- wiring in the Anthropic handler;
+- a stub-aware frozen-prefix count in `PrefixCacheTracker`;
+- a persisted per-conversation flash horizon.
+
+Unit and handler tests pass, including append-only behaviour across turns in
+cache and token mode. A dry run of the live harness against a strict fake of
+the API passed with no rule violations and was 22% cheaper on a short session
+([experiments/flash-observations](../../experiments/flash-observations/README.md)).
+
+The live API run is ready (`live_test.py`). It has not run yet: this
+environment has no API key.
+
 ### Implementation plan in Horizon
 
 1. **`horizon/transforms/flash_observations.py`.** A pure function: given the

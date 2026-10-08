@@ -6,6 +6,7 @@ the body forwarded upstream.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from horizon.proxy.routing_stats import clear_routing_stats_provider, get_routing_stats
@@ -111,3 +112,88 @@ def test_cache_miss_watch_off_by_default(monkeypatch) -> None:
     app = create_app(_config())
     with TestClient(app) as client:
         assert client.app.state.proxy.cache_miss_watch is None
+
+
+# -- Flash Observations ---------------------------------------------------------
+
+_LOG = "\n".join(f"tests/test_io.py::test_{i} PASSED" for i in range(800))
+
+
+def _flash_turns(n: int) -> list[dict]:
+    messages: list[dict] = [{"role": "user", "content": "run the test suite and fix failures"}]
+    for t in range(n):
+        messages += [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": f"call{t}", "name": "Bash", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": f"call{t}", "content": _LOG + f"\n#{t}"}
+                ],
+            },
+        ]
+    return messages
+
+
+def _flash_app(monkeypatch, tmp_path, mode: str):
+    monkeypatch.setenv("HORIZON_FLASH_OBSERVATIONS", "1")
+    monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(tmp_path))
+    config = ProxyConfig(
+        optimize=True,
+        cache_enabled=False,
+        rate_limit_enabled=False,
+        cost_tracking_enabled=False,
+        ccr_inject_tool=False,
+        ccr_handle_responses=False,
+        ccr_context_tracking=False,
+        mode=mode,
+    )
+    return create_app(config)
+
+
+@pytest.mark.parametrize("mode", ["cache", "token"])
+def test_flash_observations_are_append_only_through_the_handler(
+    monkeypatch, tmp_path, mode
+) -> None:
+    app = _flash_app(monkeypatch, tmp_path, mode)
+    forwarded: list[dict] = []
+    headers: list[dict] = []
+    with TestClient(app) as client:
+        http = _install_fake_client(client.app.state.proxy)
+        for turns in (1, 2, 3):
+            body = {"model": "claude-opus-5-5", "max_tokens": 16, "messages": _flash_turns(turns)}
+            assert client.post(MESSAGES, json=body).status_code == 200
+            forwarded.append(_forwarded_body(http)["messages"])
+            headers.append(http.post.call_args.kwargs["headers"])
+    for msgs in forwarded:
+        last = msgs[-1]
+        assert last["role"] == "system" and last["clear_at"] == "next_user_message"
+        assert _LOG in last["content"][0]["text"]
+    # Cache markers move to the newest message every turn (as in Claude Code);
+    # they are not part of the cached content, so compare without them.
+    from horizon.proxy.cache_miss_watch import _strip_cache_control
+
+    stripped = [_strip_cache_control(m) for m in forwarded]
+    for earlier, later in zip(stripped, stripped[1:], strict=False):
+        assert later[: len(earlier)] == earlier, "an earlier turn changed on a later request"
+    for h in headers:
+        beta = next(v for k, v in h.items() if k.lower() == "anthropic-beta")
+        assert "mid-conversation-system-clear-at-2026-08-21" in beta
+
+
+def test_flash_observations_off_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("HORIZON_FLASH_OBSERVATIONS", raising=False)
+    forwarded = _send(model="claude-opus-5-5", messages=_flash_turns(1))
+    assert not any(m.get("role") == "system" for m in forwarded["messages"])
+
+
+def test_flash_observations_skip_unsupported_models(monkeypatch, tmp_path) -> None:
+    app = _flash_app(monkeypatch, tmp_path, "cache")
+    with TestClient(app) as client:
+        http = _install_fake_client(client.app.state.proxy)
+        body = {"model": "claude-sonnet-5", "max_tokens": 16, "messages": _flash_turns(1)}
+        assert client.post(MESSAGES, json=body).status_code == 200
+        forwarded = _forwarded_body(http)["messages"]
+    assert not any(m.get("role") == "system" for m in forwarded)

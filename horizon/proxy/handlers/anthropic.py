@@ -856,6 +856,75 @@ class AnthropicHandlerMixin:
             "content": copy.deepcopy(resp_json.get("content", "")),
         }
 
+    def _maybe_flash_observations(
+        self,
+        body: dict[str, Any],
+        model: str,
+        body_mutation_tracker: Any,
+        transforms_applied: list[str],
+        request_id: str = "",
+    ) -> tuple[bool, Any]:
+        """Apply Flash Observations.
+
+        Returns ``(needs_clear_at_beta, stubbed_view)``: the second maps the
+        proxy's message list to the stubbed form the provider caches (for the
+        prefix tracker), or is ``None``. Direct Claude API only (a backend or
+        gateway may not carry the beta), and only on models with
+        mid-conversation system messages.
+        """
+        from functools import partial
+
+        from horizon.transforms import flash_observations as flash
+
+        if not flash.flash_enabled() or getattr(self, "anthropic_backend", None) is not None:
+            return False, None
+        from horizon.proxy.helpers import (
+            _MID_CONVERSATION_SYSTEM_FAMILIES,
+            _model_in_families,
+        )
+
+        if not _model_in_families(str(model).lower(), _MID_CONVERSATION_SYSTEM_FAMILIES):
+            return False, None
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return False, None
+        horizons = getattr(self, "_flash_horizons", None)
+        if horizons is None:
+            from horizon.paths import workspace_dir
+
+            horizons = flash.FlashHorizons(workspace_dir() / "flash_horizons.json")
+            self._flash_horizons = horizons
+        horizon = horizons.horizon(messages)
+        policy = flash.flash_policy()
+        result = flash.apply_flash(messages, horizon=horizon, policy=policy)
+        if result.changed:
+            body["messages"] = result.messages
+            body_mutation_tracker.mark_mutated("flash_observations")
+            transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
+            try:
+                from horizon.cache.compression_store import get_compression_store
+
+                store = get_compression_store()
+                for key, original in result.keys:
+                    store.store(
+                        original,
+                        original,
+                        compression_strategy="flash_observations",
+                        explicit_hash=key,
+                    )
+            except Exception:
+                logger.debug("flash observations: CCR store failed", exc_info=True)
+            if result.flashed:
+                logger.info(
+                    f"[{request_id}] flash observations: {result.flashed} shown once, "
+                    f"{result.stubbed} stubbed, ~{result.chars_kept_out // 4} tokens kept "
+                    "out of the permanent context"
+                )
+        view = None
+        if result.changed:
+            view = partial(flash.stubbed_view, horizon=horizon, policy=policy)
+        return flash.has_flash(body["messages"]), view
+
     def _maybe_modernize_model(
         self,
         model: str,
@@ -3501,6 +3570,20 @@ class AnthropicHandlerMixin:
                 (time.perf_counter() - pre_upstream_started_at) * 1000.0,
             )
 
+            # Flash Observations (opt-in, HORIZON_FLASH_OBSERVATIONS=1): large
+            # outputs of allow-listed local tools are forwarded as a permanent
+            # stub plus the full text in a turn-scoped system message, shown for
+            # the turn that acts on it and then cleared at no input cost. Runs
+            # after every other message change (including cache-marker
+            # placement) so the turn-scoped message is last and unmarked.
+            _flash_beta_needed = False
+            if not _bypass and not upstream_base_url:
+                _flash_beta_needed, _flash_view = self._maybe_flash_observations(
+                    body, model, body_mutation_tracker, transforms_applied, request_id
+                )
+                if _flash_view is not None and prefix_tracker is not None:
+                    prefix_tracker.flash_view = _flash_view
+
             # Anthropic wire-contract guard (issue #765). Any transform or
             # pipeline extension above may have left a ``role="system"`` entry
             # in ``messages`` (e.g. a harness system block relocated during
@@ -3576,6 +3659,14 @@ class AnthropicHandlerMixin:
                 and not _horizon_beta_added
             ):
                 headers["anthropic-beta"] = _client_beta_value
+
+            if _flash_beta_needed:
+                # Every request that carries a turn-scoped message needs the beta,
+                # including after the client-owned headers were restored above.
+                from horizon.proxy.cache_keeper import add_beta
+                from horizon.transforms.flash_observations import FLASH_BETA
+
+                add_beta(headers, FLASH_BETA)
 
             # Forward request - use Bedrock backend if configured, otherwise direct API
             #

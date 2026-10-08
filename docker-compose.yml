@@ -46,6 +46,8 @@ services:
       - HORIZON_FAST_MODE_POLICY=${HORIZON_FAST_MODE_POLICY:-allow}
       - HORIZON_OPENAI_FLEX_POLICY=${HORIZON_OPENAI_FLEX_POLICY:-off}
       - HORIZON_PRICE_CLIFF_GUARD=${HORIZON_PRICE_CLIFF_GUARD:-0}
+      # Flash Observations (beta API feature): large local tool outputs shown for one turn.
+      - HORIZON_FLASH_OBSERVATIONS=${HORIZON_FLASH_OBSERVATIONS:-0}
       # Telemetry: client-caused prompt-cache misses priced per cause in /stats.
       - HORIZON_CACHE_MISS_WATCH=${HORIZON_CACHE_MISS_WATCH:-0}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
