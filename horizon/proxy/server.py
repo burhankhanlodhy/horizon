@@ -2541,6 +2541,10 @@ class HorizonProxy(
         )
 
         post_kwargs: dict = {"content": outbound_bytes, "headers": outbound_headers}
+        # Billed tokens per byte, for the account ledger (forwarded_size).
+        from horizon.proxy import forwarded_size
+
+        forwarded_size.note(outbound_bytes)
         if timeout is not None:
             post_kwargs["timeout"] = timeout
 
@@ -2562,6 +2566,7 @@ class HorizonProxy(
                     if flex_retry is not None:
                         body = flex_retry
                         post_kwargs["content"] = serialize_body_canonical(body)
+                        forwarded_size.note(post_kwargs["content"])
                         response = await self.http_client.post(  # type: ignore[union-attr]
                             url, **post_kwargs
                         )
@@ -2573,6 +2578,7 @@ class HorizonProxy(
                     if flash_retry is not None:
                         body = flash_retry
                         post_kwargs["content"] = serialize_body_canonical(body)
+                        forwarded_size.note(post_kwargs["content"])
                         response = await self.http_client.post(  # type: ignore[union-attr]
                             url, **post_kwargs
                         )

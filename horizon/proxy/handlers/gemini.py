@@ -347,6 +347,9 @@ class GeminiHandlerMixin:
             cleared = policy_savings.cleared_tokens(result.cleared, count_text)
             if cleared:
                 transforms_applied.append(policy_savings.flash_tag(cleared))
+                transforms_applied.append(
+                    policy_savings.flash_bytes_tag(policy_savings.cleared_bytes(result.cleared))
+                )
         if result.keys:
             try:
                 from horizon.cache.compression_store import get_compression_store

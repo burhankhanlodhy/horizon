@@ -277,9 +277,13 @@ def test_claude_flash_reaches_the_ledger_from_the_second_turn(monkeypatch, tmp_p
     from tests.test_proxy.test_cost_policies_wiring import MESSAGES, _flash_app
 
     seen: list[Any] = []
+    sizes: list[int] = []
 
     async def capture(outcome, **_kw):
+        from horizon.proxy import forwarded_size
+
         seen.append(outcome)
+        sizes.append(forwarded_size.get())
 
     monkeypatch.setattr("horizon.proxy.account_analytics.record_account_outcome", capture)
     app = _flash_app(monkeypatch, tmp_path, "cache")
@@ -294,6 +298,9 @@ def test_claude_flash_reaches_the_ledger_from_the_second_turn(monkeypatch, tmp_p
     # whether the router compressed the log decides turn 2; turn 3 always has an
     # uncompressed earlier output to credit.
     assert tokens[0] == 0 and tokens[1] <= tokens[2] and tokens[2] > 0
+    # The ledger sees the body size, and the stubs' bytes ride with their tokens.
+    assert all(size > 0 for size in sizes)
+    assert policy_savings.flash_bytes(seen[2].transforms_applied) > 0
     priced = policy_savings.price(seen[2]).usd["flash"]
     assert priced == pytest.approx(tokens[2] * OPUS_READ)
 
@@ -358,57 +365,118 @@ def test_an_inferred_cache_write_is_not_billed_on_top_of_fresh_input() -> None:
     assert _row(outcome(False))["cost_usd"] > 20_000 * 2.5e-6
 
 
-def test_flash_on_an_upstream_that_never_caches_prices_as_fresh_input() -> None:
-    """oneprovider's Gemini reports no cache reads at all: the counterfactual paid input."""
-    gemini = {
-        "provider": "openai",
-        "model": "gemini-3.1-pro",
-        "cache_read_tokens": 0,
-        "uncached_input_tokens": 40_000,
-    }
-    flashed = _o(**gemini, transforms_applied=("flash:1/2", "flash_saved:10000"))
-    # Not enough evidence yet: the cache-read floor.
-    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-7)
-    # Later turns of a conversation no stub edited, none reading the cache.
-    for _ in range(4):
-        policy_savings.price(_o(**gemini, conversation_key="chat-a"))
-    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-6)
+# -- calibration: billed tokens per byte, prefix hit rate ---------------------------
+
+GEMINI = {"provider": "gemini", "model": "gemini-3-flash-preview"}
+G_IN, G_READ = 5e-7, 5e-8  # gemini-3-flash-preview, from the catalog
+
+
+def _turn(conversation: str, prompt: int, read: int, **kw: Any) -> SimpleNamespace:
+    return _o(
+        **GEMINI,
+        cache_read_tokens=read,
+        uncached_input_tokens=prompt - read,
+        output_tokens=100,
+        conversation_key=conversation,
+        **kw,
+    )
+
+
+def test_flash_tokens_follow_the_providers_own_billing() -> None:
+    """Unflashed requests teach billed tokens per byte; flash bytes convert with it."""
+    for n in range(3):
+        # 0.48 billed tokens per body byte, as Gemini bills pytest logs.
+        policy_savings.price(_turn(f"c{n}", 48_000, 0), forwarded_bytes=100_000)
+    assert policy_savings.tokens_per_byte("gemini", "gemini-3-flash-preview") == pytest.approx(0.48)
+    flashed = _turn(
+        "x", 20_000, 0, transforms_applied=("flash:1/1", "flash_saved:8203", "flash_bytes:34000")
+    )
+    assert policy_savings.flash_billed_tokens(flashed) == 16_320
+    # No hit-rate evidence yet: the cache-read floor.
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(16_320 * G_READ)
+
+
+def test_before_calibration_the_handlers_count_is_used() -> None:
+    flashed = _turn(
+        "x", 20_000, 0, transforms_applied=("flash:1/1", "flash_saved:8203", "flash_bytes:34000")
+    )
+    assert policy_savings.flash_billed_tokens(flashed) == 8_203
+
+
+def test_claude_flash_bodies_never_calibrate_bytes() -> None:
+    """A Claude flash body carries cleared messages the provider does not bill."""
+    for n in range(4):
+        policy_savings.price(
+            _o(
+                provider="anthropic",
+                model="claude-opus-5-5",
+                cache_read_tokens=0,
+                uncached_input_tokens=20_000,
+                conversation_key=f"c{n}",
+                transforms_applied=("flash:1/2",),
+            ),
+            forwarded_bytes=400_000,
+        )
+    assert policy_savings.tokens_per_byte("anthropic", "claude-opus-5-5") is None
+
+
+def test_openai_and_gemini_flash_bodies_do_calibrate() -> None:
+    """Those forms bill the stubbed body as sent, so an all-flash session still calibrates."""
+    for n in range(3):
+        policy_savings.price(
+            _turn(f"c{n}", 24_000, 0, transforms_applied=(f"flash:1/{n + 1}",)),
+            forwarded_bytes=50_000,
+        )
+    assert policy_savings.tokens_per_byte("gemini", "gemini-3-flash-preview") == pytest.approx(0.48)
+
+
+def test_flash_is_priced_at_the_measured_prefix_hit_rate() -> None:
+    """Three quarters of the repeated prefix hit: removed tokens price the same way."""
+    policy_savings.price(_turn("chat", 10_000, 0))
+    for prompt in (20_000, 30_000, 40_000):
+        repeated = prompt - 10_000 + 100  # the previous prompt plus its reply
+        policy_savings.price(_turn("chat", prompt, int(repeated * 0.75)))
+    hit = policy_savings.prefix_hit_rate("gemini", "gemini-3-flash-preview")
+    assert hit == pytest.approx(0.75, abs=0.01)
+    flashed = _turn("x", 20_000, 0, transforms_applied=("flash:1/1", "flash_saved:10000"))
+    expected = 10_000 * (hit * G_READ + (1 - hit) * G_IN)
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(expected)
+
+
+def test_an_upstream_that_never_caches_prices_at_the_input_rate() -> None:
+    policy_savings.price(_turn("chat", 10_000, 0))
+    for prompt in (20_000, 30_000, 40_000):
+        policy_savings.price(_turn("chat", prompt, 0))
+    assert policy_savings.prefix_hit_rate("gemini", "gemini-3-flash-preview") == 0.0
+    flashed = _turn("x", 20_000, 0, transforms_applied=("flash:1/1", "flash_saved:10000"))
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * G_IN)
+
+
+def test_a_claude_miss_prices_as_the_cache_write_it_causes() -> None:
+    claude = {"provider": "anthropic", "model": "claude-opus-5-5"}
+    policy_savings.price(
+        _o(**claude, cache_read_tokens=0, uncached_input_tokens=10_000, conversation_key="cc")
+    )
+    for prompt in (20_000, 30_000, 40_000):
+        policy_savings.price(
+            _o(**claude, cache_read_tokens=0, uncached_input_tokens=prompt, conversation_key="cc")
+        )
+    flashed = _o(**claude, transforms_applied=("flash:0/1", "flash_saved:10000"))
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 5e-6)
 
 
 def test_misses_a_stub_caused_are_not_evidence() -> None:
     """Native Gemini, 2026-10-09: the flashed session never hit the cache because
     its stubs edited the history, while the same task unflashed did hit."""
-    model = {
-        "provider": "gemini",
-        "model": "gemini-3-flash-preview",
-        "cache_read_tokens": 0,
-        "uncached_input_tokens": 18_000,
-        "conversation_key": "conv-flashed",
-    }
     for k in range(1, 9):
-        policy_savings.price(_o(**model, transforms_applied=(f"flash:1/{k}", "flash_saved:8000")))
-    assert not policy_savings.upstream_never_caches("gemini", "gemini-3-flash-preview")
+        policy_savings.price(
+            _turn("flashed", 18_000 + k * 500, 0, transforms_applied=(f"flash:1/{k}",))
+        )
+    assert policy_savings.prefix_hit_rate("gemini", "gemini-3-flash-preview") is None
 
 
 def test_first_requests_of_new_conversations_are_not_evidence() -> None:
     """A conversation's first request misses on any provider: nothing was cached yet."""
     for n in range(6):
-        policy_savings.price(
-            _o(
-                provider="openai",
-                model="gpt-5.4",
-                cache_read_tokens=0,
-                uncached_input_tokens=30_000,
-                conversation_key=f"new-{n}",
-            )
-        )
-    assert not policy_savings.upstream_never_caches("openai", "gpt-5.4")
-
-
-def test_one_cache_read_keeps_the_floor_for_good() -> None:
-    model = {"provider": "openai", "model": "gpt-5.4", "uncached_input_tokens": 40_000}
-    for _ in range(5):
-        policy_savings.price(_o(**model, cache_read_tokens=0, conversation_key="c"))
-    policy_savings.price(_o(**model, cache_read_tokens=30_000))
-    flashed = _o(**model, cache_read_tokens=0, transforms_applied=("flash_saved:10000",))
-    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2.5e-7)
+        policy_savings.price(_turn(f"new-{n}", 30_000, 0))
+    assert policy_savings.prefix_hit_rate("gemini", "gemini-3-flash-preview") is None

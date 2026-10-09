@@ -930,6 +930,10 @@ class StreamingMixin:
             mutation_reasons=list(mutation_reasons or []),
         )
         outbound_bytes, outbound_source = outbound.content, outbound.source
+        # Billed tokens per byte, for the account ledger (forwarded_size).
+        from horizon.proxy import forwarded_size
+
+        forwarded_size.note(outbound_bytes)
         outbound_headers = {**headers, "content-type": "application/json"}
         log_outbound_request(
             forwarder="streaming",
@@ -1023,6 +1027,7 @@ class StreamingMixin:
                         await upstream_response.aclose()
                         body = _flex_retry
                         outbound_bytes = _serialize_body_canonical(body)
+                        forwarded_size.note(outbound_bytes)
                         _upstream_req = self.http_client.build_request(
                             "POST", url, content=outbound_bytes, headers=outbound_headers
                         )
@@ -1034,6 +1039,7 @@ class StreamingMixin:
                         await upstream_response.aclose()
                         body = _flash_retry
                         outbound_bytes = _serialize_body_canonical(body)
+                        forwarded_size.note(outbound_bytes)
                         _upstream_req = self.http_client.build_request(
                             "POST", url, content=outbound_bytes, headers=outbound_headers
                         )

@@ -929,6 +929,9 @@ class AnthropicHandlerMixin:
             _cleared = policy_savings.cleared_tokens(result.cleared, count_text)
             if _cleared:
                 transforms_applied.append(policy_savings.flash_tag(_cleared))
+                transforms_applied.append(
+                    policy_savings.flash_bytes_tag(policy_savings.cleared_bytes(result.cleared))
+                )
             try:
                 from horizon.cache.compression_store import get_compression_store
 
