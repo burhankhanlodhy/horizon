@@ -132,12 +132,22 @@ stock proxy. [Thinking guidance](https://platform.claude.com/docs/en/build-with-
 
 ## Pi 5 deployment and rollback
 
-Final audit: clean main checkout `/home/raspberrypi5/horizon` at
+Preflight audit: clean main checkout `/home/raspberrypi5/horizon` at
 `33ac18036cb5a1014b94169c49fcfb1f0683d52b`, but running version still
 `source-build+g38b966e160ab`. Image:
 `sha256:62ff60419ef15bb1fabe8c9b3ef2a0559eb099b191de560310466839e720b8a0`.
 Another main update arrived during validation; it was integrated into the
 feature branch without rebuilding or restarting production.
+
+During final verification, the running service advanced to
+`source-build+g33ac18036cb5`, image
+`sha256:0619b79c161b56f05ac22923196a2acfef84abbeb93e1391dee1e5ef05a766d9`,
+started at `2026-10-09T23:49:16.599079022Z`. The checkout still matches main
+`33ac180`, and all three health endpoints returned 200 healthy/ready. This
+validation task did not invoke that production rebuild/restart. The feature
+branch remains undeployed. The earlier pinned `38b966e` rollback image remains
+available; its secured backup records the preflight configuration, not this
+later deployment's container inspection.
 
 Docker Compose project `horizon`, service `horizon-proxy`, container
 `horizon-horizon-proxy-1`, host networking. `/livez`, `/readyz`, `/health` at
