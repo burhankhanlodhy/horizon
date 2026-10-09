@@ -233,6 +233,68 @@ The injection check (`--injection`) did not run: no credit was left.
 - **Before release:** a 3+ rep run of flash-proxy, a refusal count, and the
   injection check.
 
+## Remaining runs (2026-10-09)
+
+**Main run** (`--reps 3 --arms control-direct,flash-direct,flash-proxy`,
+reply-notes wording). Every session completed with a full score: each suite run
+once, no refusals.
+
+| Arm | $ per rep | Mean |
+|---|---|---|
+| control-direct | 0.655, 0.652, 0.655 | 0.654 |
+| flash-direct | 0.507, 0.507, 0.511 | **0.508 (−22%)** |
+| flash-proxy | 0.507, 0.505, 0.518 | **0.510 (−22%)** |
+
+**Injection check** (`--injection --reps 2`, same arms).
+- **Injection:** no session in any arm complied with the planted instruction.
+- **Refusals:** none.
+- **Cost:** control $0.656 / $0.655; flash-direct $0.509 / $0.505; flash-proxy
+  $0.514 / **$1.308**.
+- **The $1.308 session:** the model still called `horizon_retrieve` on earlier,
+  cleared logs (unit and api, then db, cli and io) on four turns, despite the
+  softer wording. Horizon's retrieval put each retrieved log back into the cached
+  prefix (96k written on one step).
+
+**Fix (5dbb578): stubs no longer offer retrieval.** They carry no hash and do
+not mention `horizon_retrieve`; originals are still stored. Evidence for
+dropping it:
+- flash-direct's stubs never offered it, and in 11 of its 12 sessions it never
+  needed it. The 12th ended in a refusal.
+- When offered in the proxy, it was taken heavily in 2 of 10 sessions, each at
+  about twice control.
+
+**Validation** (`--arms flash-proxy`, no retrieval offer). The credit ran out on
+the last step of rep 2, and the injection reps did not run.
+
+| Rep | Requests | $ | Score | Retrievals | Suites repeated |
+|---|---|---|---|---|---|
+| 0 | 7 | 0.506 | 1.00 | 0 | 0 |
+| 1 | 7 | 0.504 | 1.00 | 0 | 0 |
+| 2 | 6 of 7 (credit ran out) | — | — | 0 | 0 |
+
+Rep 1 uses the same logs as both heavy-retrieval sessions.
+
+## Where it stands (official API, Opus 5.5)
+
+| | Sessions | Mean $ | vs control | Score |
+|---|---|---|---|---|
+| control (direct + proxy) | 14 | 0.654 | — | 1.00 |
+| flash-direct | 11 complete + 1 refusal | ~0.51 | **−22%** | 1.00 on all complete |
+| flash-proxy, current design | 2 complete + 1 partial | 0.505 | **−23%** | 1.00 |
+| flash-proxy, with retrieval offer | 5 complete | 0.511 (3 sessions, main run) / 0.514 / 1.308 | — | 1.00 |
+
+- **Savings:** with nothing pulling outputs back into the prefix, Flash
+  Observations is consistently 22–23% cheaper on this 6-call task, with no loss
+  of accuracy. The cost model predicts more on longer sessions.
+- **Injection:** 0 of 6 sessions complied, 2 of them with flashes.
+- **Refusals:** 1 in 12 flash-direct sessions, 0 in all others. Small numbers;
+  keep counting.
+- **Before turning it on by default:** more flash-proxy sessions on the current
+  design, including the injection reps, which did not run.
+
+**Spend:** about $10.60 this round. All live runs together cost about $24 at
+list price, plus hidden CCR continuations in the retrieval sessions.
+
 ### What decides it
 
 1. **Zero 400s in the flash arms.** No `clear_at` placement error, no
