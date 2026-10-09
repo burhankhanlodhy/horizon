@@ -13,6 +13,11 @@ All notable changes to Horizon are documented here.
   price.
 - Chat Completions no longer counts flashed outputs as compression at the
   fresh-input price; they are credited as flash, priced as cache reads.
+- Chat Completions booked every earlier turn's compression again on every
+  turn, at the fresh-input price (five turns: 134,745 tokens booked for
+  44,915 removed). Its running total is now keyed per conversation, so each
+  removal is booked once and its repeats as retained savings, priced as the
+  cache reads they replace.
 
 ### Added
 - Usage and Advanced Analytics show the savings beyond compression per

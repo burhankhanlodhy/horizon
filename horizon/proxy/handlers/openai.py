@@ -4821,6 +4821,12 @@ class OpenAIHandlerMixin:
                 )
                 transforms_applied.append(f"turn_hook:tools:{_th_saved}tok")
 
+        # tokens_saved repeats every earlier turn's removals; under this key the
+        # outcome funnel books each once (conversation_savings.chat_savings_key).
+        from horizon.proxy.conversation_savings import chat_savings_key
+
+        _chat_savings_key = chat_savings_key(original_client_messages)
+
         # Compatibility shim: GPT-5 / o-series chat models REJECT the legacy
         # `max_tokens` ("Unsupported parameter … Use 'max_completion_tokens'
         # instead"); gpt-4o/4.1 accept `max_completion_tokens` too. openai-
@@ -5220,6 +5226,10 @@ class OpenAIHandlerMixin:
                             if getattr(self.config, "log_full_messages", False)
                             else None,
                             client=client,
+                            conversation_key=_chat_savings_key,
+                            conversation_tokens_saved=tokens_saved
+                            if _chat_savings_key
+                            else None,
                         )
                     )
 
@@ -5287,6 +5297,8 @@ class OpenAIHandlerMixin:
                     prefix_tracker=openai_prefix_tracker,
                     original_messages=original_client_messages,
                     outcome_provider=openai_chat_outcome_provider,
+                    conversation_key=_chat_savings_key,
+                    conversation_tokens_saved=tokens_saved if _chat_savings_key else None,
                 )
             else:
                 headers = await apply_copilot_api_auth(headers, url=url)
@@ -5695,6 +5707,8 @@ class OpenAIHandlerMixin:
                         if getattr(self.config, "log_full_messages", False)
                         else None,
                         client=client,
+                        conversation_key=_chat_savings_key,
+                        conversation_tokens_saved=tokens_saved if _chat_savings_key else None,
                     )
                 )
 

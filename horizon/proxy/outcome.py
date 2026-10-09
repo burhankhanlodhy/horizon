@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from horizon.proxy.conversation_savings import get_conversation_savings
+from horizon.proxy.conversation_savings import get_conversation_savings, is_chat_running_total
 from horizon.proxy.tool_schema_savings_policy import (
     headline_tokens_saved,
     tool_schema_saved_from_tags,
@@ -637,10 +637,12 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     retained_tokens_saved = outcome.retained_tokens_saved
     if retained_tokens_saved is None:
         retained_tokens_saved = ledger_retained
-    # Retained removals are priced only for Codex for now: other clients'
-    # repeated savings are already inside ``tokens_saved`` and need their own
-    # fix before a second term can be added without double counting.
-    if outcome.client != "codex":
+    # Retained removals are priced for Codex and for Chat Completions, whose
+    # handlers report a running total split above. Other clients' repeated
+    # savings are already inside ``tokens_saved`` and need their own fix
+    # before a second term can be added without double counting.
+    chat_total = is_chat_running_total(outcome.conversation_key) and split is not None
+    if outcome.client != "codex" and not chat_total:
         retained_tokens_saved = 0
 
     # Tool-schema savings (deferral + turn-hook tool shrink) live in per-request

@@ -47,6 +47,8 @@ from horizon.proxy.output_savings_policy import _unwrap_response_create_body
 __all__ = [
     "ConversationSavings",
     "ResponseChainSavings",
+    "chat_savings_key",
+    "is_chat_running_total",
     "get_conversation_savings",
     "get_response_chain_savings",
     "reset_conversation_savings",
@@ -91,8 +93,8 @@ def savings_conversation_key(body: Any, *, session_id: str | None = None) -> str
        the payload is this turn's increment, so ``tokens_saved`` is already
        per-request and must not be differenced.
 
-    Chat-completions bodies (no ``input``) return ``None``: their handlers
-    freeze the cached prefix, so their ``tokens_saved`` is novel-only already.
+    Chat-completions bodies (no ``input``) return ``None``; the Chat handler
+    keys its own running total with :func:`chat_savings_key`.
     """
     if not isinstance(body, dict):
         return None
@@ -131,6 +133,48 @@ def savings_conversation_key(body: Any, *, session_id: str | None = None) -> str
     if not identity:
         return None
     return hashlib.sha256(("savings\x00" + identity).encode("utf-8", "ignore")).hexdigest()
+
+
+CHAT_KEY_PREFIX = "chat:"
+
+
+def chat_savings_key(messages: Any) -> str | None:
+    """Identity under which a Chat Completions request's ``tokens_saved`` is a running total.
+
+    A Chat request carries the whole transcript, and every earlier tool output
+    reaches the upstream compressed again (recompressed, or replayed from the
+    prefix tracker), so ``tokens_saved`` repeats each earlier removal on every
+    turn. Measured 2026-10-09 through the handler, cache and token mode alike:
+    five turns booked 134,745 tokens for 44,915 ever removed, all priced as
+    fresh input. Keyed, the funnel books each removal once at the live-zone
+    price and its repeats as retained, priced as the cache reads they replace.
+
+    Chat bodies name no conversation, so the identity is the client's system
+    messages and first user message. Conversations within one account that
+    share both share a running total and shift savings between each other;
+    the key is namespaced per account before use (``tenant_key``).
+    """
+    if not isinstance(messages, list):
+        return None
+    system: list[Any] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("system", "developer"):
+            system.append(msg.get("content"))
+        elif role == "user":
+            import json
+
+            seed = json.dumps([system, msg.get("content")], sort_keys=True, default=str)
+            digest = hashlib.sha256(("chat-savings\x00" + seed).encode("utf-8", "ignore"))
+            return CHAT_KEY_PREFIX + digest.hexdigest()
+    return None
+
+
+def is_chat_running_total(conversation_key: str | None) -> bool:
+    """True for a key from :func:`chat_savings_key`: its repeats are not in ``tokens_saved``."""
+    return bool(conversation_key) and str(conversation_key).startswith(CHAT_KEY_PREFIX)
 
 
 # Conversations tracked before the oldest is forgotten. A forgotten

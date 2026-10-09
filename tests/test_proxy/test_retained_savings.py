@@ -229,3 +229,132 @@ async def test_other_clients_book_no_retained_savings(booked, client) -> None:
     )
     await emit_request_outcome(handler, _outcome(client=client, retained_tokens_saved=9_999))
     assert [(c["saved"], c["retained"]) for c in booked] == [(62_806, 0), (13_214, 0)]
+
+
+# ── Chat Completions ───────────────────────────────────────────────────
+
+
+def test_a_chat_conversation_keeps_one_key_across_turns() -> None:
+    from horizon.proxy.conversation_savings import chat_savings_key, is_chat_running_total
+
+    first = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "fix it"}]
+    later = first + [
+        {"role": "assistant", "content": None, "tool_calls": []},
+        {"role": "tool", "tool_call_id": "c1", "content": "log"},
+    ]
+    key = chat_savings_key(first)
+    assert key == chat_savings_key(later) and is_chat_running_total(key)
+    assert key != chat_savings_key([first[0], {"role": "user", "content": "other task"}])
+    assert key != chat_savings_key([{"role": "user", "content": "fix it"}])
+    assert chat_savings_key([{"role": "system", "content": "x"}]) is None
+    assert not is_chat_running_total("conv-a") and not is_chat_running_total(None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client", ["opencode", None])
+async def test_a_chat_running_total_books_each_removal_once(booked, client) -> None:
+    from horizon.proxy.conversation_savings import chat_savings_key
+
+    key = chat_savings_key([{"role": "user", "content": "fix it"}])
+    handler = _Handler()
+    for total in (8_983, 17_966, 26_949):
+        await emit_request_outcome(
+            handler,
+            _outcome(
+                tokens_saved=total,
+                conversation_key=key,
+                conversation_tokens_saved=total,
+                client=client,
+            ),
+        )
+    assert [(c["saved"], c["retained"]) for c in booked] == [
+        (8_983, 0),
+        (8_983, 8_983),
+        (8_983, 17_966),
+    ]
+
+
+def test_chat_completions_book_each_removal_once_through_the_handler(monkeypatch, tmp_path):
+    """Every earlier tool output reaches the upstream compressed again, so the
+    request's tokens_saved grows each turn; the ledger books only the new part."""
+    import json as _json
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from horizon.proxy.server import ProxyConfig, create_app
+
+    booked: list[tuple[int, int]] = []
+
+    async def _record(outcome, **kwargs):
+        booked.append((kwargs["saved"], kwargs["retained"]))
+
+    monkeypatch.setattr(account_analytics, "record_account_outcome", _record)
+    monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(tmp_path))
+    rows = ",".join(
+        f'{{"id": {i}, "name": "item{i}", "status": "ok", "value": {i * 7}}}' for i in range(600)
+    )
+
+    def conversation(turns: int) -> list[dict]:
+        messages: list[dict] = [{"role": "user", "content": "inspect the data"}]
+        for t in range(turns):
+            call = {
+                "id": f"c{t}",
+                "type": "function",
+                "function": {"name": "query_db", "arguments": "{}"},
+            }
+            messages += [
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": f"c{t}", "content": f'[{rows},{{"turn": {t}}}]'},
+            ]
+        return messages
+
+    def respond(*_a, **kw):
+        body = _json.loads(kw.get("content") or b"{}")
+        payload = {
+            "id": "x",
+            "object": "chat.completion",
+            "model": body.get("model"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 5, "total_tokens": 1005},
+        }
+        return httpx.Response(
+            200,
+            json=payload,
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+
+    app = create_app(
+        ProxyConfig(
+            optimize=True,
+            cache_enabled=False,
+            rate_limit_enabled=False,
+            cost_tracking_enabled=False,
+            ccr_inject_tool=False,
+            ccr_handle_responses=False,
+            ccr_context_tracking=False,
+            mode="cache",
+        )
+    )
+    with TestClient(app) as client:
+        http = MagicMock()
+        http.post = AsyncMock(side_effect=respond)
+        http.request = AsyncMock(side_effect=respond)
+        http.send = AsyncMock(side_effect=respond)
+        http.aclose = AsyncMock()
+        client.app.state.proxy.http_client = http
+        for turns in (1, 2, 3):
+            body = {"model": "gpt-5.4", "messages": conversation(turns)}
+            response = client.post(
+                "/v1/chat/completions", json=body, headers={"authorization": "Bearer sk-test"}
+            )
+            assert response.status_code == 200
+    saved = [s for s, _ in booked]
+    assert saved[0] > 0 and all(abs(s - saved[0]) <= saved[0] // 10 for s in saved)
+    assert booked[0][1] == 0 and booked[1][1] == saved[0] and booked[2][1] == saved[0] + saved[1]
