@@ -265,3 +265,14 @@ an interrupted script trial and an output/usage-cap mismatch. It does not certif
 this Claude route or Codex. Further Gemini paid calls stopped, and the shared
 ledger now includes returned Gemini usage and an unreconciled request; the
 earlier spend figures above describe only this Claude validation phase.
+
+## Subsequent zero-cost proxy integration
+
+The user selected step 2 of the follow-up plan. The
+[full-pipeline review](PIPELINE_REVIEW.md) records 45 new integration tests and
+202 passing targeted regressions, the trusted operator session/source bridge,
+admission-policy fixes, bounded buffering/waits, durable cancellation handling,
+fresh-app restart, replay/cache and real account outbox evidence. No paid calls,
+customer activation, billing changes, merge or Pi deployment occurred. The
+remaining economic, production source-collection and operational recovery gates
+are listed there; the earlier 104-test count describes the earlier phase.

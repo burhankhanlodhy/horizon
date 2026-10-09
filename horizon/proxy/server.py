@@ -5968,7 +5968,20 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         resolver = app.state.compact_edit_cohort_resolver
         return await resolver(scope) if resolver is not None else None
 
-    app.add_middleware(CompactCohortMiddleware, resolve=_resolve_compact_cohort)
+    def _compact_policy_allowed(scope):
+        from horizon.proxy.helpers import _horizon_bypass_enabled
+
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in scope.get("headers", [])
+        }
+        return config.optimize and not _horizon_bypass_enabled(headers)
+
+    app.add_middleware(
+        CompactCohortMiddleware,
+        resolve=_resolve_compact_cohort,
+        policy_allowed=_compact_policy_allowed,
+    )
     app.add_middleware(AccountMiddleware, service=account_analytics)
     return app
 

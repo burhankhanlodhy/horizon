@@ -26,6 +26,13 @@ remains pending. Ruff and compilation checks passed. See the
 [cohort validation and release review](../experiments/frontier-savings/cohort/REPORT.md)
 for the measured costs, shared $3 budget, findings and remaining requirements.
 
+The subsequent [zero-cost full-proxy review](../experiments/frontier-savings/cohort/PIPELINE_REVIEW.md)
+adds 45 integration checks (202 targeted regressions passing), a trusted Python
+session/source bridge, stock admission-policy enforcement and bounded,
+cancellation-safe durable publication. Managed registration requires one worker;
+actual launcher/source collection, economic certification and operational drain
+remain pending. The resolver is still unconfigured in stock deployments.
+
 ## Supported formats
 
 | Client contract | Provider-facing compact call | Client-facing native call | Replay |

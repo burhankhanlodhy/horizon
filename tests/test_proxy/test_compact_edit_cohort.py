@@ -614,7 +614,11 @@ def test_upstream_model_mismatch_never_publishes(setup):
     )
 
     async def invoke(body):
-        message = {"model": "unqualified-model", "content": [], "usage": {"output_tokens": 1}}
+        message = {
+            "model": "unqualified-model",
+            "content": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
         return Reply(200, [], json.dumps(message).encode())
 
     with pytest.raises(CompactEditError, match="upstream model"):
@@ -668,7 +672,7 @@ def test_bounded_recovery_without_read_and_exhaustion(setup, mode):
             "id": "msg",
             "stop_reason": "tool_use",
             "content": content,
-            "usage": {"output_tokens": 3},
+            "usage": {"input_tokens": 1, "output_tokens": 3},
         }
         return Reply(200, [], json.dumps(message).encode())
 
