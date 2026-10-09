@@ -334,10 +334,14 @@ OPENAI_HOSTS = frozenset({"api.openai.com", "chatgpt.com"})
 
 
 def upstream_supports_flash_openai(url: str) -> bool:
-    """OpenAI's own hosts only, unless ``HORIZON_FLASH_ANY_UPSTREAM=1``.
+    """OpenAI's own hosts, plus hosts listed in ``HORIZON_FLASH_OPENAI_UPSTREAMS``.
 
     Another OpenAI-compatible provider may cache differently or reject an
-    edited history next to its reasoning state; run the preflight first.
+    edited history next to its reasoning state, so add a host (comma list, a
+    host also matches its subdomains) only after ``preflight_openai.py`` has
+    passed on it. The list applies to this feature only: a gateway can pass
+    this preflight and fail the Claude one (ModelFlare did, 2026-10-09).
+    ``HORIZON_FLASH_ANY_UPSTREAM=1`` still allows every host, for both.
     """
     from urllib.parse import urlparse
 
@@ -350,4 +354,8 @@ def upstream_supports_flash_openai(url: str) -> bool:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
         return False
-    return host in OPENAI_HOSTS
+    if host in OPENAI_HOSTS:
+        return True
+    extra = runtime_env.getenv("HORIZON_FLASH_OPENAI_UPSTREAMS", "") or ""
+    allowed = {h.strip().lower().lstrip(".") for h in extra.split(",") if h.strip()}
+    return any(host == h or host.endswith("." + h) for h in allowed)

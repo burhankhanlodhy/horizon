@@ -392,3 +392,27 @@ the real Claude API these logs were about 19k tokens each, 2.3x the estimate.
 At 24 suites a real control session would pass 400k tokens of context, beyond
 GPT-6.1 Sol's 272k whole-request tier. Use `--suites 12`: it stays under the
 tier and costs roughly $6–7 for 4 arms x 3 reps. Check the balance first.
+
+**ModelFlare, `gpt-6.1-sol` (2026-10-09): usable, with
+`HORIZON_FLASH_OPENAI_UPSTREAMS=modelflare.dev`.** Two preflight runs, at low
+and medium reasoning effort:
+
+| Check | Result |
+|---|---|
+| Cached tokens in `usage` | Present |
+| Prompt caching | Intermittent: repeats `[0, 7680, 7680]` and `[7680, 7680, 0]`, about 2 in 3 hit (likely an account pool) |
+| Edited earlier output accepted | Yes, HTTP 200 |
+| Prefix before the edit still cached | Yes (10,214 tokens) |
+| Newest output readable | Yes (`MAPLE`) |
+| Encrypted reasoning returned | Never, even with `include: ["reasoning.encrypted_content"]`; nothing for an edit to break |
+
+The strict "every repeat hits" check fails, but intermittent caching costs
+both arms. It hurts the control arm more, because a miss re-bills the whole
+context and flash keeps that context small.
+
+Whether OpenAI itself accepts an edit next to encrypted reasoning is still
+untested; it can only be checked on the official API.
+
+ModelFlare failed the Claude preflight twice. So the allow-list is per
+feature: `HORIZON_FLASH_OPENAI_UPSTREAMS` enables the OpenAI version on a
+host without enabling the Claude one.

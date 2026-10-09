@@ -50,6 +50,8 @@ services:
       - HORIZON_FLASH_OBSERVATIONS=${HORIZON_FLASH_OBSERVATIONS:-0}
       # Same idea for OpenAI (next-turn stubbing): Responses and Chat Completions.
       - HORIZON_FLASH_OPENAI=${HORIZON_FLASH_OPENAI:-0}
+      # Extra hosts for the OpenAI version only, after preflight_openai.py passed on them.
+      - HORIZON_FLASH_OPENAI_UPSTREAMS=${HORIZON_FLASH_OPENAI_UPSTREAMS:-}
       # Telemetry: client-caused prompt-cache misses priced per cause in /stats.
       - HORIZON_CACHE_MISS_WATCH=${HORIZON_CACHE_MISS_WATCH:-0}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}

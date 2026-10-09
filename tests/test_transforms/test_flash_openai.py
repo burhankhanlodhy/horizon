@@ -191,6 +191,19 @@ def test_upstream_gate(monkeypatch) -> None:
     assert upstream_supports_flash_openai("https://gateway.example/v1/responses")
 
 
+def test_per_host_allow_list_is_openai_only(monkeypatch) -> None:
+    from horizon.transforms.flash_observations import upstream_supports_flash
+
+    monkeypatch.delenv("HORIZON_FLASH_ANY_UPSTREAM", raising=False)
+    monkeypatch.setenv("HORIZON_FLASH_OPENAI_UPSTREAMS", " modelflare.dev , other.example")
+    assert upstream_supports_flash_openai("https://modelflare.dev/v1/responses")
+    assert upstream_supports_flash_openai("wss://api.modelflare.dev/v1/responses")
+    assert not upstream_supports_flash_openai("https://notmodelflare.dev/v1/responses")
+    assert not upstream_supports_flash_openai("https://gateway.example/v1/responses")
+    # The Claude version is not unlocked by it (ModelFlare failed that preflight).
+    assert not upstream_supports_flash("https://modelflare.dev")
+
+
 def test_never_raises_on_garbage() -> None:
     garbage = [None, 3, "x", {"type": "function_call_output"}, {"role": "tool"}]
     assert apply_responses(garbage, horizon=0, policy=POLICY).messages == garbage
