@@ -1,0 +1,28 @@
+{
+  "evaluation": "local transcript corpus census; no dollar or quality claims",
+  "scope": "Claude project transcripts for ContextShrink including nested sessions",
+  "source_files": 3,
+  "corpus_sha256": "dada36c37bbe3f241a57bd6ef3794d4c55cf92b553971a0500ae24cb4a335df6",
+  "malformed_or_partial_lines": 0,
+  "totals": {
+    "tool_results": 2009,
+    "result_tokens": 736152
+  },
+  "eligible_read_tools": {
+    "observations": 103,
+    "raw_tokens": 121341,
+    "receipt_tokens": 140548,
+    "oracle_best_tokens": 119657,
+    "repeated_same_arguments": 5,
+    "repeated_raw_tokens": 2266,
+    "exact_duplicate_results": 3
+  },
+  "emitted_token_reduction_upper_bound_pct": 1.3878243957112568,
+  "limitations": [
+    "Inputs are client logs, not captured forwarded proxy requests.",
+    "Current proxy compression and native repeat-read elision are not subtracted.",
+    "Compaction markers reset base availability; missed markers bias the ceiling upward.",
+    "Same-argument reads miss overlapping ranges and changed read parameters.",
+    "No savings value from this census belongs in billing."
+  ]
+}

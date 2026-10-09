@@ -1,0 +1,192 @@
+{
+  "run_id": "20261009T172610Z",
+  "model": "claude-sonnet-5-5",
+  "budget_usd": 2.0800406,
+  "spent_api_equivalent_usd": 0.193851,
+  "calls_completed": 6,
+  "planned_calls": 6,
+  "pairs": [
+    {
+      "rep": 0,
+      "task": "clone_catalog_row_12",
+      "both_pass": false,
+      "native_usd": 0.0462178,
+      "compact_usd": 0.0163938,
+      "savings_usd": 0.029824000000000003
+    },
+    {
+      "rep": 1,
+      "task": "clone_catalog_row_12",
+      "both_pass": false,
+      "native_usd": 0.046441800000000005,
+      "compact_usd": 0.021878,
+      "savings_usd": 0.024563800000000004
+    },
+    {
+      "rep": 2,
+      "task": "clone_catalog_row_12",
+      "both_pass": false,
+      "native_usd": 0.0465258,
+      "compact_usd": 0.0163938,
+      "savings_usd": 0.030132
+    }
+  ],
+  "rows": [
+    {
+      "rep": 0,
+      "task": "clone_catalog_row_12",
+      "arm": "compact",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": true,
+      "source_unchanged": true,
+      "passed": true,
+      "tool_calls": 2,
+      "rejected_edits": 0,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 118,
+      "input_tokens": 6,
+      "cache_read_tokens": 7029,
+      "cache_write_tokens": 3044,
+      "output_tokens": 280,
+      "api_equivalent_usd": 0.0163938,
+      "seconds": 6.585
+    },
+    {
+      "rep": 0,
+      "task": "clone_catalog_row_12",
+      "arm": "native",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": false,
+      "source_unchanged": true,
+      "passed": false,
+      "tool_calls": 2,
+      "rejected_edits": 0,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 1607,
+      "input_tokens": 6,
+      "cache_read_tokens": 6119,
+      "cache_write_tokens": 5178,
+      "output_tokens": 2427,
+      "api_equivalent_usd": 0.0462178,
+      "seconds": 20.958
+    },
+    {
+      "rep": 1,
+      "task": "clone_catalog_row_12",
+      "arm": "native",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": false,
+      "source_unchanged": true,
+      "passed": false,
+      "tool_calls": 2,
+      "rejected_edits": 0,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 1607,
+      "input_tokens": 6,
+      "cache_read_tokens": 6119,
+      "cache_write_tokens": 5194,
+      "output_tokens": 2443,
+      "api_equivalent_usd": 0.046441800000000005,
+      "seconds": 16.626
+    },
+    {
+      "rep": 1,
+      "task": "clone_catalog_row_12",
+      "arm": "compact",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": true,
+      "source_unchanged": true,
+      "passed": true,
+      "tool_calls": 3,
+      "rejected_edits": 1,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 243,
+      "input_tokens": 8,
+      "cache_read_tokens": 11080,
+      "cache_write_tokens": 3444,
+      "output_tokens": 587,
+      "api_equivalent_usd": 0.021878,
+      "seconds": 8.744
+    },
+    {
+      "rep": 2,
+      "task": "clone_catalog_row_12",
+      "arm": "compact",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": true,
+      "source_unchanged": true,
+      "passed": true,
+      "tool_calls": 2,
+      "rejected_edits": 0,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 118,
+      "input_tokens": 6,
+      "cache_read_tokens": 7029,
+      "cache_write_tokens": 3044,
+      "output_tokens": 280,
+      "api_equivalent_usd": 0.0163938,
+      "seconds": 8.043
+    },
+    {
+      "rep": 2,
+      "task": "clone_catalog_row_12",
+      "arm": "native",
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "exit": 0,
+      "timed_out": false,
+      "error": false,
+      "result_subtype": "success",
+      "candidate_ast_matches": false,
+      "source_unchanged": true,
+      "passed": false,
+      "tool_calls": 2,
+      "rejected_edits": 0,
+      "native_fallbacks": 0,
+      "edit_payload_tokens": 1607,
+      "input_tokens": 6,
+      "cache_read_tokens": 6119,
+      "cache_write_tokens": 5200,
+      "output_tokens": 2449,
+      "api_equivalent_usd": 0.0465258,
+      "seconds": 15.465
+    }
+  ],
+  "scope": "Preview MCP tool adoption, not full deployed-proxy end-to-end evaluation.",
+  "accounting": "Existing Claude Pro login; CLI cost is API-equivalent, not a provider invoice.",
+  "output_cap_per_request": 8192,
+  "per_session_budget_cap": 0.12,
+  "prompt": "Custom system prompt identical across arms; existing configured model discovered and pinned.",
+  "grading": "Complete Python AST equality against independent expected fixture; no source modifications."
+}

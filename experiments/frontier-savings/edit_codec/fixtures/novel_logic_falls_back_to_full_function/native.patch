@@ -1,0 +1,12 @@
+*** Begin Patch
+*** Update File: horizon/pricing/registry.py
+@@
+         total_cost = 0.0
+ 
+         # Regular input tokens
+-        if input_tokens > 0:
++        if input_tokens > 0 and model.strip():
+             input_cost = (input_tokens / 1_000_000) * pricing.input_per_1m
+             breakdown["input"] = {
+                 "tokens": input_tokens,
+*** End Patch

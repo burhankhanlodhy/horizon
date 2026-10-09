@@ -1,0 +1,11 @@
+*** Begin Patch
+*** Update File: api/security.py
+@@
+     return secrets.token_urlsafe(32)
+ 
+ 
+-def hash_token(token: str) -> str:
+-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
++def hash_token(session_token: str) -> str:
++    return hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+*** End Patch

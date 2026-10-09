@@ -1,0 +1,28 @@
+*** Begin Patch
+*** Update File: horizon/pricing/registry.py
+@@
+         model: str,
+         input_tokens: int = 0,
+         output_tokens: int = 0,
+-        cached_input_tokens: int = 0,
++        cache_read_tokens: int = 0,
+         batch_input_tokens: int = 0,
+         batch_output_tokens: int = 0,
+         now: datetime | None = None,
+@@
+             total_cost += output_cost
+ 
+         # Cached input tokens
+-        if cached_input_tokens > 0:
++        if cache_read_tokens > 0:
+             if pricing.cached_input_per_1m is None:
+                 raise ValueError(f"Model '{model}' does not have cached input pricing")
+-            cached_cost = (cached_input_tokens / 1_000_000) * pricing.cached_input_per_1m
++            cached_cost = (cache_read_tokens / 1_000_000) * pricing.cached_input_per_1m
+             breakdown["cached_input"] = {
+-                "tokens": cached_input_tokens,
++                "tokens": cache_read_tokens,
+                 "rate_per_1m": pricing.cached_input_per_1m,
+                 "cost_usd": cached_cost,
+             }
+*** End Patch

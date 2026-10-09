@@ -1,0 +1,1899 @@
+{
+  "method": "guarded evidence-carrying tool plans",
+  "measurement": "offline token counts and arithmetic; no model or provider calls",
+  "tokenizer": "cl100k_base",
+  "hypothetical_usd_per_million": {
+    "input": 3.0,
+    "cache_read": 0.3,
+    "cache_write": 3.75,
+    "output": 15.0
+  },
+  "files": {
+    "horizon/proxy/conversation_savings.py": {
+      "sha256": "2fd2084e276b78178cdb6f7d148c77d524b39eb0f6c8e6ef28d7932158d1d680",
+      "bytes_utf8": 14154
+    },
+    "horizon/proxy/tool_schema_savings_policy.py": {
+      "sha256": "66154e2e409333fbeb8a4c091fef0ce913dc06ac8cb7cb1a06c974cef08eb3ab",
+      "bytes_utf8": 3031
+    },
+    "horizon/pricing/counterfactual.py": {
+      "sha256": "741197bb0660becb5b14e86278e0643a1fb072a13f48b940ba2dfc62abbbeada",
+      "bytes_utf8": 26144
+    },
+    "horizon/proxy/cache_keeper.py": {
+      "sha256": "a4dbc8e22d9b641be990670608d00f686ab7d316615bb18b34f3f07934e3fd6c",
+      "bytes_utf8": 24064
+    },
+    "horizon/proxy/savings_tracker.py": {
+      "sha256": "a99db0970323796d667d6241455e3d7cc593e810e35e038b823635da32f0ec23",
+      "bytes_utf8": 99690
+    },
+    "tests/test_proxy/test_conversation_savings.py": {
+      "sha256": "d6849b485bf792b6bfd64c715953d7c364d55c4f0af5bf24ee67c16dee133c04",
+      "bytes_utf8": 14041
+    },
+    "tests/test_tool_schema_savings_policy.py": {
+      "sha256": "6fcf7b7fd54bc736945edd2222b591d4a22695d04fba8b36e10e84702428e169",
+      "bytes_utf8": 5635
+    },
+    "tests/test_counterfactual_pricing.py": {
+      "sha256": "ee27e534d261378fc109790ba05e5779ae2a8825f1c89edbc31eb18c38f1e52e",
+      "bytes_utf8": 12498
+    },
+    "tests/test_proxy/test_cache_keeper.py": {
+      "sha256": "8dca8c36d41a839980871e687ea7d55bc1a0e34e2904127a242f52d6931ecc47",
+      "bytes_utf8": 19208
+    }
+  },
+  "tasks": [
+    {
+      "symbol": "savings_conversation_key",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 1616,
+      "plan_tokens": 192,
+      "receipt_tokens": 60,
+      "test_declarations": 4,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 10049,
+            "cache_write": 3909,
+            "output": 410,
+            "requests": 5,
+            "usd": 0.02382345
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4273,
+            "cache_write": 3865,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.02159565
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2028,
+            "cache_write": 3925,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.02123715
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2028,
+            "cache_write": 3700,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.0179934
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 13958,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 410,
+            "requests": 5,
+            "usd": 0.048024000000000004
+          },
+          "dependency_wave_batch": {
+            "input": 8138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.030234
+          },
+          "guarded_plan": {
+            "input": 5953,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.023769
+          },
+          "single_script_control": {
+            "input": 5728,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.020694
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 82049,
+            "cache_write": 21909,
+            "output": 410,
+            "requests": 5,
+            "usd": 0.11292345000000001
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40273,
+            "cache_write": 21865,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.09989565
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20028,
+            "cache_write": 21925,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.09413714999999999
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20028,
+            "cache_write": 21700,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.0908934
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 103958,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 410,
+            "requests": 5,
+            "usd": 0.318024
+          },
+          "dependency_wave_batch": {
+            "input": 62138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.192234
+          },
+          "guarded_plan": {
+            "input": 41953,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.131769
+          },
+          "single_script_control": {
+            "input": 41728,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.128694
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 402049,
+            "cache_write": 101909,
+            "output": 410,
+            "requests": 5,
+            "usd": 0.5089234499999999
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200273,
+            "cache_write": 101865,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.44789565000000003
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100028,
+            "cache_write": 101925,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.41813715
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100028,
+            "cache_write": 101700,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.4148934
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 503958,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 410,
+            "requests": 5,
+            "usd": 1.518024
+          },
+          "dependency_wave_batch": {
+            "input": 302138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 388,
+            "requests": 3,
+            "usd": 0.9122340000000001
+          },
+          "guarded_plan": {
+            "input": 201953,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 394,
+            "requests": 2,
+            "usd": 0.611769
+          },
+          "single_script_control": {
+            "input": 201728,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 234,
+            "requests": 2,
+            "usd": 0.6086940000000001
+          }
+        }
+      }
+    },
+    {
+      "symbol": "tool_schema_saved_from_tags",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 647,
+      "plan_tokens": 192,
+      "receipt_tokens": 60,
+      "test_declarations": 3,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 8955,
+            "cache_write": 2943,
+            "output": 389,
+            "requests": 5,
+            "usd": 0.01955775
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4245,
+            "cache_write": 2899,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.017649750000000002
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2028,
+            "cache_write": 2956,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.0172434
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2028,
+            "cache_write": 2731,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.01399965
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 11898,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 389,
+            "requests": 5,
+            "usd": 0.041528999999999996
+          },
+          "dependency_wave_batch": {
+            "input": 7144,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.026937
+          },
+          "guarded_plan": {
+            "input": 4984,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.020502
+          },
+          "single_script_control": {
+            "input": 4759,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.017426999999999998
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 80955,
+            "cache_write": 20943,
+            "output": 389,
+            "requests": 5,
+            "usd": 0.10865775
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40245,
+            "cache_write": 20899,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.09594975
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20028,
+            "cache_write": 20956,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.0901434
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20028,
+            "cache_write": 20731,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.08689965
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 101898,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 389,
+            "requests": 5,
+            "usd": 0.311529
+          },
+          "dependency_wave_batch": {
+            "input": 61144,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.18893700000000002
+          },
+          "guarded_plan": {
+            "input": 40984,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.128502
+          },
+          "single_script_control": {
+            "input": 40759,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.125427
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 400955,
+            "cache_write": 100943,
+            "output": 389,
+            "requests": 5,
+            "usd": 0.50465775
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200245,
+            "cache_write": 100899,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.44394975
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100028,
+            "cache_write": 100956,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.4141434
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100028,
+            "cache_write": 100731,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.41089964999999995
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 501898,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 389,
+            "requests": 5,
+            "usd": 1.5115290000000001
+          },
+          "dependency_wave_batch": {
+            "input": 301144,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 367,
+            "requests": 3,
+            "usd": 0.908937
+          },
+          "guarded_plan": {
+            "input": 200984,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 2,
+            "usd": 0.6085020000000001
+          },
+          "single_script_control": {
+            "input": 200759,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 210,
+            "requests": 2,
+            "usd": 0.6054269999999999
+          }
+        }
+      }
+    },
+    {
+      "symbol": "headline_tokens_saved",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 880,
+      "plan_tokens": 186,
+      "receipt_tokens": 60,
+      "test_declarations": 6,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 9122,
+            "cache_write": 3167,
+            "output": 463,
+            "requests": 5,
+            "usd": 0.02155785
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4332,
+            "cache_write": 3123,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.01962585
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2026,
+            "cache_write": 3181,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.01921155
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2026,
+            "cache_write": 2960,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.0160428
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 12289,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 463,
+            "requests": 5,
+            "usd": 0.043812
+          },
+          "dependency_wave_batch": {
+            "input": 7455,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.02898
+          },
+          "guarded_plan": {
+            "input": 5207,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.022296
+          },
+          "single_script_control": {
+            "input": 4986,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.019293
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 81122,
+            "cache_write": 21167,
+            "output": 463,
+            "requests": 5,
+            "usd": 0.11065785
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40332,
+            "cache_write": 21123,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.09792585
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20026,
+            "cache_write": 21181,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.09211155
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20026,
+            "cache_write": 20960,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.0889428
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 102289,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 463,
+            "requests": 5,
+            "usd": 0.313812
+          },
+          "dependency_wave_batch": {
+            "input": 61455,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.19098
+          },
+          "guarded_plan": {
+            "input": 41207,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.130296
+          },
+          "single_script_control": {
+            "input": 40986,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.127293
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 401122,
+            "cache_write": 101167,
+            "output": 463,
+            "requests": 5,
+            "usd": 0.50665785
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200332,
+            "cache_write": 101123,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.44592585
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100026,
+            "cache_write": 101181,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.41611155
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100026,
+            "cache_write": 100960,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.4129428
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 502289,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 463,
+            "requests": 5,
+            "usd": 1.513812
+          },
+          "dependency_wave_batch": {
+            "input": 301455,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 441,
+            "requests": 3,
+            "usd": 0.91098
+          },
+          "guarded_plan": {
+            "input": 201207,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 445,
+            "requests": 2,
+            "usd": 0.610296
+          },
+          "single_script_control": {
+            "input": 200986,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 289,
+            "requests": 2,
+            "usd": 0.607293
+          }
+        }
+      }
+    },
+    {
+      "symbol": "split_tokens",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 1367,
+      "plan_tokens": 183,
+      "receipt_tokens": 60,
+      "test_declarations": 4,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 9736,
+            "cache_write": 3645,
+            "output": 390,
+            "requests": 5,
+            "usd": 0.02243955
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4256,
+            "cache_write": 3601,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.02030055
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 3664,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.0200025
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 3445,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.01687125
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 13381,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 390,
+            "requests": 5,
+            "usd": 0.045993
+          },
+          "dependency_wave_batch": {
+            "input": 7857,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.029091000000000002
+          },
+          "guarded_plan": {
+            "input": 5689,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.022722
+          },
+          "single_script_control": {
+            "input": 5470,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.019755
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 81736,
+            "cache_write": 21645,
+            "output": 390,
+            "requests": 5,
+            "usd": 0.11153955
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40256,
+            "cache_write": 21601,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.09860055
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 21664,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.09290250000000001
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 21445,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.08977125
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 103381,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 390,
+            "requests": 5,
+            "usd": 0.315993
+          },
+          "dependency_wave_batch": {
+            "input": 61857,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.191091
+          },
+          "guarded_plan": {
+            "input": 41689,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.130722
+          },
+          "single_script_control": {
+            "input": 41470,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.127755
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 401736,
+            "cache_write": 101645,
+            "output": 390,
+            "requests": 5,
+            "usd": 0.50753955
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200256,
+            "cache_write": 101601,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.44660055
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 101664,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.4169025
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 101445,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.41377125000000003
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 503381,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 390,
+            "requests": 5,
+            "usd": 1.515993
+          },
+          "dependency_wave_batch": {
+            "input": 301857,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 368,
+            "requests": 3,
+            "usd": 0.911091
+          },
+          "guarded_plan": {
+            "input": 201689,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 377,
+            "requests": 2,
+            "usd": 0.610722
+          },
+          "single_script_control": {
+            "input": 201470,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 223,
+            "requests": 2,
+            "usd": 0.607755
+          }
+        }
+      }
+    },
+    {
+      "symbol": "ttl_of",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 816,
+      "plan_tokens": 183,
+      "receipt_tokens": 60,
+      "test_declarations": 4,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 9208,
+            "cache_write": 3086,
+            "output": 370,
+            "requests": 5,
+            "usd": 0.0198849
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4244,
+            "cache_write": 3042,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.0179007
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 3113,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.01775625
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 2894,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.014624999999999999
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 12294,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 5,
+            "usd": 0.042432
+          },
+          "dependency_wave_batch": {
+            "input": 7286,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.027077999999999998
+          },
+          "guarded_plan": {
+            "input": 5138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.020889
+          },
+          "single_script_control": {
+            "input": 4919,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.017922
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 81208,
+            "cache_write": 21086,
+            "output": 370,
+            "requests": 5,
+            "usd": 0.10898490000000001
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40244,
+            "cache_write": 21042,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.0962007
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 21113,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.09065625
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 20894,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.087525
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 102294,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 5,
+            "usd": 0.312432
+          },
+          "dependency_wave_batch": {
+            "input": 61286,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.189078
+          },
+          "guarded_plan": {
+            "input": 41138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.128889
+          },
+          "single_script_control": {
+            "input": 40919,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.125922
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 401208,
+            "cache_write": 101086,
+            "output": 370,
+            "requests": 5,
+            "usd": 0.5049849
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200244,
+            "cache_write": 101042,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.4442007
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 101113,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.41465624999999995
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 100894,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.411525
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 502294,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 370,
+            "requests": 5,
+            "usd": 1.512432
+          },
+          "dependency_wave_batch": {
+            "input": 301286,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 348,
+            "requests": 3,
+            "usd": 0.909078
+          },
+          "guarded_plan": {
+            "input": 201138,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 365,
+            "requests": 2,
+            "usd": 0.608889
+          },
+          "single_script_control": {
+            "input": 200919,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 211,
+            "requests": 2,
+            "usd": 0.605922
+          }
+        }
+      }
+    },
+    {
+      "symbol": "group_of",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 583,
+      "plan_tokens": 183,
+      "receipt_tokens": 60,
+      "test_declarations": 2,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 8985,
+            "cache_write": 2824,
+            "output": 292,
+            "requests": 5,
+            "usd": 0.0176655
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4187,
+            "cache_write": 2780,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.0157311
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 2880,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.016147500000000002
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2025,
+            "cache_write": 2661,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.01301625
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 11809,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 292,
+            "requests": 5,
+            "usd": 0.039807
+          },
+          "dependency_wave_batch": {
+            "input": 6967,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.024951
+          },
+          "guarded_plan": {
+            "input": 4905,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.019455
+          },
+          "single_script_control": {
+            "input": 4686,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.016488
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 80985,
+            "cache_write": 20824,
+            "output": 292,
+            "requests": 5,
+            "usd": 0.10676550000000001
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40187,
+            "cache_write": 20780,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.09403109999999999
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 20880,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.0890475
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20025,
+            "cache_write": 20661,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.08591625
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 101809,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 292,
+            "requests": 5,
+            "usd": 0.309807
+          },
+          "dependency_wave_batch": {
+            "input": 60967,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.186951
+          },
+          "guarded_plan": {
+            "input": 40905,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.127455
+          },
+          "single_script_control": {
+            "input": 40686,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.124488
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 400985,
+            "cache_write": 100824,
+            "output": 292,
+            "requests": 5,
+            "usd": 0.5027655
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200187,
+            "cache_write": 100780,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.4420311
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 100880,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.4130475
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100025,
+            "cache_write": 100661,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.40991625
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 501809,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 292,
+            "requests": 5,
+            "usd": 1.5098070000000001
+          },
+          "dependency_wave_batch": {
+            "input": 300967,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 270,
+            "requests": 3,
+            "usd": 0.906951
+          },
+          "guarded_plan": {
+            "input": 200905,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 316,
+            "requests": 2,
+            "usd": 0.607455
+          },
+          "single_script_control": {
+            "input": 200686,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 162,
+            "requests": 2,
+            "usd": 0.604488
+          }
+        }
+      }
+    },
+    {
+      "symbol": "prewarm_body",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 607,
+      "plan_tokens": 186,
+      "receipt_tokens": 60,
+      "test_declarations": 2,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 9079,
+            "cache_write": 2861,
+            "output": 315,
+            "requests": 5,
+            "usd": 0.01817745
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4201,
+            "cache_write": 2817,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.01621905
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2026,
+            "cache_write": 2908,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.0164628
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2026,
+            "cache_write": 2687,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.01329405
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 11940,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 315,
+            "requests": 5,
+            "usd": 0.040545
+          },
+          "dependency_wave_batch": {
+            "input": 7018,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.025449
+          },
+          "guarded_plan": {
+            "input": 4934,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.019752
+          },
+          "single_script_control": {
+            "input": 4713,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.016749
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 81079,
+            "cache_write": 20861,
+            "output": 315,
+            "requests": 5,
+            "usd": 0.10727745
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40201,
+            "cache_write": 20817,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.09451905
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20026,
+            "cache_write": 20908,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.0893628
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20026,
+            "cache_write": 20687,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.08619405
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 101940,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 315,
+            "requests": 5,
+            "usd": 0.31054499999999996
+          },
+          "dependency_wave_batch": {
+            "input": 61018,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.187449
+          },
+          "guarded_plan": {
+            "input": 40934,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.127752
+          },
+          "single_script_control": {
+            "input": 40713,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.124749
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 401079,
+            "cache_write": 100861,
+            "output": 315,
+            "requests": 5,
+            "usd": 0.50327745
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200201,
+            "cache_write": 100817,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.44251904999999997
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100026,
+            "cache_write": 100908,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.4133628
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100026,
+            "cache_write": 100687,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.41019405
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 501940,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 315,
+            "requests": 5,
+            "usd": 1.510545
+          },
+          "dependency_wave_batch": {
+            "input": 301018,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 293,
+            "requests": 3,
+            "usd": 0.9074490000000001
+          },
+          "guarded_plan": {
+            "input": 200934,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 330,
+            "requests": 2,
+            "usd": 0.607752
+          },
+          "single_script_control": {
+            "input": 200713,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 174,
+            "requests": 2,
+            "usd": 0.604749
+          }
+        }
+      }
+    },
+    {
+      "symbol": "estimate_request_savings_usd",
+      "exact_evidence_equal": true,
+      "exact_answer_equal": true,
+      "evidence_tokens": 1252,
+      "plan_tokens": 195,
+      "receipt_tokens": 60,
+      "test_declarations": 0,
+      "costs": {
+        "prefix_2000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 10906,
+            "cache_write": 3444,
+            "output": 198,
+            "requests": 5,
+            "usd": 0.019156799999999998
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 4145,
+            "cache_write": 3402,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.016641
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 2029,
+            "cache_write": 3565,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.01822245
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 2029,
+            "cache_write": 3338,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.0149412
+          }
+        },
+        "prefix_2000_uncached": {
+          "sequential": {
+            "input": 14350,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 198,
+            "requests": 5,
+            "usd": 0.04602
+          },
+          "dependency_wave_batch": {
+            "input": 7547,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.025281
+          },
+          "guarded_plan": {
+            "input": 5594,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.021026999999999997
+          },
+          "single_script_control": {
+            "input": 5367,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.017916
+          }
+        },
+        "prefix_20000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 82906,
+            "cache_write": 21444,
+            "output": 198,
+            "requests": 5,
+            "usd": 0.1082568
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 40145,
+            "cache_write": 21402,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.094941
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 20029,
+            "cache_write": 21565,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.09112245000000001
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 20029,
+            "cache_write": 21338,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.08784120000000001
+          }
+        },
+        "prefix_20000_uncached": {
+          "sequential": {
+            "input": 104350,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 198,
+            "requests": 5,
+            "usd": 0.31601999999999997
+          },
+          "dependency_wave_batch": {
+            "input": 61547,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.187281
+          },
+          "guarded_plan": {
+            "input": 41594,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.129027
+          },
+          "single_script_control": {
+            "input": 41367,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.125916
+          }
+        },
+        "prefix_100000_warm_after_first": {
+          "sequential": {
+            "input": 0,
+            "cache_read": 402906,
+            "cache_write": 101444,
+            "output": 198,
+            "requests": 5,
+            "usd": 0.5042568
+          },
+          "dependency_wave_batch": {
+            "input": 0,
+            "cache_read": 200145,
+            "cache_write": 101402,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.44294100000000003
+          },
+          "guarded_plan": {
+            "input": 0,
+            "cache_read": 100029,
+            "cache_write": 101565,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.41512245
+          },
+          "single_script_control": {
+            "input": 0,
+            "cache_read": 100029,
+            "cache_write": 101338,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.4118412
+          }
+        },
+        "prefix_100000_uncached": {
+          "sequential": {
+            "input": 504350,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 198,
+            "requests": 5,
+            "usd": 1.51602
+          },
+          "dependency_wave_batch": {
+            "input": 301547,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 176,
+            "requests": 3,
+            "usd": 0.907281
+          },
+          "guarded_plan": {
+            "input": 201594,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 283,
+            "requests": 2,
+            "usd": 0.6090270000000001
+          },
+          "single_script_control": {
+            "input": 201367,
+            "cache_read": 0,
+            "cache_write": 0,
+            "output": 121,
+            "requests": 2,
+            "usd": 0.605916
+          }
+        }
+      }
+    }
+  ],
+  "guards": [
+    {
+      "case": "source_edited_mid_plan",
+      "blocked": true,
+      "reason": "source_changed_during_plan",
+      "emitted_answer": false
+    },
+    {
+      "case": "source_deleted_mid_plan",
+      "blocked": true,
+      "reason": "file_manifest_changed",
+      "emitted_answer": false
+    },
+    {
+      "case": "new_test_file_mid_plan",
+      "blocked": true,
+      "reason": "file_manifest_changed",
+      "emitted_answer": false
+    },
+    {
+      "case": "unknown_symbol",
+      "blocked": true,
+      "reason": "missing_or_ambiguous_symbol",
+      "emitted_answer": false
+    },
+    {
+      "case": "duplicate_symbol_requires_choice",
+      "blocked": true,
+      "reason": "missing_or_ambiguous_symbol",
+      "emitted_answer": false
+    }
+  ],
+  "aggregate": {
+    "prefix_2000_warm_after_first": {
+      "costs_usd": {
+        "sequential": 0.16226325,
+        "dependency_wave_batch": 0.14566365,
+        "guarded_plan": 0.1462836,
+        "single_script_control": 0.1207836
+      },
+      "plan_reduction_vs_sequential_pct": 9.847978516392331,
+      "plan_reduction_vs_wave_batch_pct": -0.42560377966638363,
+      "plan_reduction_vs_single_script_pct": -21.112137740554182
+    },
+    "prefix_2000_uncached": {
+      "costs_usd": {
+        "sequential": 0.34816199999999997,
+        "dependency_wave_batch": 0.218001,
+        "guarded_plan": 0.170412,
+        "single_script_control": 0.146244
+      },
+      "plan_reduction_vs_sequential_pct": 51.05381977355368,
+      "plan_reduction_vs_wave_batch_pct": 21.829716377447806,
+      "plan_reduction_vs_single_script_pct": -16.525806186920477
+    },
+    "prefix_20000_warm_after_first": {
+      "costs_usd": {
+        "sequential": 0.8750632500000001,
+        "dependency_wave_batch": 0.77206365,
+        "guarded_plan": 0.7294836,
+        "single_script_control": 0.7039836
+      },
+      "plan_reduction_vs_sequential_pct": 16.6364717064738,
+      "plan_reduction_vs_wave_batch_pct": 5.51509580848677,
+      "plan_reduction_vs_single_script_pct": -3.622243472717268
+    },
+    "prefix_20000_uncached": {
+      "costs_usd": {
+        "sequential": 2.508162,
+        "dependency_wave_batch": 1.514001,
+        "guarded_plan": 1.034412,
+        "single_script_control": 1.010244
+      },
+      "plan_reduction_vs_sequential_pct": 58.75816633853794,
+      "plan_reduction_vs_wave_batch_pct": 31.676927558172007,
+      "plan_reduction_vs_single_script_pct": -2.392293346953833
+    },
+    "prefix_100000_warm_after_first": {
+      "costs_usd": {
+        "sequential": 4.043063249999999,
+        "dependency_wave_batch": 3.55606365,
+        "guarded_plan": 3.3214836,
+        "single_script_control": 3.2959836
+      },
+      "plan_reduction_vs_sequential_pct": 17.84735002599822,
+      "plan_reduction_vs_wave_batch_pct": 6.596621238767753,
+      "plan_reduction_vs_single_script_pct": -0.7736688981098139
+    },
+    "prefix_100000_uncached": {
+      "costs_usd": {
+        "sequential": 12.108162,
+        "dependency_wave_batch": 7.274001,
+        "guarded_plan": 4.874412,
+        "single_script_control": 4.850244
+      },
+      "plan_reduction_vs_sequential_pct": 59.74275864495371,
+      "plan_reduction_vs_wave_batch_pct": 32.98857121410899,
+      "plan_reduction_vs_single_script_pct": -0.4982842100315077
+    }
+  },
+  "failure_and_700_output_token_sensitivity": {
+    "0": {
+      "expected_usd": 0.8134836,
+      "reduction_vs_wave_batch_pct": -5.36483617639556,
+      "reduction_vs_sequential_pct": 7.037165599172413
+    },
+    "0.05": {
+      "expected_usd": 0.8572367625,
+      "reduction_vs_wave_batch_pct": -11.03187703500872,
+      "reduction_vs_sequential_pct": 2.037165599172408
+    },
+    "0.2": {
+      "expected_usd": 0.98849625,
+      "reduction_vs_wave_batch_pct": -28.03299961084815,
+      "reduction_vs_sequential_pct": -12.962834400827594
+    },
+    "0.5": {
+      "expected_usd": 1.251015225,
+      "reduction_vs_wave_batch_pct": -62.03524476252702,
+      "reduction_vs_sequential_pct": -42.962834400827575
+    },
+    "1": {
+      "expected_usd": 1.68854685,
+      "reduction_vs_wave_batch_pct": -118.70565334865853,
+      "reduction_vs_sequential_pct": -92.96283440082757
+    }
+  },
+  "runtime_seconds": 0.5734071000042604
+}

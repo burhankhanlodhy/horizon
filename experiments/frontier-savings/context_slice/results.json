@@ -1,0 +1,673 @@
+{
+  "method": "cache-boundary exact source slices with dependency receipts",
+  "evaluation": "offline fixed-entrypoint oracle; no model task-success measurement",
+  "tokenizer": "cl100k_base; estimates for both providers, not provider token counts",
+  "illustrative_rates_usd_per_1m": {
+    "anthropic_like_1h": {
+      "write": 6.0,
+      "read": 0.3,
+      "fresh": 3.0,
+      "output": 15.0
+    },
+    "openai_like_4x_cache_discount": {
+      "write": 2.0,
+      "read": 0.5,
+      "fresh": 2.0,
+      "output": 8.0
+    }
+  },
+  "normal_turns_per_task": 20,
+  "observed_paid_provider_calls": 0,
+  "local_runtime_seconds": 0.024154999991878867,
+  "totals": {
+    "full_tokens": 27806,
+    "slice_tokens": 10207,
+    "narrow_control_tokens": 9137,
+    "checks_passed": 30,
+    "checks_total": 30,
+    "entry_only_checks_passed": 19,
+    "source_reduction_pct": 63.29209523124506,
+    "receipt_overhead_vs_same_narrow_source_pct": 11.710627120499062,
+    "modeled_20_turn_costs": {
+      "anthropic_like_1h": {
+        "cold_boundary": {
+          "baseline_usd": 1.8700566,
+          "treatment_usd": 1.7242172999999998,
+          "saving_usd": 0.14583930000000023,
+          "saving_pct": 7.798657003215851
+        },
+        "warm_cache": {
+          "baseline_usd": 1.548132,
+          "treatment_usd": 1.5607868999999999,
+          "saving_usd": -0.012654899999999802,
+          "saving_pct": -0.8174302966413589
+        },
+        "cold_boundary_three_retrievals": {
+          "baseline_usd": 1.8700566,
+          "treatment_usd": 1.8474881999999995,
+          "saving_usd": 0.0225684000000006,
+          "saving_pct": 1.206829782585222
+        }
+      },
+      "openai_like_4x_cache_discount": {
+        "cold_boundary": {
+          "baseline_usd": 1.605417,
+          "treatment_usd": 1.4689955,
+          "saving_usd": 0.1364215000000002,
+          "saving_pct": 8.497574150516668
+        },
+        "warm_cache": {
+          "baseline_usd": 1.5207,
+          "treatment_usd": 1.4259875,
+          "saving_usd": 0.09471249999999998,
+          "saving_pct": 6.228217268363252
+        },
+        "cold_boundary_three_retrievals": {
+          "baseline_usd": 1.605417,
+          "treatment_usd": 1.606151,
+          "saving_usd": -0.0007340000000000124,
+          "saving_pct": -0.04572020851903352
+        }
+      }
+    }
+  },
+  "tasks": [
+    {
+      "id": "prewarm_eligibility",
+      "entry": "horizon.proxy.cache_keeper:prewarm_body",
+      "full_tokens": 5872,
+      "narrow_control_tokens": 1051,
+      "slice_tokens": 1165,
+      "source_reduction_pct": 80.16008174386921,
+      "selected_symbols": [
+        "horizon.proxy.cache_keeper:prewarm_body"
+      ],
+      "source_hashes": {
+        "horizon.proxy.cache_keeper": "a4dbc8e22d9b641be990670608d00f686ab7d316615bb18b34f3f07934e3fd6c"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true
+      },
+      "checks_passed": 3,
+      "checks_total": 3,
+      "entry_only_checks_passed": 3,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.28937759999999996,
+            "treatment_usd": 0.2450187,
+            "saving_usd": 0.044358899999999965,
+            "saving_pct": 15.329071773350794,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.23255999999999993,
+            "treatment_usd": 0.22167150000000002,
+            "saving_usd": 0.010888499999999912,
+            "saving_pct": 4.6820175438596126,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 11
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.28937759999999996,
+            "treatment_usd": 0.2670629999999999,
+            "saving_usd": 0.022314600000000094,
+            "saving_pct": 7.711239570720089,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 587
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.251192,
+            "treatment_usd": 0.2085205,
+            "saving_usd": 0.0426715,
+            "saving_pct": 16.987603108379247,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.23624,
+            "treatment_usd": 0.2023765,
+            "saving_usd": 0.0338635,
+            "saving_pct": 14.334363359295631,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 4
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.251192,
+            "treatment_usd": 0.232469,
+            "saving_usd": 0.018723,
+            "saving_pct": 7.453660944616071,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 587
+          }
+        }
+      }
+    },
+    {
+      "id": "keepalive_identity",
+      "entry": "horizon.proxy.cache_keeper:group_of",
+      "full_tokens": 5872,
+      "narrow_control_tokens": 1020,
+      "slice_tokens": 1134,
+      "source_reduction_pct": 80.68801089918256,
+      "selected_symbols": [
+        "horizon.proxy.cache_keeper:group_of"
+      ],
+      "source_hashes": {
+        "horizon.proxy.cache_keeper": "a4dbc8e22d9b641be990670608d00f686ab7d316615bb18b34f3f07934e3fd6c"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true
+      },
+      "checks_passed": 3,
+      "checks_total": 3,
+      "entry_only_checks_passed": 3,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.28937759999999996,
+            "treatment_usd": 0.24464670000000008,
+            "saving_usd": 0.04473089999999991,
+            "saving_pct": 15.457623534095214,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.23255999999999993,
+            "treatment_usd": 0.22129950000000007,
+            "saving_usd": 0.011260499999999883,
+            "saving_pct": 4.841976264189838,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 11
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.28937759999999996,
+            "treatment_usd": 0.2666723999999999,
+            "saving_usd": 0.02270520000000007,
+            "saving_pct": 7.846218919501742,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 587
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.251192,
+            "treatment_usd": 0.2081485,
+            "saving_usd": 0.0430435,
+            "saving_pct": 17.13569699671964,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.23624,
+            "treatment_usd": 0.2020045,
+            "saving_usd": 0.0342355,
+            "saving_pct": 14.49183034202506,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 587,
+            "break_even_turns_1_to_100": 4
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.251192,
+            "treatment_usd": 0.232066,
+            "saving_usd": 0.019126,
+            "saving_pct": 7.614095990318163,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 587
+          }
+        }
+      }
+    },
+    {
+      "id": "cache_region_pricing",
+      "entry": "horizon.pricing.counterfactual:split_tokens",
+      "full_tokens": 7611,
+      "narrow_control_tokens": 3679,
+      "slice_tokens": 3894,
+      "source_reduction_pct": 48.837209302325576,
+      "selected_symbols": [
+        "horizon.pricing.counterfactual:CacheMix",
+        "horizon.pricing.counterfactual:Region",
+        "horizon.pricing.counterfactual:TokenSplit",
+        "horizon.pricing.counterfactual:_catalog_row",
+        "horizon.pricing.counterfactual:_coerce_int",
+        "horizon.pricing.counterfactual:_litellm",
+        "horizon.pricing.counterfactual:is_long_context_for",
+        "horizon.pricing.counterfactual:long_context_threshold",
+        "horizon.pricing.counterfactual:split_tokens"
+      ],
+      "source_hashes": {
+        "horizon.pricing.counterfactual": "741197bb0660becb5b14e86278e0643a1fb072a13f48b940ba2dfc62abbbeada"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true,
+        "support_CacheMix": true,
+        "support_TokenSplit": true,
+        "support_Region": true,
+        "support__coerce_int": true
+      },
+      "checks_passed": 7,
+      "checks_total": 7,
+      "entry_only_checks_passed": 3,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.3097239,
+            "treatment_usd": 0.2798024999999999,
+            "saving_usd": 0.02992140000000014,
+            "saving_pct": 9.66066874400075,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 761,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.2429940000000001,
+            "treatment_usd": 0.2564552999999999,
+            "saving_usd": -0.013461299999999813,
+            "saving_pct": -5.539766413985451,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 761,
+            "break_even_turns_1_to_100": 36
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.3097239,
+            "treatment_usd": 0.30771239999999994,
+            "saving_usd": 0.0020115000000000584,
+            "saving_pct": 0.6494493967046321,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 761
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.2711905,
+            "treatment_usd": 0.2432695,
+            "saving_usd": 0.027921,
+            "saving_pct": 10.295714636021541,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 761,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.25363,
+            "treatment_usd": 0.2371255,
+            "saving_usd": 0.0165045,
+            "saving_pct": 6.507313803572132,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 761,
+            "break_even_turns_1_to_100": 9
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.2711905,
+            "treatment_usd": 0.27421,
+            "saving_usd": -0.0030195,
+            "saving_pct": -1.1134239584351222,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 761
+          }
+        }
+      }
+    },
+    {
+      "id": "response_identity",
+      "entry": "horizon.proxy.conversation_savings:savings_conversation_key",
+      "full_tokens": 4918,
+      "narrow_control_tokens": 1528,
+      "slice_tokens": 1800,
+      "source_reduction_pct": 63.39975599837333,
+      "selected_symbols": [
+        "horizon.proxy.conversation_savings:_explicit_id",
+        "horizon.proxy.conversation_savings:savings_conversation_key",
+        "horizon.proxy.output_savings_policy:_unwrap_response_create_body"
+      ],
+      "source_hashes": {
+        "horizon.proxy.conversation_savings": "2fd2084e276b78178cdb6f7d148c77d524b39eb0f6c8e6ef28d7932158d1d680",
+        "horizon.proxy.output_savings_policy": "2dc0f8b45077426e1443e3a694ba3ed2efa27476a3e63d1d5b6defd570494298"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true,
+        "support__explicit_id": true,
+        "support__unwrap_response_create_body": true
+      },
+      "checks_passed": 5,
+      "checks_total": 5,
+      "entry_only_checks_passed": 2,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.2782158000000002,
+            "treatment_usd": 0.25152720000000006,
+            "saving_usd": 0.02668860000000012,
+            "saving_pct": 9.592769353861321,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 492,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.22683600000000007,
+            "treatment_usd": 0.22818000000000002,
+            "saving_usd": -0.0013439999999999709,
+            "saving_pct": -0.5924985452044519,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 492,
+            "break_even_turns_1_to_100": 22
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.2782158000000002,
+            "treatment_usd": 0.27164399999999983,
+            "saving_usd": 0.0065718000000003374,
+            "saving_pct": 2.362123215144623,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 492
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.240221,
+            "treatment_usd": 0.215048,
+            "saving_usd": 0.025173,
+            "saving_pct": 10.47910049496089,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 492,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.2267,
+            "treatment_usd": 0.208904,
+            "saving_usd": 0.017796,
+            "saving_pct": 7.8500220555800615,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 492,
+            "break_even_turns_1_to_100": 6
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.240221,
+            "treatment_usd": 0.237304,
+            "saving_usd": 0.002917,
+            "saving_pct": 1.2142985001311293,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 492
+          }
+        }
+      }
+    },
+    {
+      "id": "stratification",
+      "entry": "horizon.proxy.output_savings_policy:stratum_key",
+      "full_tokens": 1758,
+      "narrow_control_tokens": 422,
+      "slice_tokens": 578,
+      "source_reduction_pct": 67.1217292377702,
+      "selected_symbols": [
+        "horizon.proxy.output_savings_policy:input_bucket",
+        "horizon.proxy.output_savings_policy:model_family",
+        "horizon.proxy.output_savings_policy:stratum_key"
+      ],
+      "source_hashes": {
+        "horizon.proxy.output_savings_policy": "2dc0f8b45077426e1443e3a694ba3ed2efa27476a3e63d1d5b6defd570494298"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true,
+        "support_input_bucket": true,
+        "support_model_family": true
+      },
+      "checks_passed": 5,
+      "checks_total": 5,
+      "entry_only_checks_passed": 2,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.24124380000000006,
+            "treatment_usd": 0.2331659999999998,
+            "saving_usd": 0.008077800000000279,
+            "saving_pct": 3.348396932895385,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 176,
+            "break_even_turns_1_to_100": 1
+          },
+          "warm_cache": {
+            "baseline_usd": 0.20787600000000006,
+            "treatment_usd": 0.20981879999999983,
+            "saving_usd": -0.0019427999999997846,
+            "saving_pct": -0.9345956243143914,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 176,
+            "break_even_turns_1_to_100": 28
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.24124380000000006,
+            "treatment_usd": 0.24487079999999978,
+            "saving_usd": -0.003626999999999709,
+            "saving_pct": -1.5034583272190654,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 176
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.203881,
+            "treatment_usd": 0.19675,
+            "saving_usd": 0.007131,
+            "saving_pct": 3.4976285185966325,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 176,
+            "break_even_turns_1_to_100": 5
+          },
+          "warm_cache": {
+            "baseline_usd": 0.1951,
+            "treatment_usd": 0.190606,
+            "saving_usd": 0.004494,
+            "saving_pct": 2.3034341363403383,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 176,
+            "break_even_turns_1_to_100": 11
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.203881,
+            "treatment_usd": 0.210042,
+            "saving_usd": -0.006161,
+            "saving_pct": -3.02186079134397,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 176
+          }
+        }
+      }
+    },
+    {
+      "id": "schema_headline",
+      "entry": "horizon.proxy.tool_schema_savings_policy:headline_tokens_saved",
+      "full_tokens": 700,
+      "narrow_control_tokens": 689,
+      "slice_tokens": 789,
+      "source_reduction_pct": -12.714285714285722,
+      "selected_symbols": [
+        "horizon.proxy.tool_schema_savings_policy:headline_tokens_saved",
+        "horizon.proxy.tool_schema_savings_policy:tool_schema_saved_from_tags"
+      ],
+      "source_hashes": {
+        "horizon.proxy.tool_schema_savings_policy": "66154e2e409333fbeb8a4c091fef0ce913dc06ac8cb7cb1a06c974cef08eb3ab"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true,
+        "support_tool_schema_saved_from_tags": true
+      },
+      "checks_passed": 4,
+      "checks_total": 4,
+      "entry_only_checks_passed": 3,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.22886519999999996,
+            "treatment_usd": 0.2344578,
+            "saving_usd": -0.005592600000000035,
+            "saving_pct": -2.443621835036535,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 70,
+            "break_even_turns_1_to_100": null
+          },
+          "warm_cache": {
+            "baseline_usd": 0.20152799999999996,
+            "treatment_usd": 0.2111106,
+            "saving_usd": -0.009582600000000035,
+            "saving_pct": -4.754972013814475,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 70,
+            "break_even_turns_1_to_100": null
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.22886519999999996,
+            "treatment_usd": 0.24371339999999997,
+            "saving_usd": -0.014848200000000011,
+            "saving_pct": -6.487749120442957,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 70
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.191714,
+            "treatment_usd": 0.198063,
+            "saving_usd": -0.006349,
+            "saving_pct": -3.3117038922561735,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 70,
+            "break_even_turns_1_to_100": null
+          },
+          "warm_cache": {
+            "baseline_usd": 0.18452,
+            "treatment_usd": 0.191919,
+            "saving_usd": -0.007399,
+            "saving_pct": -4.009863429438544,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 70,
+            "break_even_turns_1_to_100": null
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.191714,
+            "treatment_usd": 0.208969,
+            "saving_usd": -0.017255,
+            "saving_pct": -9.00038599163337,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 70
+          }
+        }
+      }
+    },
+    {
+      "id": "ttl_break_even",
+      "entry": "horizon.pricing.cache_ttl:ttl_breakeven_share",
+      "full_tokens": 1075,
+      "narrow_control_tokens": 748,
+      "slice_tokens": 847,
+      "source_reduction_pct": 21.20930232558139,
+      "selected_symbols": [
+        "horizon.pricing.cache_ttl:ttl_breakeven_share"
+      ],
+      "source_hashes": {
+        "horizon.pricing.cache_ttl": "294c137714b5f0e3f01d6f835947d4dda110ae8a52b7bebbf641d6b02f1e3002"
+      },
+      "checks": {
+        "fact_1": true,
+        "fact_2": true,
+        "fact_3": true
+      },
+      "checks_passed": 3,
+      "checks_total": 3,
+      "entry_only_checks_passed": 3,
+      "exact_source": true,
+      "changed_file_invalidates_certificate": true,
+      "models": {
+        "anthropic_like_1h": {
+          "cold_boundary": {
+            "baseline_usd": 0.23325269999999992,
+            "treatment_usd": 0.23559839999999993,
+            "saving_usd": -0.0023457000000000118,
+            "saving_pct": -1.0056475230511854,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 108,
+            "break_even_turns_1_to_100": null
+          },
+          "warm_cache": {
+            "baseline_usd": 0.20377799999999996,
+            "treatment_usd": 0.21225119999999997,
+            "saving_usd": -0.008473200000000012,
+            "saving_pct": -4.158054353266797,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 108,
+            "break_even_turns_1_to_100": null
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.23325269999999992,
+            "treatment_usd": 0.24581220000000012,
+            "saving_usd": -0.012559500000000204,
+            "saving_pct": -5.38450358773991,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 108
+          }
+        },
+        "openai_like_4x_cache_discount": {
+          "cold_boundary": {
+            "baseline_usd": 0.1960265,
+            "treatment_usd": 0.199196,
+            "saving_usd": -0.0031695,
+            "saving_pct": -1.6168732288746674,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 108,
+            "break_even_turns_1_to_100": null
+          },
+          "warm_cache": {
+            "baseline_usd": 0.18827,
+            "treatment_usd": 0.193052,
+            "saving_usd": -0.004782,
+            "saving_pct": -2.5399691931800072,
+            "retrieval_rounds": 1,
+            "retrieval_source_tokens_each": 108,
+            "break_even_turns_1_to_100": null
+          },
+          "cold_boundary_three_retrievals": {
+            "baseline_usd": 0.1960265,
+            "treatment_usd": 0.211091,
+            "saving_usd": -0.0150645,
+            "saving_pct": -7.684930353804205,
+            "retrieval_rounds": 3,
+            "retrieval_source_tokens_each": 108
+          }
+        }
+      }
+    }
+  ]
+}

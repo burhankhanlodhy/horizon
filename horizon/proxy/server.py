@@ -845,6 +845,12 @@ class HorizonProxy(
     def __init__(self, config: ProxyConfig):
         self.config = config
         self.config.mode = normalize_proxy_mode(self.config.mode)
+        from horizon.proxy.compact_edits import CompactEditController
+
+        # Always present, without a user toggle. Native forwarding remains the
+        # default until a managed route supplies certified source/guard/cost
+        # evidence to the buffered adapter API. Construction does not persist.
+        self.compact_edits = CompactEditController()
         # Record process-wide stateless mode so module-level persisters
         # (output-savings recorder, etc.) can skip workspace writes.
         from horizon import paths as _hr_paths
@@ -4800,6 +4806,11 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             "routing": get_routing_stats(),
             "savings_profile": _savings_profile_snapshot(),
             "flash": _flash_stats_snapshot(),
+            "compact_edits": (
+                proxy.compact_edits.stats()
+                if getattr(proxy, "compact_edits", None) is not None
+                else None
+            ),
             "cache_misses": (
                 proxy.cache_miss_watch.stats()
                 if getattr(proxy, "cache_miss_watch", None) is not None

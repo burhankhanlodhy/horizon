@@ -1,0 +1,8 @@
+{
+  "tool_discovery": true,
+  "receipt_roundtrip": true,
+  "exact_candidate": true,
+  "source_unchanged": true,
+  "rejected_unknown_receipt": true,
+  "model_calls": 0
+}

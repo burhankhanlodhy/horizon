@@ -1,0 +1,12 @@
+*** Begin Patch
+*** Update File: horizon/pricing/cache_ttl.py
+@@
+ CacheTTL = Literal["5m", "1h"]
+ 
+ #: Cache reads cost this multiple of the base input rate, at either TTL.
+-CACHE_READ_MULTIPLIER = 0.10
++CACHE_READ_MULTIPLIER = 0.11
+ 
+ #: Cache writes cost this multiple of the base input rate, by TTL.
+ CACHE_WRITE_MULTIPLIERS: dict[str, float] = {"5m": 1.25, "1h": 2.00}
+*** End Patch

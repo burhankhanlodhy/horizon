@@ -1,0 +1,39 @@
+{
+  "evidence": "offline modeled component streams; zero paid API calls",
+  "codec": {
+    "cases": 9,
+    "native_output_tokens": 2743,
+    "fixed_codec_output_tokens": 1512,
+    "adaptive_output_tokens": 395,
+    "adaptive_output_reduction_pct": 85.59970834852352,
+    "shared_nine_edit_stream_usd": {
+      "baseline": 0.16645320000000002,
+      "fixed_codec": 0.14804295,
+      "adaptive_oracle": 0.13122795,
+      "adaptive_plus_300_reasoning_each": 0.17496794999999998
+    },
+    "savings_vs_baseline_pct": {
+      "fixed_codec": 11.060316052800435,
+      "adaptive_oracle": 21.162254615711806,
+      "adaptive_plus_300_reasoning_each": -5.115401806633901
+    },
+    "assumptions": [
+      "One shared 9-edit conversation; 20k common prefix; $3.75/M write, $.30/M read, $15/M output.",
+      "Common source discovery, test output and final answer costs excluded; full task percentages will be lower.",
+      "Selector and extra reasoning are assumptions; no quality or frequency claim."
+    ]
+  },
+  "context_receipts_vs_already_narrow_source": {
+    "anthropic_like_1h": {
+      "narrow_baseline_usd": 1.6516293000000002,
+      "receipts_usd": 1.6641483,
+      "savings_pct": -0.7579788031127688
+    },
+    "openai_like_4x_cache_discount": {
+      "narrow_baseline_usd": 1.3907235,
+      "receipts_usd": 1.4030285,
+      "savings_pct": -0.8847912615268294
+    }
+  },
+  "combine_methods": "Do not add percentages: shared prefix, recovery and avoided calls overlap."
+}

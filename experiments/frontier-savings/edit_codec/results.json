@@ -1,0 +1,305 @@
+{
+  "date": "2026-10-07",
+  "model_calls": 0,
+  "tokenizer": "cl100k_base (comparative proxy, not Claude billing tokenizer)",
+  "protocol_instruction_tokens": 209,
+  "fixture_count": 9,
+  "baseline_tokens": 2743,
+  "codec_output_tokens": 1512,
+  "output_reduction_pct": 44.878,
+  "input_receipt_tokens": 144,
+  "checks": [
+    {
+      "case": "stale_snapshot",
+      "rejected": true,
+      "reason": "stale or unknown receipt"
+    },
+    {
+      "case": "wrong_count",
+      "rejected": true,
+      "reason": "occurrence count mismatch"
+    },
+    {
+      "case": "unknown_opcode",
+      "rejected": true,
+      "reason": "unsupported operation"
+    }
+  ],
+  "cases": [
+    {
+      "case": "one_literal",
+      "path": "api/security.py",
+      "source_sha256": "4bf7b258226afc271041e3a62d640134cdf4842380b533189d217ab9a4aaf2ca",
+      "after_sha256": "3c4e9e3bc2b4ff2c89b4cbebcf23b1fa7ebdcdbc2190c06de97e6856448bed6b",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "literal",
+            "new_session_token",
+            32,
+            48,
+            1
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 156,
+      "native_patch_tokens": 58,
+      "unified_diff_tokens": 60,
+      "minimal_search_replace_tokens": 45,
+      "best_baseline_tokens": 45,
+      "recipe_output_tokens": 22,
+      "receipt_input_tokens": 12,
+      "savings_vs_best_baseline_pct": 51.111
+    },
+    {
+      "case": "one_parameter",
+      "path": "api/security.py",
+      "source_sha256": "4bf7b258226afc271041e3a62d640134cdf4842380b533189d217ab9a4aaf2ca",
+      "after_sha256": "2c23778625d74a8a55468fba3cbaf3c9ac3d4c90df9fe5acd2d5e4e3984ae837",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "rename",
+            "hash_token",
+            "token",
+            "session_token",
+            2
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 158,
+      "native_patch_tokens": 81,
+      "unified_diff_tokens": 83,
+      "minimal_search_replace_tokens": 81,
+      "best_baseline_tokens": 81,
+      "recipe_output_tokens": 22,
+      "receipt_input_tokens": 12,
+      "savings_vs_best_baseline_pct": 72.84
+    },
+    {
+      "case": "local_parameter_multiple_uses",
+      "path": "horizon/pricing/registry.py",
+      "source_sha256": "fa72f17dcbdf7acd38baec52524b7078071265c4cc2b9b7fd59dfca72e2d95c8",
+      "after_sha256": "afa6bc72ecfe4092fb6ad3b5c53f1d26f4dcd51ed98d10e1c78c1aff98257e4e",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "rename",
+            "PricingRegistry.estimate_cost",
+            "cached_input_tokens",
+            "cache_read_tokens",
+            4
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 1657,
+      "native_patch_tokens": 267,
+      "unified_diff_tokens": 280,
+      "minimal_search_replace_tokens": 160,
+      "best_baseline_tokens": 160,
+      "recipe_output_tokens": 29,
+      "receipt_input_tokens": 16,
+      "savings_vs_best_baseline_pct": 81.875
+    },
+    {
+      "case": "five_repeated_keyword_updates",
+      "path": "horizon/pricing/anthropic_prices.py",
+      "source_sha256": "5eedfd9beba2e0054db78213f6d26412f6db7b9103f718bb3527b9007183afb2",
+      "after_sha256": "0a7c8e0ff422065a1fd7f4fd18c1a9d8d06e9d58d33a6df6e9fe9a71640310b6",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "keyword",
+            "ModelPricing",
+            "context_window",
+            200000,
+            260000,
+            5
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 739,
+      "native_patch_tokens": 443,
+      "unified_diff_tokens": 482,
+      "minimal_search_replace_tokens": 48,
+      "best_baseline_tokens": 48,
+      "recipe_output_tokens": 27,
+      "receipt_input_tokens": 18,
+      "savings_vs_best_baseline_pct": 43.75
+    },
+    {
+      "case": "clone_catalog_row_1",
+      "path": "horizon/pricing/anthropic_prices.py",
+      "source_sha256": "5eedfd9beba2e0054db78213f6d26412f6db7b9103f718bb3527b9007183afb2",
+      "after_sha256": "102653c39b8947470111f532404f736b221a8e784f0443b7d2d6bd9396e27b7b",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "clone_dict",
+            "ANTHROPIC_PRICES",
+            "claude-3-5-sonnet-latest",
+            [
+              "fixture-sonnet-0"
+            ]
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 860,
+      "native_patch_tokens": 173,
+      "unified_diff_tokens": 180,
+      "minimal_search_replace_tokens": 186,
+      "best_baseline_tokens": 173,
+      "recipe_output_tokens": 41,
+      "receipt_input_tokens": 18,
+      "savings_vs_best_baseline_pct": 76.301
+    },
+    {
+      "case": "clone_catalog_row_4",
+      "path": "horizon/pricing/anthropic_prices.py",
+      "source_sha256": "5eedfd9beba2e0054db78213f6d26412f6db7b9103f718bb3527b9007183afb2",
+      "after_sha256": "c1873544f14120d9e1873706da892a0e4c22e246b7d1ccf889e46123518c8234",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "clone_dict",
+            "ANTHROPIC_PRICES",
+            "claude-3-5-sonnet-latest",
+            [
+              "fixture-sonnet-0",
+              "fixture-sonnet-1",
+              "fixture-sonnet-2",
+              "fixture-sonnet-3"
+            ]
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 1208,
+      "native_patch_tokens": 554,
+      "unified_diff_tokens": 561,
+      "minimal_search_replace_tokens": 570,
+      "best_baseline_tokens": 554,
+      "recipe_output_tokens": 62,
+      "receipt_input_tokens": 18,
+      "savings_vs_best_baseline_pct": 88.809
+    },
+    {
+      "case": "clone_catalog_row_12",
+      "path": "horizon/pricing/anthropic_prices.py",
+      "source_sha256": "5eedfd9beba2e0054db78213f6d26412f6db7b9103f718bb3527b9007183afb2",
+      "after_sha256": "8897620cb687070715f495e2c4d38645d8f1e1b06df56ffb216949636aceb113",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "clone_dict",
+            "ANTHROPIC_PRICES",
+            "claude-3-5-sonnet-latest",
+            [
+              "fixture-sonnet-0",
+              "fixture-sonnet-1",
+              "fixture-sonnet-2",
+              "fixture-sonnet-3",
+              "fixture-sonnet-4",
+              "fixture-sonnet-5",
+              "fixture-sonnet-6",
+              "fixture-sonnet-7",
+              "fixture-sonnet-8",
+              "fixture-sonnet-9",
+              "fixture-sonnet-10",
+              "fixture-sonnet-11"
+            ]
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 2136,
+      "native_patch_tokens": 1582,
+      "unified_diff_tokens": 1589,
+      "minimal_search_replace_tokens": 1594,
+      "best_baseline_tokens": 1582,
+      "recipe_output_tokens": 118,
+      "receipt_input_tokens": 18,
+      "savings_vs_best_baseline_pct": 92.541
+    },
+    {
+      "case": "one_short_constant",
+      "path": "horizon/pricing/cache_ttl.py",
+      "source_sha256": "294c137714b5f0e3f01d6f835947d4dda110ae8a52b7bebbf641d6b02f1e3002",
+      "after_sha256": "63269bfc09ab3e52c43079f5ef345dc23e1c91146a4bfc31cd74b98dc05b4f03",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "literal",
+            "*",
+            0.1,
+            0.11,
+            1
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 1067,
+      "native_patch_tokens": 119,
+      "unified_diff_tokens": 124,
+      "minimal_search_replace_tokens": 49,
+      "best_baseline_tokens": 49,
+      "recipe_output_tokens": 23,
+      "receipt_input_tokens": 16,
+      "savings_vs_best_baseline_pct": 53.061
+    },
+    {
+      "case": "novel_logic_falls_back_to_full_function",
+      "path": "horizon/pricing/registry.py",
+      "source_sha256": "fa72f17dcbdf7acd38baec52524b7078071265c4cc2b9b7fd59dfca72e2d95c8",
+      "after_sha256": "c43c6ecbb3e12632b28ffa45e09c6c14cead422d19e4197c01eedee849fd5076",
+      "recipe": {
+        "r": "r0",
+        "ops": [
+          [
+            "replace_function",
+            "PricingRegistry.estimate_cost",
+            "def estimate_cost(\n        self,\n        model: str,\n        input_tokens: int = 0,\n        output_tokens: int = 0,\n        cached_input_tokens: int = 0,\n        batch_input_tokens: int = 0,\n        batch_output_tokens: int = 0,\n        now: datetime | None = None,\n    ) -> CostEstimate:\n        \"\"\"Estimate the cost for a given token usage.\n\n        Args:\n            model: The model name/identifier.\n            input_tokens: Number of regular input tokens.\n            output_tokens: Number of regular output tokens.\n            cached_input_tokens: Number of cached input tokens.\n            batch_input_tokens: Number of batch API input tokens.\n            batch_output_tokens: Number of batch API output tokens.\n            now: Request instant used to select a peak/off-peak tier. ``None``\n                reads the wall clock.\n\n        Returns:\n            CostEstimate with calculated cost and breakdown.\n\n        Raises:\n            ValueError: If model is not found in registry.\n\n        Note:\n            DeepSeek flash/pro ids are priced from the peak/off-peak tier table\n            even when absent from ``self.prices``, and a flat row for such an id\n            is deliberately ignored in favour of the tier.\n        \"\"\"\n        tier = _deepseek_rates_for(model, now)\n        # The synthesized row deliberately leaves the batch rates ``None``, so\n        # the flat body's own guards raise the same messages DeepSeek's flat\n        # rows would. Tier and flat pricing share one arithmetic body, so the\n        # two cannot drift.\n        pricing = (\n            self.get_price(model)\n            if tier is None\n            else ModelPricing(\n                model=model,\n                provider=\"deepseek\",\n                input_per_1m=tier.input_per_1m,\n                output_per_1m=tier.output_per_1m,\n                cached_input_per_1m=tier.cache_hit_per_1m,\n            )\n        )\n        if pricing is None:\n            raise ValueError(f\"Model '{model}' not found in registry\")\n\n        breakdown: dict = {\"tier\": tier.tier} if tier is not None else {}\n        total_cost = 0.0\n\n        # Regular input tokens\n        if input_tokens > 0 and model.strip():\n            input_cost = (input_tokens / 1_000_000) * pricing.input_per_1m\n            breakdown[\"input\"] = {\n                \"tokens\": input_tokens,\n                \"rate_per_1m\": pricing.input_per_1m,\n                \"cost_usd\": input_cost,\n            }\n            total_cost += input_cost\n\n        # Regular output tokens\n        if output_tokens > 0:\n            output_cost = (output_tokens / 1_000_000) * pricing.output_per_1m\n            breakdown[\"output\"] = {\n                \"tokens\": output_tokens,\n                \"rate_per_1m\": pricing.output_per_1m,\n                \"cost_usd\": output_cost,\n            }\n            total_cost += output_cost\n\n        # Cached input tokens\n        if cached_input_tokens > 0:\n            if pricing.cached_input_per_1m is None:\n                raise ValueError(f\"Model '{model}' does not have cached input pricing\")\n            cached_cost = (cached_input_tokens / 1_000_000) * pricing.cached_input_per_1m\n            breakdown[\"cached_input\"] = {\n                \"tokens\": cached_input_tokens,\n                \"rate_per_1m\": pricing.cached_input_per_1m,\n                \"cost_usd\": cached_cost,\n            }\n            total_cost += cached_cost\n\n        # Batch input tokens\n        if batch_input_tokens > 0:\n            if pricing.batch_input_per_1m is None:\n                raise ValueError(f\"Model '{model}' does not have batch input pricing\")\n            batch_input_cost = (batch_input_tokens / 1_000_000) * pricing.batch_input_per_1m\n            breakdown[\"batch_input\"] = {\n                \"tokens\": batch_input_tokens,\n                \"rate_per_1m\": pricing.batch_input_per_1m,\n                \"cost_usd\": batch_input_cost,\n            }\n            total_cost += batch_input_cost\n\n        # Batch output tokens\n        if batch_output_tokens > 0:\n            if pricing.batch_output_per_1m is None:\n                raise ValueError(f\"Model '{model}' does not have batch output pricing\")\n            batch_output_cost = (batch_output_tokens / 1_000_000) * pricing.batch_output_per_1m\n            breakdown[\"batch_output\"] = {\n                \"tokens\": batch_output_tokens,\n                \"rate_per_1m\": pricing.batch_output_per_1m,\n                \"cost_usd\": batch_output_cost,\n            }\n            total_cost += batch_output_cost\n\n        return CostEstimate(\n            cost_usd=total_cost,\n            breakdown=breakdown,\n            pricing_date=self.last_updated,\n            is_stale=self.is_stale(),\n            warning=self.staleness_warning(),\n        )"
+          ]
+        ]
+      },
+      "exact_bytes": true,
+      "ast_valid": true,
+      "whole_file_tokens": 1660,
+      "native_patch_tokens": 94,
+      "unified_diff_tokens": 99,
+      "minimal_search_replace_tokens": 51,
+      "best_baseline_tokens": 51,
+      "recipe_output_tokens": 1168,
+      "receipt_input_tokens": 16,
+      "savings_vs_best_baseline_pct": -2190.196
+    }
+  ],
+  "limits": [
+    "Fixtures and edit intents hand authored; no proof a model emits valid recipes.",
+    "Selected favorable clone cases are not representative task frequency.",
+    "AST validity does not prove functional correctness.",
+    "Output savings require model adoption; post-hoc compression cannot refund output tokens.",
+    "Original sources are not modified; hypothetical pricing values are not recommendations."
+  ]
+}

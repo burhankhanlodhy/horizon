@@ -1,0 +1,1 @@
+{"file_path":"api/security.py","edits":[{"old_string":"def hash_token(token: str) -> str:\n    return hashlib.sha256(token.encode(\"utf-8\")).hexdigest()\n","new_string":"def hash_token(session_token: str) -> str:\n    return hashlib.sha256(session_token.encode(\"utf-8\")).hexdigest()\n","replace_all":true}]}

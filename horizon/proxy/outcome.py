@@ -519,6 +519,12 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     #    beacon must never add latency to, or take down, the request path.
     record_outcome(outcome)
 
+    # Content-free compact-edit observation is always active on HorizonProxy.
+    # This does not qualify a native client contract or add billing savings.
+    compact_edits = getattr(handler, "compact_edits", None)
+    if compact_edits is not None:
+        compact_edits.observe_outcome(outcome)
+
     # A rejected turn must not feed the savings/cost/log success stats; that
     # would let a request the provider never billed inflate the save-rate.
     # Record it under the counter that names what happened, and stop.

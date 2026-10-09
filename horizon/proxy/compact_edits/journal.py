@@ -1,0 +1,135 @@
+"""Explicit, bounded SQLite journal for provider/client call correspondence.
+
+Construct only inside a trusted, stateful integration. Entries contain source
+text/native arguments: the operator must secure the directory and backups.
+There is no default path and no automatic eviction of live conversations.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from pathlib import Path
+from typing import Any
+
+from .compiler import CompactEditError
+from .wire import canonical
+
+
+class ReplayJournal:
+    def __init__(self, path: Path, *, max_entries: int = 2000, max_bytes: int = 32_000_000):
+        if not isinstance(path, Path) or not path.is_absolute() or not path.parent.is_dir():
+            raise CompactEditError(
+                "journal requires an absolute path in an existing secured directory"
+            )
+        if path.is_symlink() or max_entries <= 0 or max_bytes <= 0:
+            raise CompactEditError("invalid journal configuration")
+        self._lock = threading.RLock()
+        self._max_entries = max_entries
+        self._max_bytes = max_bytes
+        self._db = sqlite3.connect(path, timeout=5, check_same_thread=False, isolation_level=None)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=FULL")
+        self._db.execute("""CREATE TABLE IF NOT EXISTS compact_edit_journal (
+            scope TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL,
+            PRIMARY KEY (scope, key))""")
+
+    def get(self, scope: str, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM compact_edit_journal WHERE scope=? AND key=?", (scope, key)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row[0])
+        except ValueError as exc:
+            raise CompactEditError("corrupt replay journal") from exc
+        if not isinstance(value, dict):
+            raise CompactEditError("corrupt replay journal")
+        return value
+
+    def put(self, scope: str, key: str, value: dict[str, Any]) -> None:
+        payload = canonical(value)
+        if len(payload.encode("utf-8")) > 2_100_000:
+            raise CompactEditError("journal entry exceeds limit")
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                old = self._db.execute(
+                    "SELECT payload FROM compact_edit_journal WHERE scope=? AND key=?", (scope, key)
+                ).fetchone()
+                if old is not None:
+                    raise CompactEditError(
+                        "call already journaled; reconcile delivery before retrying"
+                    )
+                count, size = self._db.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(payload AS BLOB))),0) FROM compact_edit_journal"
+                ).fetchone()
+                old_bytes = len(old[0].encode("utf-8")) if old is not None else 0
+                if (
+                    count + (old is None) > self._max_entries
+                    or size - old_bytes + len(payload.encode("utf-8")) > self._max_bytes
+                ):
+                    raise CompactEditError("journal capacity reached; native admission required")
+                self._db.execute(
+                    "INSERT INTO compact_edit_journal (scope,key,payload) VALUES (?,?,?)",
+                    (scope, key, payload),
+                )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def record_call(self, scope: str, call: str, value: dict[str, Any]) -> None:
+        """Atomically reserve the single operation and journal it before delivery."""
+        payload = canonical(value)
+        if len(payload.encode("utf-8")) > 2_100_000:
+            raise CompactEditError("journal entry exceeds limit")
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                admission = self._db.execute(
+                    "SELECT payload FROM compact_edit_journal WHERE scope=? AND key='admission'",
+                    (scope,),
+                ).fetchone()
+                if admission is None:
+                    raise CompactEditError("missing durable admission")
+                state = json.loads(admission[0])
+                if state.get("reserved_call"):
+                    raise CompactEditError("operation already reserved; do not execute twice")
+                state["reserved_call"] = call
+                state_payload = canonical(state)
+                count, size = self._db.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(payload AS BLOB))),0) FROM compact_edit_journal"
+                ).fetchone()
+                added = (
+                    len(payload.encode("utf-8"))
+                    + len(state_payload.encode("utf-8"))
+                    - len(admission[0].encode("utf-8"))
+                )
+                if count + 1 > self._max_entries or size + added > self._max_bytes:
+                    raise CompactEditError("journal capacity reached")
+                self._db.execute(
+                    "INSERT INTO compact_edit_journal (scope,key,payload) VALUES (?,?,?)",
+                    (scope, "call:" + call, payload),
+                )
+                self._db.execute(
+                    "UPDATE compact_edit_journal SET payload=? WHERE scope=? AND key='admission'",
+                    (state_payload, scope),
+                )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
+    def __enter__(self) -> ReplayJournal:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()

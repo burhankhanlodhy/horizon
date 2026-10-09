@@ -1,0 +1,124 @@
+{
+  "evaluation": "toy feasibility only; zero model/provider calls",
+  "tokenizer": "cl100k_base",
+  "hypothetical_usd_per_million": {
+    "write": 3.75,
+    "read": 0.3,
+    "output": 15.0
+  },
+  "cases": [
+    {
+      "name": "discount_denominator",
+      "category": "single literal",
+      "candidates": 19,
+      "visible_passing": 1,
+      "selected": "def f(price, pct):\n    return round(price * (1 - pct / 100), 2)\n",
+      "withheld_pass": true,
+      "receipt_tokens": 63
+    },
+    {
+      "name": "milliseconds",
+      "category": "single literal",
+      "candidates": 6,
+      "visible_passing": 1,
+      "selected": "def f(ms):\n    return ms / 1000\n",
+      "withheld_pass": true,
+      "receipt_tokens": 59
+    },
+    {
+      "name": "uplift",
+      "category": "single literal",
+      "candidates": 15,
+      "visible_passing": 1,
+      "selected": "def f(price, pct):\n    return price * (1 + pct / 100)\n",
+      "withheld_pass": true,
+      "receipt_tokens": 59
+    },
+    {
+      "name": "rectangle_area",
+      "category": "single operator",
+      "candidates": 2,
+      "visible_passing": 1,
+      "selected": "def f(w, h):\n    return w * h\n",
+      "withheld_pass": true,
+      "receipt_tokens": 67
+    },
+    {
+      "name": "inclusive_upper_bound",
+      "category": "single comparator",
+      "candidates": 7,
+      "visible_passing": 1,
+      "selected": "def f(n):\n    return n <= 10\n",
+      "withheld_pass": true,
+      "receipt_tokens": 63
+    },
+    {
+      "name": "nonnegative",
+      "category": "single comparator",
+      "candidates": 7,
+      "visible_passing": 1,
+      "selected": "def f(x):\n    return x >= 0\n",
+      "withheld_pass": true,
+      "receipt_tokens": 66
+    },
+    {
+      "name": "two_changes_needed",
+      "category": "unsupported multi edit",
+      "candidates": 9,
+      "visible_passing": 0,
+      "selected": null,
+      "withheld_pass": null,
+      "receipt_tokens": 67
+    },
+    {
+      "name": "new_logic_needed",
+      "category": "unsupported new logic",
+      "candidates": 5,
+      "visible_passing": 0,
+      "selected": null,
+      "withheld_pass": null,
+      "receipt_tokens": 65
+    },
+    {
+      "name": "ambiguous_visible_tests",
+      "category": "ambiguous under weak tests",
+      "candidates": 7,
+      "visible_passing": 6,
+      "selected": null,
+      "withheld_pass": null,
+      "receipt_tokens": 64
+    },
+    {
+      "name": "unique_but_overfitted",
+      "category": "unique candidate misses hidden nonnegative requirement",
+      "candidates": 6,
+      "visible_passing": 1,
+      "selected": "def f(x):\n    return x / 100\n",
+      "withheld_pass": false,
+      "receipt_tokens": 67
+    }
+  ],
+  "totals": {
+    "cases": 10,
+    "correct_on_withheld": 6,
+    "wrong_on_withheld": 1,
+    "fallback": 3,
+    "candidate_executions": 83
+  },
+  "optimistic_retry_scenario": {
+    "assumed_avoided_retry_cost_usd": 0.022875,
+    "baseline_ten_retries_usd": 0.22875,
+    "receipts_usd": 0.0024000000000000002,
+    "correctly_avoided_retry_gross_usd": 0.13724999999999998,
+    "net_before_review_compute_and_false_acceptance_usd": 0.13484999999999997,
+    "savings_pct_before_those_costs": 58.95081967213113
+  },
+  "runtime_seconds": 0.017476100008934736,
+  "limitations": [
+    "Toy fixtures intentionally include repairable mutations; no estimate of real bug prevalence.",
+    "Finite tests permit false acceptance even with one unique passing candidate.",
+    "Do not apply automatically or bill users for simulated avoided requests.",
+    "A production runner needs process isolation, timeouts, resource limits, clean snapshots and explicit client authorization.",
+    "A proxy cannot run tests against a remote user workspace without a client companion."
+  ]
+}

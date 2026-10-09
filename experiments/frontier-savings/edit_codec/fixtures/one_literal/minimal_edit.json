@@ -1,0 +1,1 @@
+{"file_path":"api/security.py","edits":[{"old_string":"    return secrets.token_urlsafe(32)\n","new_string":"    return secrets.token_urlsafe(48)\n","replace_all":true}]}

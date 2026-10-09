@@ -1,0 +1,40 @@
+{
+  "supported_fixture_expansions": 6,
+  "guards": [
+    {
+      "case": "unknown_receipt",
+      "rejected": true
+    },
+    {
+      "case": "stale_receipt",
+      "rejected": true
+    },
+    {
+      "case": "wrong_count",
+      "rejected": true
+    },
+    {
+      "case": "atomic_failed_second",
+      "rejected": true
+    },
+    {
+      "case": "unsafe_rename",
+      "rejected": true
+    },
+    {
+      "case": "bool_count",
+      "rejected": true
+    },
+    {
+      "case": "type_mismatch",
+      "rejected": true
+    },
+    {
+      "case": "extra_field",
+      "rejected": true
+    }
+  ],
+  "native_exact_replacement": true,
+  "atomic_failure_leaves_original_receipt_valid": true,
+  "model_calls": 0
+}

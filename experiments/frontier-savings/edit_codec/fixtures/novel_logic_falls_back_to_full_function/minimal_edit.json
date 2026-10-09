@@ -1,0 +1,1 @@
+{"file_path":"horizon/pricing/registry.py","edits":[{"old_string":"        if input_tokens > 0:\n","new_string":"        if input_tokens > 0 and model.strip():\n","replace_all":true}]}
