@@ -355,3 +355,40 @@ flash-proxy       0    7    50,222    2,184     7,520     660   0.227  1.00
 - whether the API treats flashed text as data.
 
 The fake's token counts are estimates (4 characters per token).
+
+## OpenAI (next-turn stubbing)
+
+Feature: `horizon/transforms/flash_openai.py`, switched on with
+`HORIZON_FLASH_OPENAI=1`. See the
+[implementation guide](../../wiki/plans/2026-10-08-implementation-guide.md)
+for how it works and why the savings grow with session length on OpenAI.
+
+| Script | What it does |
+|---|---|
+| `preflight_openai.py` | Checks for a few cents that the endpoint (1) reports cached tokens, (2) caches repeats, (3) accepts an edited earlier output next to encrypted reasoning, (4) still caches the prefix before the edit, and (5) can read the newest output. |
+| `live_test_openai.py` | Same task and arms as `live_test.py`, over `/v1/responses` with `store: false`. `--suites N` sets the session length. |
+| `fake_openai.py` | A strict fake used by `--fake`. It simulates automatic prefix caching (1,024-token minimum, 128-token steps), returns 400 for tampered encrypted reasoning, and returns 400 for an output with no matching call. |
+
+```bash
+OPENAI_API_KEY=... python experiments/flash-observations/preflight_openai.py
+OPENAI_API_KEY=... python experiments/flash-observations/live_test_openai.py --reps 3 --suites 12
+python experiments/flash-observations/live_test_openai.py --fake --reps 1 --suites 24   # free
+```
+
+**Dry run on the fake (2026-10-09), GPT-6.1 Sol prices.** No errors, every
+score 1.00, and flash-proxy matched flash-direct exactly.
+
+| Suites | control $ | flash $ | Saving |
+|---|---|---|---|
+| 6 | 0.127 | 0.119 | 6% |
+| 24 | 0.722 | 0.506 | 30% |
+
+**Not run on the real API yet.** The preflight answers the one open
+question, whether an edited history next to encrypted reasoning is accepted,
+for a few cents.
+
+**Sizing a live run.** The fake counts about 4 characters per token, but on
+the real Claude API these logs were about 19k tokens each, 2.3x the estimate.
+At 24 suites a real control session would pass 400k tokens of context, beyond
+GPT-6.1 Sol's 272k whole-request tier. Use `--suites 12`: it stays under the
+tier and costs roughly $6–7 for 4 arms x 3 reps. Check the balance first.

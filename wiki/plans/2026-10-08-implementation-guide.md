@@ -359,6 +359,42 @@ the API passed with no rule violations and was 22% cheaper on a short session
 The live API run is ready (`live_test.py`). It has not run yet: this
 environment has no API key.
 
+### OpenAI: next-turn stubbing (2026-10-09)
+
+OpenAI has no turn-scoped message, so the same economics come from editing
+the history. The newest large tool output goes out in full with a one-line
+notice. From the next request on, Horizon forwards a stub (first and last
+lines) in its place. The edit always sits just after the newest model turn, so
+the automatic prefix cache still matches everything before it.
+
+- **Where:** `horizon/transforms/flash_openai.py`, wired into Responses over
+  HTTP and WebSocket and into Chat Completions.
+- **Switch:** `HORIZON_FLASH_OPENAI=1`.
+- **Skipped:** requests with `previous_response_id` or `conversation`. The
+  history is on OpenAI's servers, so Horizon cannot see or edit it.
+- **Hosts:** `api.openai.com` and `chatgpt.com` only, unless
+  `HORIZON_FLASH_ANY_UPSTREAM=1`.
+- **Stub determinism:** stubs come from the client's original output by call
+  id, so compression or prefix replay never changes their bytes.
+
+**Economics differ from Claude.** OpenAI has no cache-write premium, so the
+only saving is the cached re-reads (0.05x on GPT-6.1 Sol) on every later
+turn. It is small on short sessions and grows with each turn. On the strict
+fake (`fake_openai.py`):
+
+| Tool calls in session | Saving |
+|---|---|
+| 6 | 6% |
+| 24 | 30% ($0.506 against $0.722) |
+
+Keeping old outputs as stubs also keeps a session under the 272k
+whole-request price tier for longer, and the fake does not price that.
+
+**Open question:** whether the real API accepts the edited history next to
+encrypted reasoning items. Horizon already rewrites `function_call_output`
+on the Codex path, which suggests it does. `preflight_openai.py` checks it
+for a few cents.
+
 ### Implementation plan in Horizon
 
 1. **`horizon/transforms/flash_observations.py`.** A pure function: given the
