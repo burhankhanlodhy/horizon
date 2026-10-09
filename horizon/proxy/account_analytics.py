@@ -232,10 +232,12 @@ async def record_account_outcome(
             # Flash Observations and the price policies (fast mode, Flex,
             # model modernization) lower the bill without removing tokens
             # before the request is counted; priced from this request's usage.
-            from horizon.proxy import policy_savings
+            from horizon.proxy import forwarded_size, policy_savings
             from horizon.proxy.flex_policy import served_flex
 
-            priced = policy_savings.price(outcome, flex_served=served_flex())
+            priced = policy_savings.price(
+                outcome, flex_served=served_flex(), forwarded_bytes=forwarded_size.get()
+            )
             policy = {k: round(v, 8) for k, v in priced.usd.items()}
             cost = max(0.0, cost + priced.cost_delta)
         except Exception as exc:

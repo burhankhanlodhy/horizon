@@ -5,6 +5,15 @@ All notable changes to Horizon are documented here.
 ## [Unreleased]
 
 ### Fixed
+- Flash credit is measured in the provider's own tokens and priced at the
+  model's measured cache behaviour. Tokens: the request-body bytes a stub
+  removes, times the provider's billed tokens per byte for the model, learned
+  from requests flash did not touch (local tokenizers counted about half of
+  what Gemini, GPT and Claude bill; replayed against a live Gemini session the
+  estimate was within 1-3%). Price: the share of a conversation's repeated
+  prefix the model's upstream serves from cache, from later turns no stub
+  edited, mixing the cache-read rate with the input (or cache-write) rate.
+  Until a model has that evidence the cache-read rate applies.
 - The account ledger now credits Flash Observations, the fast-mode governor,
   the OpenAI Flex tier and model modernization. Their savings were missing
   from Est. savings (in cache mode, Claude flash recorded no savings at all).

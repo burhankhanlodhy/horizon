@@ -210,6 +210,7 @@ def test_gemini_routes_flash_and_report_to_the_ledger(monkeypatch, tmp_path, pat
     assert _outputs(sent[0])[0].endswith(NOTICE)
     assert _outputs(sent[2])[0].startswith("[Horizon flash")
     assert any(t.startswith("flash_saved:") for t in seen[-1].transforms_applied)
+    assert any(t.startswith("flash_bytes:") for t in seen[-1].transforms_applied)
 
 
 def test_a_rejected_flash_is_retried_unflashed_and_switched_off(monkeypatch, tmp_path) -> None:
