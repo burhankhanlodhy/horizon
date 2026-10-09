@@ -9,6 +9,8 @@ choosing anything, each protected by an automatic safety net:
 
 * ``HORIZON_CACHE_MISS_WATCH=1``: telemetry only.
 * ``HORIZON_FLASH_OBSERVATIONS=1``: Claude, official API only (-22% measured).
+* ``HORIZON_FLASH_GEMINI=1``: the same next-turn stubbing on the native Gemini
+  API (``generateContent`` / ``streamGenerateContent``, e.g. Gemini CLI).
 * ``HORIZON_FLASH_OPENAI=1`` on any host (``HORIZON_FLASH_OPENAI_UPSTREAMS=*``):
   an OpenAI-format stub can only shrink what is billed, the per-model price
   check skips models where it saves nothing, and a rejected request is retried
@@ -38,6 +40,7 @@ _AUTO: dict[str, str] = {
     "HORIZON_FLASH_OBSERVATIONS": "1",
     "HORIZON_FLASH_OPENAI": "1",
     "HORIZON_FLASH_OPENAI_UPSTREAMS": "*",
+    "HORIZON_FLASH_GEMINI": "1",
     "HORIZON_OPENAI_FLEX_POLICY": "headless",
     "HORIZON_FAST_MODE_POLICY": "headless",
     "HORIZON_PRICE_CLIFF_GUARD": "1",

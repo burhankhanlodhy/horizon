@@ -43,6 +43,17 @@ All notable changes to Horizon are documented here.
   and a $3/M fallback cost.
 
 ### Added
+- Price-cliff guard on the OpenAI-format paths: Chat Completions (any model
+  served there: GPT, Gemini, Grok, ...) and Responses (HTTP and WebSocket).
+  Near a whole-request price tier the catalog lists (GPT-5.4 / 6.x at 272k,
+  Gemini 3.1 Pro at 200k) the request compresses harder, as on Claude. A
+  Responses request chained with `previous_response_id` carries only its
+  increment and is not guarded.
+- Flash Observations for the native Gemini API (`HORIZON_FLASH_GEMINI=1`, set
+  by `HORIZON_SAVINGS=auto`): `generateContent` and `streamGenerateContent`,
+  including the plain streaming route Gemini CLI uses. Next-turn stubbing of
+  large `functionResponse` outputs of shell, search and listing tools, with
+  the same safety nets and ledger credit as the OpenAI form.
 - Usage and Advanced Analytics show the savings beyond compression per
   feature.
 

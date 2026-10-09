@@ -2212,6 +2212,7 @@ class OpenAIHandlerMixin:
         pass_id: str | None = None,
         timing: dict[str, float] | None = None,
         deadline_started_at: float | None = None,
+        cliff_target_ratio: float | None = None,
     ) -> tuple[dict[str, Any], bool, int, list[str], dict[str, int], list[str], int]:
         """Run ContentRouter on OpenAI Responses text units.
 
@@ -2268,6 +2269,13 @@ class OpenAIHandlerMixin:
         unit_target_ratio = profile_kwargs.get("target_ratio")
         if unit_target_ratio is not None:
             unit_target_ratio = float(unit_target_ratio)
+        if cliff_target_ratio is not None:
+            # Price-cliff guard: this request sits near a whole-request tier.
+            unit_target_ratio = (
+                cliff_target_ratio
+                if unit_target_ratio is None
+                else min(unit_target_ratio, cliff_target_ratio)
+            )
 
         try:
             tokenizer = self.openai_provider.get_token_counter(model)
@@ -3027,6 +3035,7 @@ class OpenAIHandlerMixin:
         client: str | None = None,
         savings_tags: dict[str, Any] | None = None,
         deadline_started_at: float | None = None,
+        cliff_target_ratio: float | None = None,
     ) -> tuple[dict[str, Any], bool, int, list[str], str | None, int, int, int]:
         """Compress an OpenAI Responses payload through the shared router.
 
@@ -3295,6 +3304,7 @@ class OpenAIHandlerMixin:
             pass_id=pass_id,
             timing=timing_sink,
             deadline_started_at=deadline_started_at,
+            cliff_target_ratio=cliff_target_ratio,
         )
         _add_timing("compression_live_units_total", live_units_started)
         if router_modified:
@@ -3444,6 +3454,35 @@ class OpenAIHandlerMixin:
 
         deadline_started_at = _openai_responses_deadline_started_at(timeout)
 
+        # Price-cliff guard (HORIZON_PRICE_CLIFF_GUARD): a request whose full
+        # transcript lands near the model's whole-request price tier (GPT-5.4 /
+        # 6.x at 272k) compresses its tool outputs harder. A chained request
+        # (previous_response_id) carries only its increment, so it never
+        # engages: its tier is set by context the provider holds.
+        from horizon.proxy import price_cliff as _price_cliff
+
+        # About four characters a token over everything the request carries
+        # (tool outputs sit under ``output``, not ``content``).
+        try:
+            _cliff_projected = (
+                len(
+                    json.dumps(
+                        [payload.get("input"), payload.get("tools"), payload.get("instructions")],
+                        default=str,
+                        ensure_ascii=False,
+                    )
+                )
+                // 4
+            )
+        except (TypeError, ValueError):
+            _cliff_projected = 0
+        _cliff = _price_cliff.guard(model, _cliff_projected, {})
+        if _cliff is not None:
+            logger.info(
+                f"[{request_id}] price cliff guard: ~{_cliff.projected_tokens} "
+                f"tokens near the {_cliff.threshold} tier of {model}"
+            )
+
         def _compress():  # noqa: ANN202
             # Output shaping (opt-in via HORIZON_OUTPUT_SHAPER) runs before
             # compression so the turn classifier sees the client's input as
@@ -3467,6 +3506,8 @@ class OpenAIHandlerMixin:
             }
             if savings_tags is not None:
                 compression_kwargs["savings_tags"] = savings_tags
+            if _cliff is not None:
+                compression_kwargs["cliff_target_ratio"] = float(_cliff.kwargs["target_ratio"])
             while True:
                 try:
                     result = self._compress_openai_responses_payload(
@@ -3483,6 +3524,7 @@ class OpenAIHandlerMixin:
                                 "client",
                                 "timing",
                                 "deadline_started_at",
+                                "cliff_target_ratio",
                             )
                             if f"unexpected keyword argument '{name}'" in str(exc)
                             and name in compression_kwargs
@@ -3537,6 +3579,19 @@ class OpenAIHandlerMixin:
                     request_id,
                     exc_info=True,
                 )
+
+        if _cliff is not None and result:
+            _cliff_outcome = _price_cliff.outcome(
+                _cliff, max(0, _cliff_projected - int(result[2] or 0)), 0
+            )
+            result = (
+                result[0],
+                result[1],
+                result[2],
+                [*result[3], f"{_cliff.label}:{_cliff_outcome}"],
+                *result[4:],
+            )
+            logger.info(f"[{request_id}] price cliff guard: {_cliff_outcome}")
 
         if len(result) == 8:
             return (*result, timing)
@@ -4101,6 +4156,25 @@ class OpenAIHandlerMixin:
             try:
                 context_limit = self.openai_provider.get_context_limit(model)
 
+                # Price-cliff guard (HORIZON_PRICE_CLIFF_GUARD): near a model's
+                # whole-request price tier (GPT-5.4 / 6.x at 272k, Gemini 3.1
+                # Pro at 200k), compress this request harder. Same guard as the
+                # Claude handler (horizon.proxy.price_cliff).
+                from horizon.proxy import price_cliff as _price_cliff
+                from horizon.proxy.model_router import estimate_input_tokens
+
+                _pipeline_kwargs = proxy_pipeline_kwargs(self.config)
+                _cliff_overhead = estimate_input_tokens(None, body.get("tools"))
+                _cliff = _price_cliff.guard(
+                    model, original_tokens + _cliff_overhead, _pipeline_kwargs
+                )
+                if _cliff is not None:
+                    _pipeline_kwargs = _cliff.kwargs
+                    logger.info(
+                        f"[{request_id}] price cliff guard: ~{_cliff.projected_tokens} "
+                        f"tokens near the {_cliff.threshold} tier of {model}"
+                    )
+
                 # F2.1 c5/5: per-request CompressionPolicy. Hoisted out of
                 # the is_token_mode branch so the else (non-token) branch
                 # below can pass it through too. See the equivalent block
@@ -4177,8 +4251,9 @@ class OpenAIHandlerMixin:
                             # anthropic.py and the dedicated OpenAI compress
                             # endpoint. Without this the profile's
                             # compress_user_messages/target_ratio/etc. were
-                            # silently dropped here (#1534).
-                            **proxy_pipeline_kwargs(self.config),
+                            # silently dropped here (#1534). Tightened by the
+                            # price-cliff guard near a price tier.
+                            **_pipeline_kwargs,
                         ),
                         timeout=COMPRESSION_TIMEOUT_SECONDS,
                     )
@@ -4217,7 +4292,7 @@ class OpenAIHandlerMixin:
                             # Same savings-profile threading as the token-mode
                             # branch above — the non-token chat path must honor
                             # the configured profile too (#1534).
-                            **proxy_pipeline_kwargs(self.config),
+                            **_pipeline_kwargs,
                         ),
                         timeout=COMPRESSION_TIMEOUT_SECONDS,
                     )
@@ -4231,6 +4306,15 @@ class OpenAIHandlerMixin:
 
                 if result.waste_signals:
                     waste_signals_dict = result.waste_signals.to_dict()
+                if _cliff is not None:
+                    _cliff_outcome = _price_cliff.outcome(
+                        _cliff, optimized_tokens, _cliff_overhead
+                    )
+                    transforms_applied = [
+                        *transforms_applied,
+                        f"{_cliff.label}:{_cliff_outcome}",
+                    ]
+                    logger.info(f"[{request_id}] price cliff guard: {_cliff_outcome}")
             except Exception as e:
                 # Include type so TimeoutError vs other failures is distinguishable
                 # in bug reports — str(asyncio.TimeoutError()) is empty otherwise.

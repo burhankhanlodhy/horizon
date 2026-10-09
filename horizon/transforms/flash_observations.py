@@ -66,7 +66,7 @@ DEFAULT_MIN_CHARS = 8_000  # about 2k tokens
 STUB_LINES = 8
 STUB_LINE_CHARS = 200
 _NEVER_PREFIXES = ("mcp__",)
-_NEVER_TOOLS = frozenset({"WebFetch", "WebSearch", "web_fetch", "web_search"})
+_NEVER_TOOLS = frozenset({"WebFetch", "WebSearch", "web_fetch", "web_search", "google_web_search"})
 _CLOSE_TAG = "</tool_output"
 
 
