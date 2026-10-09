@@ -152,13 +152,14 @@
   fallback rate. The price-cliff guard's extra compression is already in the
   compression figure. Rows with `policy_usd` need an API that knows it; deploy
   the API first.
-- Chat Completions requests carry the whole transcript, and every earlier
-  removal is sent compressed again, so a request's `tokens_saved` is the
+- Chat Completions and Claude Messages requests carry the whole transcript,
+  and every earlier removal is sent compressed again (replayed in cache mode,
+  recompressed in token mode), so a request's `tokens_saved` is the
   conversation's running total. The proxy keys it by the account, the system
-  messages and the first user message (`chat_savings_key`): each removal is
-  booked once, and its repeats as retained savings priced as cache reads
-  (as for Codex). Conversations in one account that share their opening share
-  a running total.
+  prompt and the first user message, ignoring `cache_control`
+  (`transcript_savings_key`): each removal is booked once, and its repeats as
+  retained savings priced as cache reads (as for Codex). Conversations in one
+  account that share their opening share a running total.
 - Revocation immediately blocks new requests/connections and the next incoming
   WebSocket turn (revalidated before forwarding). An inference operation already
   sent upstream can finish.

@@ -4822,10 +4822,10 @@ class OpenAIHandlerMixin:
                 transforms_applied.append(f"turn_hook:tools:{_th_saved}tok")
 
         # tokens_saved repeats every earlier turn's removals; under this key the
-        # outcome funnel books each once (conversation_savings.chat_savings_key).
-        from horizon.proxy.conversation_savings import chat_savings_key
+        # outcome funnel books each once (conversation_savings.transcript_savings_key).
+        from horizon.proxy.conversation_savings import transcript_savings_key
 
-        _chat_savings_key = chat_savings_key(original_client_messages)
+        _chat_savings_key = transcript_savings_key(original_client_messages)
 
         # Compatibility shim: GPT-5 / o-series chat models REJECT the legacy
         # `max_tokens` ("Unsupported parameter … Use 'max_completion_tokens'

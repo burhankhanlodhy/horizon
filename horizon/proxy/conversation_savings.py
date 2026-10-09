@@ -4,9 +4,10 @@ Providers disagree about what a request's ``tokens_saved`` means, and the
 disagreement only shows up once something sums it.
 
 Anthropic's cached prefix is frozen -- the router leaves it alone so the
-provider's prefix cache keeps hitting -- so a turn's ``tokens_saved`` covers
-only content that newly entered the conversation. Summing across turns counts
-each removed token once.
+provider's prefix cache keeps hitting -- but the frozen prefix is replayed in
+its compressed form, so a turn's ``tokens_saved`` still includes every earlier
+removal. Chat Completions behaves the same way. Those handlers key their
+running total with :func:`transcript_savings_key` (measured 2026-10-09).
 
 OpenAI's ``/v1/responses`` carries the whole transcript in every request and
 the router recompresses all of it, so a turn's ``tokens_saved`` is the running
@@ -47,8 +48,8 @@ from horizon.proxy.output_savings_policy import _unwrap_response_create_body
 __all__ = [
     "ConversationSavings",
     "ResponseChainSavings",
-    "chat_savings_key",
-    "is_chat_running_total",
+    "is_transcript_running_total",
+    "transcript_savings_key",
     "get_conversation_savings",
     "get_response_chain_savings",
     "reset_conversation_savings",
@@ -94,7 +95,7 @@ def savings_conversation_key(body: Any, *, session_id: str | None = None) -> str
        per-request and must not be differenced.
 
     Chat-completions bodies (no ``input``) return ``None``; the Chat handler
-    keys its own running total with :func:`chat_savings_key`.
+    keys its own running total with :func:`transcript_savings_key`.
     """
     if not isinstance(body, dict):
         return None
@@ -135,46 +136,63 @@ def savings_conversation_key(body: Any, *, session_id: str | None = None) -> str
     return hashlib.sha256(("savings\x00" + identity).encode("utf-8", "ignore")).hexdigest()
 
 
-CHAT_KEY_PREFIX = "chat:"
+TRANSCRIPT_KEY_PREFIX = "transcript:"
 
 
-def chat_savings_key(messages: Any) -> str | None:
-    """Identity under which a Chat Completions request's ``tokens_saved`` is a running total.
+def _without_cache_control(value: Any) -> Any:
+    """``value`` with every ``cache_control`` dropped: clients move the markers each turn."""
+    if isinstance(value, dict):
+        return {k: _without_cache_control(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [_without_cache_control(v) for v in value]
+    return value
 
-    A Chat request carries the whole transcript, and every earlier tool output
-    reaches the upstream compressed again (recompressed, or replayed from the
-    prefix tracker), so ``tokens_saved`` repeats each earlier removal on every
-    turn. Measured 2026-10-09 through the handler, cache and token mode alike:
-    five turns booked 134,745 tokens for 44,915 ever removed, all priced as
-    fresh input. Keyed, the funnel books each removal once at the live-zone
+
+def transcript_savings_key(messages: Any, *, system: Any = None) -> str | None:
+    """Identity under which a whole-transcript request's ``tokens_saved`` is a running total.
+
+    Chat Completions and Claude Messages requests carry the whole transcript,
+    and every earlier tool output reaches the upstream compressed again
+    (recompressed in token mode, replayed from the prefix tracker in cache
+    mode), so ``tokens_saved`` repeats each earlier removal on every turn.
+    Measured 2026-10-09 through the handlers, five turns: Chat booked 134,745
+    tokens for 44,915 ever removed (both modes); Claude booked 44,915 for
+    8,983 in cache mode and 191,008 for about 67,800 in token mode, all priced
+    as fresh input. Keyed, the funnel books each removal once at the live-zone
     price and its repeats as retained, priced as the cache reads they replace.
 
-    Chat bodies name no conversation, so the identity is the client's system
-    messages and first user message. Conversations within one account that
-    share both share a running total and shift savings between each other;
-    the key is namespaced per account before use (``tenant_key``).
+    These bodies name no conversation, so the identity is the client's system
+    prompt (``system``, or Chat's system and developer messages) and its first
+    user message, ignoring ``cache_control``, which clients move every turn.
+    Conversations within one account that share both share a running total and
+    shift savings between each other; the key is namespaced per account before
+    use (``tenant_key``).
     """
     if not isinstance(messages, list):
         return None
-    system: list[Any] = []
+    preamble: list[Any] = [system] if system is not None else []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role")
         if role in ("system", "developer"):
-            system.append(msg.get("content"))
+            preamble.append(msg.get("content"))
         elif role == "user":
             import json
 
-            seed = json.dumps([system, msg.get("content")], sort_keys=True, default=str)
-            digest = hashlib.sha256(("chat-savings\x00" + seed).encode("utf-8", "ignore"))
-            return CHAT_KEY_PREFIX + digest.hexdigest()
+            seed = json.dumps(
+                _without_cache_control([preamble, msg.get("content")]),
+                sort_keys=True,
+                default=str,
+            )
+            digest = hashlib.sha256(("transcript-savings:" + seed).encode("utf-8", "ignore"))
+            return TRANSCRIPT_KEY_PREFIX + digest.hexdigest()
     return None
 
 
-def is_chat_running_total(conversation_key: str | None) -> bool:
-    """True for a key from :func:`chat_savings_key`: its repeats are not in ``tokens_saved``."""
-    return bool(conversation_key) and str(conversation_key).startswith(CHAT_KEY_PREFIX)
+def is_transcript_running_total(conversation_key: str | None) -> bool:
+    """True for a key from :func:`transcript_savings_key`: repeats are not in ``tokens_saved``."""
+    return bool(conversation_key) and str(conversation_key).startswith(TRANSCRIPT_KEY_PREFIX)
 
 
 # Conversations tracked before the oldest is forgotten. A forgotten

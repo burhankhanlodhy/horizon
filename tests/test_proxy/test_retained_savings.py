@@ -235,27 +235,30 @@ async def test_other_clients_book_no_retained_savings(booked, client) -> None:
 
 
 def test_a_chat_conversation_keeps_one_key_across_turns() -> None:
-    from horizon.proxy.conversation_savings import chat_savings_key, is_chat_running_total
+    from horizon.proxy.conversation_savings import (
+        is_transcript_running_total,
+        transcript_savings_key,
+    )
 
     first = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "fix it"}]
     later = first + [
         {"role": "assistant", "content": None, "tool_calls": []},
         {"role": "tool", "tool_call_id": "c1", "content": "log"},
     ]
-    key = chat_savings_key(first)
-    assert key == chat_savings_key(later) and is_chat_running_total(key)
-    assert key != chat_savings_key([first[0], {"role": "user", "content": "other task"}])
-    assert key != chat_savings_key([{"role": "user", "content": "fix it"}])
-    assert chat_savings_key([{"role": "system", "content": "x"}]) is None
-    assert not is_chat_running_total("conv-a") and not is_chat_running_total(None)
+    key = transcript_savings_key(first)
+    assert key == transcript_savings_key(later) and is_transcript_running_total(key)
+    assert key != transcript_savings_key([first[0], {"role": "user", "content": "other task"}])
+    assert key != transcript_savings_key([{"role": "user", "content": "fix it"}])
+    assert transcript_savings_key([{"role": "system", "content": "x"}]) is None
+    assert not is_transcript_running_total("conv-a") and not is_transcript_running_total(None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client", ["opencode", None])
 async def test_a_chat_running_total_books_each_removal_once(booked, client) -> None:
-    from horizon.proxy.conversation_savings import chat_savings_key
+    from horizon.proxy.conversation_savings import transcript_savings_key
 
-    key = chat_savings_key([{"role": "user", "content": "fix it"}])
+    key = transcript_savings_key([{"role": "user", "content": "fix it"}])
     handler = _Handler()
     for total in (8_983, 17_966, 26_949):
         await emit_request_outcome(
@@ -358,3 +361,111 @@ def test_chat_completions_book_each_removal_once_through_the_handler(monkeypatch
     saved = [s for s, _ in booked]
     assert saved[0] > 0 and all(abs(s - saved[0]) <= saved[0] // 10 for s in saved)
     assert booked[0][1] == 0 and booked[1][1] == saved[0] and booked[2][1] == saved[0] + saved[1]
+
+
+# ── Claude Messages ────────────────────────────────────────────────────
+
+
+def test_a_claude_key_ignores_moving_cache_markers() -> None:
+    """Claude Code marks its newest message, so the first one is marked only on turn one."""
+    from horizon.proxy.conversation_savings import transcript_savings_key
+
+    system = [
+        {"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}
+    ]
+    marked = {"type": "text", "text": "fix it", "cache_control": {"type": "ephemeral"}}
+    turn_one = [{"role": "user", "content": [marked]}]
+    turn_two = [
+        {"role": "user", "content": [{"type": "text", "text": "fix it"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+        {"role": "user", "content": [{"type": "text", "text": "thanks", **{"cache_control": {}}}]},
+    ]
+    key = transcript_savings_key(turn_one, system=system)
+    assert key == transcript_savings_key(
+        turn_two, system=[{"type": "text", "text": "You are Claude Code."}]
+    )
+    assert key != transcript_savings_key(turn_one, system="A subagent prompt")
+
+
+@pytest.mark.parametrize("mode", ["cache", "token"])
+def test_claude_messages_book_each_removal_once_through_the_handler(monkeypatch, tmp_path, mode):
+    """Cache mode replays the compressed prefix and token mode recompresses it, so
+    tokens_saved grows or repeats each turn; the ledger books only the new part."""
+    import json as _json
+
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from horizon.proxy.server import ProxyConfig, create_app
+
+    booked: list[tuple[int, int, int]] = []
+
+    async def _record(outcome, **kwargs):
+        booked.append((outcome.tokens_saved, kwargs["saved"], kwargs["retained"]))
+
+    monkeypatch.setattr(account_analytics, "record_account_outcome", _record)
+    monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(tmp_path))
+    rows = ",".join(
+        f'{{"id": {i}, "name": "item{i}", "status": "ok", "value": {i * 7}}}' for i in range(600)
+    )
+
+    def conversation(turns: int) -> list[dict]:
+        messages: list[dict] = [{"role": "user", "content": "inspect the data"}]
+        for t in range(turns):
+            result = {"type": "tool_result", "tool_use_id": f"c{t}", "content": f"[{rows}]#{t}"}
+            messages += [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": f"c{t}", "name": "query_db", "input": {}}
+                    ],
+                },
+                {"role": "user", "content": [result]},
+            ]
+        return messages
+
+    def respond(*_a, **kw):
+        body = _json.loads(kw.get("content") or b"{}")
+        payload = {
+            "id": "m",
+            "type": "message",
+            "role": "assistant",
+            "model": body.get("model"),
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 100, "cache_read_input_tokens": 5000, "output_tokens": 5},
+        }
+        return httpx.Response(
+            200,
+            json=payload,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+
+    app = create_app(
+        ProxyConfig(
+            optimize=True,
+            cache_enabled=False,
+            rate_limit_enabled=False,
+            cost_tracking_enabled=False,
+            ccr_inject_tool=False,
+            ccr_handle_responses=False,
+            ccr_context_tracking=False,
+            mode=mode,
+        )
+    )
+    with TestClient(app) as client:
+        http = MagicMock()
+        http.post = AsyncMock(side_effect=respond)
+        http.request = AsyncMock(side_effect=respond)
+        http.send = AsyncMock(side_effect=respond)
+        http.aclose = AsyncMock()
+        client.app.state.proxy.http_client = http
+        for turns in (1, 2, 3):
+            body = {"model": "claude-opus-5-5", "max_tokens": 16, "messages": conversation(turns)}
+            response = client.post("/v1/messages", json=body, headers={"x-api-key": "sk-ant-test"})
+            assert response.status_code == 200
+    totals = [total for total, _, _ in booked]
+    assert totals[0] > 0 and totals[1] >= totals[0]  # the request's own figure repeats
+    for previous, (total, saved, retained) in zip([0, *totals], booked, strict=False):
+        assert (saved, retained) == (max(0, total - previous), total - max(0, total - previous))
+    assert sum(saved for _, saved, _ in booked) == totals[-1]  # each removal booked once

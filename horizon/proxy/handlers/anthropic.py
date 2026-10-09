@@ -1243,6 +1243,14 @@ class AnthropicHandlerMixin:
                     original_client_messages = copy.deepcopy(messages)
             if input_event.tools is not None:
                 body["tools"] = input_event.tools
+            # tokens_saved repeats every earlier turn's removals (the frozen
+            # prefix is replayed compressed); under this key the outcome funnel
+            # books each once (conversation_savings.transcript_savings_key).
+            from horizon.proxy.conversation_savings import transcript_savings_key
+
+            _savings_key = transcript_savings_key(
+                original_client_messages, system=body.get("system")
+            )
 
             # Snapshot the client's cache_control breakpoints before any
             # transform runs; paired with the outbound count right before
@@ -3938,6 +3946,8 @@ class AnthropicHandlerMixin:
                                 num_messages=len(body.get("messages", [])),
                                 tags=tags,
                                 client=client,
+                                conversation_key=_savings_key,
+                                conversation_tokens_saved=tokens_saved if _savings_key else None,
                                 turn_id=compute_turn_id(
                                     model, body.get("system"), body.get("messages")
                                 ),
@@ -4260,6 +4270,8 @@ class AnthropicHandlerMixin:
                         memory_request_ctx=memory_request_ctx,
                         outcome_provider=provider_name,
                         session_key=session_key,
+                        conversation_key=_savings_key,
+                        conversation_tokens_saved=tokens_saved if _savings_key else None,
                     )
                 else:
                     # Whatever set it — the client's own ``stream: false`` or
@@ -5033,6 +5045,8 @@ class AnthropicHandlerMixin:
                                 num_messages=len(messages),
                                 tags=tags,
                                 client=client,
+                                conversation_key=_savings_key,
+                                conversation_tokens_saved=tokens_saved if _savings_key else None,
                                 turn_id=compute_turn_id(
                                     model, body.get("system"), body.get("messages")
                                 ),

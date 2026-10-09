@@ -18,6 +18,11 @@ All notable changes to Horizon are documented here.
   44,915 removed). Its running total is now keyed per conversation, so each
   removal is booked once and its repeats as retained savings, priced as the
   cache reads they replace.
+- Claude Messages had the same over-count in both proxy modes: cache mode
+  replays the compressed prefix and token mode recompresses it, so every turn
+  re-booked earlier removals (five turns: 44,915 tokens booked for 8,983
+  removed in cache mode). Keyed the same way; the key ignores
+  `cache_control`, which Claude Code moves every turn.
 
 ### Added
 - Usage and Advanced Analytics show the savings beyond compression per
