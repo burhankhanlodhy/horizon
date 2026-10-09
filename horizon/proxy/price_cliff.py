@@ -25,6 +25,14 @@ CACHE SAFETY
     crosses a cliff is usually pushed over by one large new tool result, which
     is exactly the content the guard can shrink.
 
+WHERE IT RUNS
+    The Claude Messages handler, Chat Completions (any model, e.g. GPT,
+    Gemini or Grok through an OpenAI-compatible endpoint) and the Responses
+    API over HTTP and WebSocket. On Responses only tool outputs are
+    compressed, so the guard tightens their target ratio; a request chained
+    with ``previous_response_id`` carries only its increment and is not
+    guarded, because the tier depends on context the provider holds.
+
 Opt-in: ``HORIZON_PRICE_CLIFF_GUARD=1``. Never raises.
 """
 

@@ -263,6 +263,111 @@ class GeminiHandlerMixin:
 
         return contents, system_instruction
 
+    def _maybe_flash_gemini(
+        self,
+        request: Any,
+        contents: Any,
+        *,
+        url: str,
+        model: str,
+        transforms_applied: list[str],
+        request_id: str = "",
+    ) -> tuple[Any, bool]:
+        """Flash Observations on a native Gemini body (opt-in, ``HORIZON_FLASH_GEMINI=1``).
+
+        Next-turn form (:mod:`horizon.transforms.flash_gemini`): the newest
+        large tool output goes out in full with a notice, and from the next
+        turn on as a stub. Returns ``(contents, changed)``. Same safety nets as
+        the OpenAI form: a host/model that rejected a flashed request is skipped,
+        models whose cache reads are nearly free are skipped, and a 400 on this
+        request is retried unflashed (:mod:`horizon.proxy.flash_guard`).
+        """
+        from horizon.transforms import flash_gemini as flash
+
+        if not flash.flash_gemini_enabled() or not isinstance(contents, list) or not contents:
+            return contents, False
+        try:
+            from urllib.parse import urlparse
+
+            from horizon.proxy import flash_guard
+            from horizon.proxy.compression_decision import CompressionDecision
+            from horizon.transforms.flash_observations import flash_policy
+            from horizon.transforms.flash_openai import flash_pays_for
+
+            decision = CompressionDecision.decide(
+                headers=request.headers,
+                config=self.config,
+                usage_reporter=getattr(self, "usage_reporter", None),
+                messages=contents,
+            )
+            if not decision.should_compress:
+                return contents, False
+            host = urlparse(url).hostname or ""
+            if flash_guard.is_disabled(host, model):
+                return contents, False
+            if model:
+                pays, reason = flash_pays_for(model)
+                if not pays:
+                    flash_guard.record_price_skip(model, reason)
+                    return contents, False
+            horizons = getattr(self, "_flash_gemini_horizons", None)
+            if horizons is None:
+                from horizon.paths import workspace_dir
+                from horizon.transforms.flash_observations import FlashHorizons
+
+                horizons = FlashHorizons(workspace_dir() / "flash_horizons_gemini.json")
+                self._flash_gemini_horizons = horizons
+            key = flash.conversation_key(contents)
+            horizon = horizons.horizon_for(key, flash.tail_start(contents))
+            result = flash.apply_gemini(
+                contents, horizon=horizon, policy=flash_policy(flash.DEFAULT_GEMINI_TOOLS)
+            )
+        except Exception:
+            logger.debug("flash observations (gemini) skipped", exc_info=True)
+            return contents, False
+        if result.paused:
+            flash_guard.record_rerun_pause(key)
+        if not result.stubbed and not result.flashed:
+            return contents, False
+        # A 400 on this request is retried once with the client's contents.
+        flash_guard.arm("contents", contents, host=host, model=model)
+        flash_guard.record_flash(
+            shown_once=result.flashed, stubbed=result.stubbed, chars_kept_out=result.chars_kept_out
+        )
+        transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
+        if result.cleared:
+            # Tokens this request no longer carries, for the account ledger.
+            from horizon.proxy import policy_savings
+
+            count_text = None
+            try:
+                count_text = self.openai_provider.get_token_counter(model).count_text
+            except Exception:
+                logger.debug("flash (gemini): no tokenizer for %s", model, exc_info=True)
+            cleared = policy_savings.cleared_tokens(result.cleared, count_text)
+            if cleared:
+                transforms_applied.append(policy_savings.flash_tag(cleared))
+        if result.keys:
+            try:
+                from horizon.cache.compression_store import get_compression_store
+
+                store = get_compression_store()
+                for ccr_hash, original in result.keys:
+                    store.store(
+                        original,
+                        original,
+                        compression_strategy="flash_observations",
+                        explicit_hash=ccr_hash,
+                    )
+            except Exception:
+                logger.debug("flash observations (gemini): CCR store failed", exc_info=True)
+        logger.info(
+            f"[{request_id}] flash observations (gemini): {result.flashed} shown once, "
+            f"{result.stubbed} stubbed, ~{result.chars_kept_out // 4} tokens kept out "
+            "of the permanent context"
+        )
+        return result.messages, True
+
     async def handle_gemini_generate_content(
         self,
         request: Request,
@@ -762,6 +867,18 @@ class GeminiHandlerMixin:
         # Preserve API key in query params if present
         if "key" in query_params and not upstream_base_url:
             url += f"?key={query_params['key']}"
+
+        # Flash Observations, next-turn form (opt-in, HORIZON_FLASH_GEMINI=1).
+        _flash_contents, _flash_changed = self._maybe_flash_gemini(
+            request,
+            body.get("contents"),
+            url=url,
+            model=model,
+            transforms_applied=transforms_applied,
+            request_id=request_id,
+        )
+        if _flash_changed:
+            body["contents"] = _flash_contents
 
         try:
             if is_streaming:
@@ -1296,6 +1413,20 @@ class GeminiHandlerMixin:
         if "key" in query_params:
             url = f"{self.GEMINI_API_URL}/v1beta/models/{model}:streamGenerateContent?key={query_params['key']}&alt=sse"
 
+        # Flash Observations, next-turn form (opt-in, HORIZON_FLASH_GEMINI=1).
+        # Gemini CLI streams through this route; nothing else rewrites it.
+        stream_transforms: list[str] = []
+        _flash_contents, _flash_changed = self._maybe_flash_gemini(
+            request,
+            contents,
+            url=url,
+            model=model,
+            transforms_applied=stream_transforms,
+            request_id=request_id,
+        )
+        if _flash_changed:
+            body["contents"] = _flash_contents
+
         return await self._stream_response(
             url,
             headers,
@@ -1306,7 +1437,7 @@ class GeminiHandlerMixin:
             original_tokens,
             original_tokens,
             0,  # tokens_saved
-            [],  # transforms_applied
+            stream_transforms,
             tags,
             optimization_latency,
         )

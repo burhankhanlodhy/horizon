@@ -52,6 +52,7 @@ services:
       # Flash Observations: large local tool outputs shown for one turn, then stubbed.
       - HORIZON_FLASH_OBSERVATIONS=${HORIZON_FLASH_OBSERVATIONS:-}
       - HORIZON_FLASH_OPENAI=${HORIZON_FLASH_OPENAI:-}
+      - HORIZON_FLASH_GEMINI=${HORIZON_FLASH_GEMINI:-}
       - HORIZON_FLASH_OPENAI_UPSTREAMS=${HORIZON_FLASH_OPENAI_UPSTREAMS:-}
       # Skip models whose cache reads cost under this fraction of input (no saving there).
       - HORIZON_FLASH_MIN_READ_RATIO=${HORIZON_FLASH_MIN_READ_RATIO:-0.04}

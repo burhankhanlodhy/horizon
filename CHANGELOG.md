@@ -33,6 +33,10 @@ All notable changes to Horizon are documented here.
   on OpenAI-format upstreams, where a stub can break the cache. On an upstream
   that evidently does not cache (several sizeable requests for the model, none
   with a cache read), it prices at the input rate instead.
+  that evidently does not cache, it prices at the input rate instead. Only
+  later turns of conversations no stub edited count as that evidence: in a
+  live native-Gemini run the flashed session's own misses (caused by its
+  stubs) made a caching upstream look non-caching and overcredited flash.
 - The account ledger's request cost no longer bills OpenAI's inferred cache
   writes on top of the same uncached tokens (it nearly doubled `cost_usd` on
   cache misses).
@@ -43,6 +47,17 @@ All notable changes to Horizon are documented here.
   and a $3/M fallback cost.
 
 ### Added
+- Price-cliff guard on the OpenAI-format paths: Chat Completions (any model
+  served there: GPT, Gemini, Grok, ...) and Responses (HTTP and WebSocket).
+  Near a whole-request price tier the catalog lists (GPT-5.4 / 6.x at 272k,
+  Gemini 3.1 Pro at 200k) the request compresses harder, as on Claude. A
+  Responses request chained with `previous_response_id` carries only its
+  increment and is not guarded.
+- Flash Observations for the native Gemini API (`HORIZON_FLASH_GEMINI=1`, set
+  by `HORIZON_SAVINGS=auto`): `generateContent` and `streamGenerateContent`,
+  including the plain streaming route Gemini CLI uses. Next-turn stubbing of
+  large `functionResponse` outputs of shell, search and listing tools, with
+  the same safety nets and ledger credit as the OpenAI form.
 - Usage and Advanced Analytics show the savings beyond compression per
   feature.
 
