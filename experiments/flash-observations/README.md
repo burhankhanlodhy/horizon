@@ -295,6 +295,13 @@ Rep 1 uses the same logs as both heavy-retrieval sessions.
 **Spend:** about $10.60 this round. All live runs together cost about $24 at
 list price, plus hidden CCR continuations in the retrieval sessions.
 
+**ModelFlare, second key (2026-10-09): failed again.**
+- **Caching:** now partial (repeat reads `[0, 10260, 10260]`).
+- **`clear_at` without its beta:** still accepted.
+- **"Cleared" message:** still billed in full (+14,649 tokens).
+- **Verdict:** the gateway does not pass turn-scoped messages through, so Flash
+  Observations stays off there.
+
 **oneprovider.dev (2026-10-09): not applicable.** Its `/v1/models` lists no
 Claude model (DeepSeek, Gemini, GLM, GPT, Grok and Kimi only), and
 `claude-opus-5-5` returns "The requested model is not available". Flash
