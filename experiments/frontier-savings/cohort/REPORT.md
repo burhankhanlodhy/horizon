@@ -1,5 +1,10 @@
 # Claude Code cohort validation and release review
 
+**Current decision:** [remaining validation](VALIDATION_REVIEW.md) now includes a
+working native-script baseline, real signed-thinking replay and installed-client
+full-proxy checks. The economic gate failed. Keep customer compact activation off.
+Earlier measurements and pending lists below describe the preceding phases.
+
 October 9, 2026. Branch: `codex/compact-edit-adapters`.
 
 ## Decision

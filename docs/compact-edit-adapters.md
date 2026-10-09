@@ -1,5 +1,12 @@
 # Compact edit adapters: Claude Code and Codex
 
+**Latest validation:** [rollout decision](../experiments/frontier-savings/cohort/VALIDATION_REVIEW.md).
+The native-script baseline works, but this literal-clone cohort fails its savings
+gate. It remains unqualified; stock customers use native tools. Durable operator
+admission-stop, candidate retirement, drain status and consistent backup APIs are
+implemented. No automatic production source collector or Codex atomic guard is
+certified, and the feature is not deployed on Pi 5.
+
 October 9, 2026. Implementation notes for ContextShrink and subsequent Claude review.
 
 ## Status

@@ -5,6 +5,11 @@ All notable changes to Horizon are documented here.
 ## [Unreleased]
 
 ### Fixed
+- Managed compact-edit cohorts now support durable operator admission stop,
+  conservative candidate retirement after native mutations, non-secret drain
+  inventory and consistent SQLite backup. Native-client/script validation is
+  documented; the tested cohort remains unqualified because complete-workflow
+  costs do not meet its savings gate. Stock traffic remains native.
 - Flash credit is measured in the provider's own tokens and priced at the
   model's measured cache behaviour. Tokens: the request-body bytes a stub
   removes, times the provider's billed tokens per byte for the model, learned

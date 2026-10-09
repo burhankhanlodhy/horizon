@@ -80,6 +80,9 @@ class ManagedClaudeRegistry:
             raise CompactEditError("do not replace an existing cohort registry")
         app.state.compact_edit_cohort_resolver = self.resolve
 
+    def stop_admissions(self, reason: str) -> None:
+        self.journal.stop_admissions(reason)
+
     def bind(
         self,
         *,
@@ -90,6 +93,8 @@ class ManagedClaudeRegistry:
         cold_boundary_ready: bool = False,
         resume_required: bool = False,
     ) -> ClaudeCohort:
+        if self.journal.admissions_stopped() and self.journal.get(scope.key, "admission") is None:
+            raise CompactEditError("operator stopped new managed admissions")
         if scope.provider != "anthropic" or qualification.contract.kind != "claude_edit":
             raise CompactEditError("registry handles only qualified Claude Messages")
         qualification.check(scope, candidate)

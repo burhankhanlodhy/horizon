@@ -8,6 +8,7 @@ There is no default path and no automatic eviction of live conversations.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -127,6 +128,76 @@ class ReplayJournal:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    def stop_admissions(self, reason: str) -> None:
+        """Durable operator drain latch; existing replay stays available.
+
+        There is intentionally no live resume/delete method. A new rollout must
+        restore old sessions and separately qualify a new journal generation.
+        """
+        if not isinstance(reason, str) or not reason or len(reason) > 512:
+            raise CompactEditError("bounded operator drain reason required")
+        with self._lock:
+            if self.get("@operator", "admission_stop") is None:
+                self.put("@operator", "admission_stop", {"reason": reason})
+
+    def admissions_stopped(self) -> bool:
+        return self.get("@operator", "admission_stop") is not None
+
+    def retirement(self, scope: str, reason: str) -> None:
+        """Keep the original catalog/replay but prohibit another compact edit."""
+        if not reason or len(reason) > 512:
+            raise CompactEditError("bounded retirement reason required")
+        with self._lock:
+            if self.get(scope, "candidate_retired") is None:
+                self.put(scope, "candidate_retired", {"reason": reason})
+
+    def drain_status(self) -> list[dict[str, Any]]:
+        """Non-secret operator inventory; never infer execution from delivery.
+
+        Acknowledged is a received client result, including an error, not proof
+        that no more native turns will arrive. Catalogs must remain restorable
+        until the managed client certifies that the conversation has ended.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT scope,payload FROM compact_edit_journal WHERE key='admission'"
+            ).fetchall()
+            status = []
+            for scope, payload in rows:
+                saved = json.loads(payload)
+                call = saved.get("reserved_call")
+                record = self.get(scope, "call:" + call) if call else None
+                status.append(
+                    {
+                        "scope": scope,
+                        "state": "unpublished"
+                        if not call
+                        else (
+                            "acknowledged"
+                            if record and record.get("native_result")
+                            else "pending_client_result"
+                        ),
+                        "candidate_retired": self.get(scope, "candidate_retired") is not None,
+                    }
+                )
+            return status
+
+    def backup(self, destination: Path) -> None:
+        """Consistent SQLite backup, including WAL, in a secured operator directory.
+
+        Refuse overwrite. Keep journal and backups private: they contain source
+        and native arguments. This does not authorize rollback of active clients.
+        """
+        if not destination.is_absolute() or not destination.parent.is_dir():
+            raise CompactEditError("absolute backup path in secured directory required")
+        # O_EXCL also rejects a pre-existing symlink. Caller owns the directory.
+        descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        with self._lock, sqlite3.connect(destination) as target:
+            self._db.backup(target)
+            if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise CompactEditError("journal backup integrity check failed")
 
     def acknowledge(self, scope: str, call: str, result: dict[str, Any]) -> None:
         """Persist actual client-result receipt, never infer execution from delivery."""

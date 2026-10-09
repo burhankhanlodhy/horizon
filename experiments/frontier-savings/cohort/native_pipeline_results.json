@@ -1,0 +1,28 @@
+[
+  {
+    "case": "compact_roundtrip",
+    "passed": true,
+    "client_requests": 3,
+    "provider_attempts": 3,
+    "account_outbox_rows": 3,
+    "recoveries": 0,
+    "native_result_acknowledged": true,
+    "provider_virtual_replay": true,
+    "external_model_calls": 0,
+    "external_api_spend_usd": 0,
+    "production_qualified": false
+  },
+  {
+    "case": "invalid_preview",
+    "passed": true,
+    "client_requests": 3,
+    "provider_attempts": 4,
+    "account_outbox_rows": 4,
+    "recoveries": 1,
+    "native_result_acknowledged": false,
+    "provider_virtual_replay": false,
+    "external_model_calls": 0,
+    "external_api_spend_usd": 0,
+    "production_qualified": false
+  }
+]

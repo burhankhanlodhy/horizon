@@ -1,0 +1,10 @@
+{
+  "client_exit_code": 0,
+  "passed": true,
+  "ast_matches": true,
+  "script_result_received": true,
+  "script_rejected": false,
+  "requests": 3,
+  "external_model_calls": 0,
+  "external_api_spend_usd": 0
+}

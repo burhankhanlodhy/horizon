@@ -1,5 +1,9 @@
 # Step 2: zero-cost Claude proxy integration
 
+**Subsequent status:** [remaining validation](VALIDATION_REVIEW.md) repaired the
+script baseline, added operational controls and tested installed-client execution.
+The economic gate failed; this cohort remains unqualified for activation.
+
 October 9, 2026. Branch: `codex/compact-edit-adapters`.
 
 ## Result

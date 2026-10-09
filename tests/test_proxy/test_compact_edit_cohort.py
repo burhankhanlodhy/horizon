@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import subprocess
+import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -96,6 +98,117 @@ def admit(data):
         cold_boundary=True,
         execution_guard_ready=True,
     )
+
+
+def test_operator_stop_keeps_admitted_catalog_and_blocks_new(setup):
+    admitted = admit(setup)
+    journal = setup[4]
+    journal.stop_admissions("operator rollout drain")
+    assert journal.admissions_stopped()
+    assert admit(setup).request["tools"] == admitted.request["tools"]
+    other = list(setup)
+    other[0] = replace(setup[0], conversation="new-conversation")
+    blocked = admit(other)
+    assert blocked.turn is None
+    assert blocked.request == setup[5]
+    assert blocked.reason.startswith("admissions_stopped")
+    assert journal.get(other[0].key, "admission") is None
+
+
+def test_stop_and_pending_delivery_survive_consistent_backup(setup, tmp_path):
+    scope, _, _, controller, journal, _ = setup
+    turn = admit(setup).turn
+    controller.translate_response(response(turn), turn)
+    journal.stop_admissions("health failure")
+    expected = journal.drain_status()
+    assert expected == [
+        {"scope": scope.key, "state": "pending_client_result", "candidate_retired": False}
+    ]
+    backup = tmp_path / "rollback.sqlite"
+    journal.backup(backup)
+    with pytest.raises(FileExistsError):
+        journal.backup(backup)
+    with ReplayJournal(backup) as restored:
+        assert restored.admissions_stopped()
+        assert restored.drain_status() == expected
+        assert restored.get(scope.key, "call:edit-1") == journal.get(scope.key, "call:edit-1")
+        restored.acknowledge(
+            scope.key, "edit-1", {"is_error": True, "content": "permission denied"}
+        )
+        assert restored.drain_status()[0]["state"] == "acknowledged"
+        assert journal.drain_status()[0]["state"] == "pending_client_result"
+
+
+@pytest.mark.parametrize("tool", ["Edit", "Write", "Bash", "unknown_mcp_tool"])
+def test_native_mutation_retires_candidate_without_catalog_change(setup, tool):
+    first = admit(setup)
+    data = list(setup)
+    data[5] = copy.deepcopy(setup[5])
+    data[5]["messages"].append(
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "native-mutation", "name": tool, "input": {}}],
+        }
+    )
+    next_turn = admit(data)
+    assert next_turn.request["tools"] == first.request["tools"]
+    assert not next_turn.turn.compact_available
+    assert setup[4].drain_status()[0]["candidate_retired"]
+    # A subsequent source read cannot revive a retired candidate.
+    assert not admit(setup).turn.compact_available
+    with pytest.raises(CompactEditError):
+        setup[3].translate_response(response(next_turn.turn), next_turn.turn)
+
+
+def test_read_only_history_does_not_retire_candidate(setup):
+    data = list(setup)
+    data[5] = copy.deepcopy(setup[5])
+    data[5]["messages"].append(
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "read-only", "name": "Read", "input": {}}],
+        }
+    )
+    assert admit(data).turn.compact_available
+    assert not setup[4].drain_status()[0]["candidate_retired"]
+
+
+def test_abrupt_process_exit_retains_unacknowledged_publication(setup, tmp_path):
+    scope, _, _, controller, journal, _ = setup
+    turn = admit(setup).turn
+    code = """
+import json,os,sys
+from pathlib import Path
+from horizon.proxy.compact_edits import CompactEditController,ReplayJournal,Scope
+from horizon.proxy.compact_edits.controller import PreparedTurn
+scope=Scope(**json.loads(sys.argv[2]))
+journal=ReplayJournal(Path(sys.argv[1]))
+controller=CompactEditController()
+restored=controller.restore_admission(scope,journal)
+saved=journal.get(scope.key,'admission')
+turn=PreparedTurn(scope,restored.candidate,restored.contract,saved['receipt'],journal,True)
+controller.translate_response(json.loads(sys.argv[3]),turn)
+os._exit(73)
+"""
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(tmp_path / "journal.sqlite"),
+            json.dumps(asdict(scope)),
+            json.dumps(response(turn)),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        timeout=30,
+    )
+    assert process.returncode == 73, process.stderr.decode(errors="replace")
+    assert controller.restore_admission(scope, journal).reserved_call == "edit-1"
+    assert journal.drain_status()[0]["state"] == "pending_client_result"
+    # No close/checkpoint, acknowledgement, or execution can be inferred from
+    # durable publication. Restart keeps the single operation unavailable.
+    assert not admit(setup).turn.compact_available
 
 
 def response(turn, *, receipt=None):

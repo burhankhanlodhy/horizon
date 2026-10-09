@@ -222,6 +222,9 @@ class CompactEditController:
             scope_key = scope.key
             if journal is not None:
                 saved = journal.get(scope_key, "admission")
+                if saved is None and journal.admissions_stopped():
+                    reason = "admissions_stopped"
+                    raise CompactEditError("operator stopped new admissions")
             if resume_required and saved is None:
                 raise CompactEditError("admitted session lost its replay journal")
             if qualification is None or journal is None:
@@ -297,8 +300,33 @@ class CompactEditController:
                 source_sha256=candidate.snapshot.sha256,
             )
             body["tools"].append(definition)
+            # Native mutations invalidate the candidate even when a subsequent
+            # Read looks unchanged. Never mint a new source/catalog mid-session.
+            # Mapped compact Edit calls have a durable call record and are exempt.
+            if contract.kind == "claude_edit":
+                mutated = any(
+                    item.get("type") == "tool_use"
+                    and item.get("name") not in {"Read", "Glob", "Grep"}
+                    and journal.get(scope_key, "call:" + str(item.get("id", ""))) is None
+                    for message in request.get("messages", [])
+                    if isinstance(message, dict)
+                    for item in (
+                        message.get("content", [])
+                        if isinstance(message.get("content"), list)
+                        else []
+                    )
+                    if isinstance(item, dict)
+                )
+                if mutated:
+                    journal.retirement(scope_key, "native mutation or unknown tool observed")
             turn = PreparedTurn(
-                scope, candidate, contract, receipt, journal, not bool(saved["reserved_call"])
+                scope,
+                candidate,
+                contract,
+                receipt,
+                journal,
+                not bool(saved["reserved_call"])
+                and journal.get(scope_key, "candidate_retired") is None,
             )
             self._decisions["admitted"] += 1
             return Admission(body, turn, "admitted")
