@@ -7,8 +7,9 @@ The follow-up [automatic proxy framework](PROXY_AUTOMATION_FRAMEWORK.md) documen
 an always-active decision controller, eligible use cases, transparent native
 tool translation, replay/streaming requirements, cost gates and account
 measurement. Its bounded production adapter core is now implemented in
-`horizon/proxy/compact_edits/`; live native handler integration, qualification
-and deployment remain pending. See the
+`horizon/proxy/compact_edits/`. A Claude cohort boundary and native-client
+validation now exist; economic/full-pipeline qualification and deployment remain
+pending. See the [cohort review](../cohort/REPORT.md) and the
 [Claude Code / Codex implementation notes](../../../docs/compact-edit-adapters.md).
 
 See [BEFORE_AFTER.md](BEFORE_AFTER.md) for current versus proposed capability,

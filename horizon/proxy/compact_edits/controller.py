@@ -260,6 +260,9 @@ class CompactEditController:
             reason = "unsupported_candidate"
             compile_candidate(candidate)
             candidate_data = asdict(candidate)
+            # Reject unsupported history before creating durable admission.
+            reason = "replay_mismatch"
+            body = self.normalize_replay(request, scope=scope, kind=contract.kind, journal=journal)
             if saved is None:
                 reason = "warm_catalog"
                 if not cold_boundary:
@@ -267,14 +270,15 @@ class CompactEditController:
                 receipt = fingerprint(
                     {"scope": scope_key, "candidate": candidate_data, "contract": asdict(contract)}
                 )
-                saved = {
+                pending = {
                     "candidate": candidate_data,
                     "contract": asdict(contract),
                     "receipt": receipt,
                     "reserved_call": None,
                 }
                 reason = "journal_unavailable"
-                journal.put(scope_key, "admission", saved)
+                journal.put(scope_key, "admission", pending)
+                saved = pending
             else:
                 # A receipt-bound tool catalog remains byte-stable for the session.
                 # A new candidate requires a new certified conversation/boundary.
@@ -292,8 +296,6 @@ class CompactEditController:
                 path=candidate.snapshot.path,
                 source_sha256=candidate.snapshot.sha256,
             )
-            reason = "replay_mismatch"
-            body = self.normalize_replay(request, scope=scope, kind=contract.kind, journal=journal)
             body["tools"].append(definition)
             turn = PreparedTurn(
                 scope, candidate, contract, receipt, journal, not bool(saved["reserved_call"])
@@ -439,4 +441,7 @@ class CompactEditController:
                     if item_type != "custom_tool_call_output":
                         raise CompactEditError("expected actual custom patch result")
                     items[index] = dict(item, type="function_call_output")
+                    journal.acknowledge(scope_key, identifier, item)
+                else:
+                    journal.acknowledge(scope_key, identifier, item)
         return body

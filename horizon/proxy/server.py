@@ -5957,6 +5957,18 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     # Added last so authentication runs outside prefix rewriting, HTTP and WS
     # handlers, and captures one immutable owner for their child tasks.
+    from horizon.proxy.compact_edits.cohort import CompactCohortMiddleware
+
+    # Operator-only callback for authenticated, attested validation cohorts.
+    # No default qualification and no end-user toggle. AccountMiddleware runs
+    # outside this boundary; rewritten histories enter the inner prefix engine.
+    app.state.compact_edit_cohort_resolver = None
+
+    async def _resolve_compact_cohort(scope):
+        resolver = app.state.compact_edit_cohort_resolver
+        return await resolver(scope) if resolver is not None else None
+
+    app.add_middleware(CompactCohortMiddleware, resolve=_resolve_compact_cohort)
     app.add_middleware(AccountMiddleware, service=account_analytics)
     return app
 

@@ -11,18 +11,20 @@ dependencies. `HorizonProxy` always constructs the controller; the outcome
 funnel feeds content-free client-family observations to it, and `/stats` exposes
 its status. No end-user feature toggle was added.
 
-**Native forwarding remains the stock runtime behavior.** The Anthropic and
-OpenAI handlers have not been connected to a qualified translating route. No
-native client version is certified, no client-local Codex SHA fence has been
-installed, no provider schema is injected into ordinary traffic, and nothing has
-been deployed to Pi 5 during this change. This is an implemented adapter core,
-not an activated customer feature. Runtime observations do not establish client
-compatibility or candidate frequency.
+**Native forwarding remains the stock runtime behavior.** A Claude-only cohort
+HTTP boundary is installed inside authentication and outside the stock handlers,
+but its operator resolver defaults to `None`. No production route is certified,
+no client-local Codex SHA fence is installed, no provider schema is injected into
+ordinary traffic, and nothing has been deployed to Pi 5 during this change.
 
-Checks for this change are Python syntax compilation, Ruff lint/format checks
-for the adapter package and source/diff inspection.
-There were no added or executed test suites, native-client integration runs or
-new model calls. Earlier MCP pilot results do not validate these wire adapters.
+The follow-up validation includes 104 passing targeted tests, five zero-cost
+checks through installed Claude Code 2.1.295 and one successful native/compact
+live pair. That pair saved 18.1% in API-equivalent cost on a four-row fixture.
+The explicit native-script control was incomplete. This evidence does not
+establish production economics or full-pipeline safety; customer activation
+remains pending. Ruff and compilation checks passed. See the
+[cohort validation and release review](../experiments/frontier-savings/cohort/REPORT.md)
+for the measured costs, shared $3 budget, findings and remaining requirements.
 
 ## Supported formats
 
@@ -37,8 +39,13 @@ entire native definition's canonical SHA-256 fingerprint and checks the basic
 argument shape. Certification must separately establish the grammar, native
 matching, permissions, failure behavior and installed version. Namespace tools,
 JavaScript/shell wrappers, the OpenAI built-in `apply_patch_call` operation,
-streaming SSE, WebSockets, incremental `previous_response_id`/conversation and
+Codex streaming SSE, WebSockets, incremental `previous_response_id`/conversation and
 background requests are outside this implementation. They use native tools.
+
+The Claude evaluation boundary accepts client JSON/SSE, requests complete JSON
+upstream and renders the validated client response as JSON/SSE. This is buffered
+translation, not incremental rewriting. Safeguard/auto-mode capability requests
+remain native. Ordinary unqualified streaming does not pass through buffering.
 
 The custom and function tool distinction follows the
 [OpenAI function calling guide](https://developers.openai.com/api/docs/guides/function-calling).
@@ -140,16 +147,34 @@ signature matches exactly. It preserves surrounding text, reasoning/encrypted
 content, actual native output and call IDs. Complete Responses input item arrays
 and Messages content arrays are supported. Mismatched arguments stop processing.
 The Codex custom result type is translated back to the provider's function result
-type. Client and provider prefixes must remain separate in the handler caches.
+type. Actual client-result receipts are durably acknowledged by digest, with
+changed replay results rejected. Client and provider prefixes must remain
+separate in the handler caches.
 
 Journal commit proves the call was reserved, **not delivered or executed**. A
 disconnect/crash between commit, delivery and native result needs reconciliation
 with the real client. There is no automatic resend, reservation reset, fabricated
-success, execution acknowledgement, session eviction or production drain manager
+success, inferred execution acknowledgement, session eviction or production drain manager
 in this core. Operator cleanup is allowed only after the conversation is closed
 and native execution is reconciled.
 
-## Handler integration order still required
+## Cohort boundary and remaining handler qualification
+
+`CompactCohortMiddleware` is added just inside `AccountMiddleware`. Its trusted
+operator callback must resolve account/conversation/workspace, exact snapshot,
+candidate, qualification and secured journal. Stock startup leaves that callback
+unset. Client headers cannot create an admission. `ClaudeCohort` serializes each
+conversation, buffers bounded responses and dispatches compilation/journal writes
+off the event loop. A new/cold boundary must be separately attested; a missing
+journal is not cold-boundary evidence. Expected resumes require their journal.
+
+An exact native numbered Read is matched to the managed snapshot hash before
+compact publication; a newer unverified Read invalidates prior evidence. The
+boundary rejects an actual response model that differs from the qualified scope.
+Native source execution still belongs to the client's normal permissions.
+
+The boundary implements the following ordering for controlled evaluation. A
+populated production registry and full stock-pipeline benchmark remain required.
 
 1. Obtain authenticated scope, actual routed model, an exact source snapshot and
    requested candidate; restore durable session state before handling continuations.
@@ -165,8 +190,11 @@ and native execution is reconciled.
    operation or journal failure, recover internally within a qualified cost
    budget. Preserve reasoning/tool pairing. If recovery cannot complete, report
    an accurate failure. Never let a generic hook swallow the exception and
-   forward the provider's unknown virtual tool. A recovery orchestrator and its
-   all-attempt usage settlement are not implemented here.
+   forward the provider's unknown virtual tool. The cohort permits one native
+   retry of the same normalized request/catalog after a private rejected preview,
+   forcing Read when source is unattested or Edit otherwise. No fake client
+   execution or hidden assistant/tool-result pair is inserted. Each attempt runs
+   through the ordinary inner proxy; full-pipeline settlement still needs validation.
 6. Let the client enforce normal approval and the native source-version fence.
    Subsequent native results go through replay normalization. Reconcile uncertain
    delivery/execution before further edits and preserve the journal while active.
@@ -181,14 +209,18 @@ recovery on their own. No late hook has been registered by this change.
 No new billed or measured customer saving is credited. The earlier Claude MCP
 pilot found 40.2% and 60.7% lower API-equivalent task costs for selected four- and
 twelve-row cases; it did not measure native adapter execution, Codex, total
-proxy improvement or invoices. The $3 research budget is unchanged; this change
-made no model calls. See the pilot's `RESULTS.md` and `BEFORE_AFTER.md`.
+proxy improvement or invoices. The native-client follow-up measured 18.1% on one
+four-row pair, with an incomplete script control. Shared completed API-equivalent
+usage is $1.2001388; prior usage plus the new conservative cost bound is
+$1.9770944, within the unchanged $3 ceiling. See the cohort report and the pilot's
+`RESULTS.md` and `BEFORE_AFTER.md`.
 
-Next work is a native-client benchmark and handler integration: exact installed
-tool schemas, approved/read/edit behavior, stale files, partial reads, cost and
-native-script controls, signatures/reasoning, custom/function result pairing,
-restart, replay mismatch, concurrent calls and delivery uncertainty. Codex needs
-the managed local source fence. SSE/WS need whole-envelope/event translation and
-cache-continuation qualification; they must not simply reuse the JSON adapter.
+Next work is economic and full-pipeline qualification: a successful script
+baseline, representative repeats, real signatures/reasoning, routing and account
+settlement, cache continuation, concurrent workers and delivery reconciliation.
+Native Read/Edit guard and denial mechanics, buffered Claude JSON/SSE, core
+restart/replay and recovery now have controlled evidence. Codex needs the managed
+local source fence and native-client execution tests. Codex SSE/WS need separate
+event and continuation qualification; they must not simply reuse the JSON adapter.
 Once those route qualifications exist, admission can be automatic for supported
 cases while other editing continues through native tools.

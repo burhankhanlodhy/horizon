@@ -15,8 +15,11 @@ framework and an implemented production adapter core in
 `horizon/proxy/compact_edits/`. It supports complete-JSON Claude native Edit and
 Codex function/custom patch translation, durable replay and qualified admission.
 The controller is present in proxy startup/outcome/stats, without a user toggle.
-**Live native handler integration, route qualification and deployment remain
-pending; additional measured/credited production savings are zero.** The pilot's
+The Claude cohort boundary now has local/native-client validation, including one
+live pair with **18.1% lower API-equivalent cost** on a four-row fixture. Its
+explicit script control was incomplete. **Economic/full-pipeline qualification
+and deployment remain pending; additional measured/credited production savings
+are zero.** See the [cohort review](../cohort/REPORT.md). The pilot's
 40–61% figures are not the current proxy's overall saving. See
 [adapter implementation notes](../../../docs/compact-edit-adapters.md).
 
@@ -24,7 +27,8 @@ There is no paired complete-workflow benchmark of the existing deployed proxy
 versus an activated bridge for Claude Code, OpenCode or Codex. The current total
 dollar savings percentage, future total and measured difference are unknown.
 The new feature contributes zero credited production savings until integration
-and evaluation establish otherwise. This comparison adds no paid calls.
+and evaluation establish otherwise. The follow-up made three bounded live
+evaluation sessions; their costs and limitations are reported separately below.
 
 ## Capabilities before and after integration
 
@@ -47,7 +51,7 @@ main engineering work needed to implement this design.
 
 | Tool | Relevant existing support | Potential compact-edit benefit | Evidence now |
 |---|---|---|---|
-| Claude Code | Anthropic request, source-read and prefix/cache policies | Repeated literal catalogs through a certified native Read/Edit adapter | Live compact MCP pilot; transparent native bridge not tested |
+| Claude Code | Anthropic request, source-read and prefix/cache policies | Repeated literal catalogs through a certified native Read/Edit adapter | Five native-client checks passed; one live pair saved 18.1%; full-pipeline/economic qualification pending |
 | OpenCode | Provider-native paths, depending on actual model/route/tool contract | Similar repetitive edits after certifying its installed read/edit or patch adapter | No live compact-edit OpenCode test |
 | Codex | OpenAI Responses/function/custom/WS paths with separate policies | Repetitive patches after grammar, transport and replay certification | No live compact-edit Codex test |
 
@@ -66,7 +70,19 @@ spend. For a fixed-price coding subscription, it may reduce quota consumption
 without reducing the subscription invoice. The pilot used Claude Pro and reports
 API-equivalent usage cost, not invoice savings.
 
-## Measured per-task costs
+## New native-client evidence
+
+Claude Code 2.1.295, existing configured model `claude-sonnet-5-5`: one native
+four-row workflow cost $0.0377830; compact cost $0.0309524. Both passed, a
+$0.0068306 / 18.1% difference. The separate script workflow failed after a native
+Bash denial and harness errors; its $0.0175930 partial cost is not a successful
+baseline. Both successful arms had Bash in their catalogs, but that alone does
+not prove script execution was permitted. Fixed arm order, one pair and no full
+stock-proxy benchmark prevent fleet claims. Shared completed usage is $1.2001388
+API-equivalent, with prior usage plus the new conservative bound at $1.9770944,
+within the unchanged $3 research ceiling. See [the review](../cohort/REPORT.md).
+
+## Earlier MCP per-task costs
 
 Mean over three repetitions, CLI API-equivalent USD. Valid insertion positions
 were adjudicated separately from the original strict AST grades.

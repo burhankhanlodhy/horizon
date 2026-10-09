@@ -2,15 +2,18 @@
 
 October 9, 2026. Architecture review and implementation framework.
 
-**Status: adapter core implemented; native handler integration and deployment
-remain pending.** `horizon/proxy/compact_edits/` contains the compiler,
+**Status: adapter core and Claude cohort boundary implemented; production
+qualification and deployment remain pending.** `horizon/proxy/compact_edits/` contains the compiler,
 Claude/Codex complete-JSON adapters, selective controller and durable replay
 journal. Proxy startup/outcome/stats include content-free observation. Stock
 forwarding remains native; no client route is certified or activated. See
 [implementation notes](../../../docs/compact-edit-adapters.md).
-The live MCP pilot proves adoption of a small grammar. It does not yet prove
-native approval compatibility, transparent client execution or savings against
-native scripts. Streaming/recovery/fleet behavior below remains a release design.
+Five installed Claude Code checks now cover native execution/replay, changed
+files and explicit denial. One live pair saved 18.1% on a four-row fixture;
+the explicit script control was incomplete. Buffered Claude JSON/SSE and bounded
+native recovery have tests, but full-pipeline/economic qualification is pending.
+See the [cohort review](../cohort/REPORT.md). Codex remains native until its local
+guard is ready. Fleet behavior below remains a release design.
 
 ## 1. Recommendation
 
@@ -271,13 +274,14 @@ response-expansion guarantee.
 | Client disconnects before publication | Do not initiate file execution; count provider cost already incurred |
 | Client disconnects after publication | Execution state is unknown until real client results arrive; never automatically reissue the edit |
 
-Internal recovery must append the original provider assistant turn and a valid
-error tool result with the same call ID. Any hidden rounds must remain in the
-provider replay journal in their exact order. Use the pinned tool catalog for
-recovery; changing it could add a cache rewrite. No extra filesystem tool is
-executed by the proxy. Count every internal attempt, including errors.
+The implemented cohort discards a fully private invalid preview and retries the
+same normalized generation request with the pinned catalog and forced native
+Read/Edit. It does not invent a client-executed result or insert hidden paired
+history. Every attempt passes through ordinary inner accounting. Any alternative
+continuation design must persist valid assistant/result pairs exactly and prove
+signature compatibility. No filesystem tool is executed by the proxy.
 
-This is a major unimplemented part of the design. Network or exhausted-budget
+Production recovery/account settlement still needs full-pipeline validation. Network or exhausted-budget
 failures can still surface as normal client errors; no architecture can promise
 unconditional silent success. A cohort with frequent repair is automatically
 removed from new admission. Existing sessions retain translation while draining.

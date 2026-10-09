@@ -1,0 +1,216 @@
+{
+  "prior_api_equivalent_usd": 1.1138104,
+  "new_conservative_cost_upper_usd": 0.8632839999999999,
+  "shared_upper_usd": 1.9770944,
+  "budget_usd": 3.0,
+  "model": "claude-sonnet-5-5",
+  "native_scripts_in_catalog": true,
+  "successful_script_control": false,
+  "production_qualified": false,
+  "rows": [
+    {
+      "arm": "native",
+      "passed": true,
+      "client_exit_code": 0,
+      "client_api_equivalent_usd": 0.037783,
+      "provider_attempts": [
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 4058,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 4058
+            },
+            "output_tokens": 114,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.17376,
+          "tool_names": [
+            "Read"
+          ]
+        },
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1419,
+            "cache_read_input_tokens": 4058,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1419
+            },
+            "output_tokens": 861,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.151016,
+          "tool_names": [
+            "Edit"
+          ]
+        },
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1039,
+            "cache_read_input_tokens": 5477,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1039
+            },
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.053054,
+          "tool_names": []
+        }
+      ],
+      "errors": [],
+      "seconds": 8.667,
+      "recoveries": 0
+    },
+    {
+      "arm": "compact",
+      "passed": true,
+      "client_exit_code": 0,
+      "client_api_equivalent_usd": 0.030952399999999998,
+      "provider_attempts": [
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 4514,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 4514
+            },
+            "output_tokens": 113,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.1919,
+          "tool_names": [
+            "Read"
+          ]
+        },
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1424,
+            "cache_read_input_tokens": 4514,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1424
+            },
+            "output_tokens": 235,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.089528,
+          "tool_names": [
+            "horizon_compact_edit_v1"
+          ]
+        },
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 392,
+            "cache_read_input_tokens": 5938,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 392
+            },
+            "output_tokens": 5,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.028096,
+          "tool_names": []
+        }
+      ],
+      "errors": [],
+      "seconds": 6.067,
+      "recoveries": 0
+    },
+    {
+      "arm": "script",
+      "passed": false,
+      "client_exit_code": 1,
+      "ast_matches": false,
+      "comments_match": true,
+      "client_api_equivalent_usd": 0.017592999999999998,
+      "provider_attempts": [
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1611,
+            "cache_read_input_tokens": 2487,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1611
+            },
+            "output_tokens": 114,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.080854,
+          "tool_names": [
+            "Read"
+          ]
+        },
+        {
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 1421,
+            "cache_read_input_tokens": 4098,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1421
+            },
+            "output_tokens": 300,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "service_tier": "standard",
+            "inference_geo": "global"
+          },
+          "cost_upper_usd": 0.095076,
+          "tool_names": [
+            "Bash"
+          ]
+        }
+      ],
+      "errors": [
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError",
+        "RuntimeError"
+      ],
+      "seconds": 5.206,
+      "recoveries": 0
+    }
+  ]
+}

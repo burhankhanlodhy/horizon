@@ -128,6 +128,44 @@ class ReplayJournal:
         with self._lock:
             self._db.close()
 
+    def acknowledge(self, scope: str, call: str, result: dict[str, Any]) -> None:
+        """Persist actual client-result receipt, never infer execution from delivery."""
+        from .wire import fingerprint
+
+        receipt = {"sha256": fingerprint(result), "is_error": result.get("is_error")}
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._db.execute(
+                    "SELECT payload FROM compact_edit_journal WHERE scope=? AND key=?",
+                    (scope, "call:" + call),
+                ).fetchone()
+                if row is None:
+                    raise CompactEditError("acknowledgement has no published call")
+                record = json.loads(row[0])
+                previous = record.get("native_result")
+                if previous is not None and previous != receipt:
+                    raise CompactEditError("client result changed on replay")
+                if previous is None:
+                    record["native_result"] = receipt
+                    payload = canonical(record)
+                    size = self._db.execute(
+                        "SELECT COALESCE(SUM(LENGTH(CAST(payload AS BLOB))),0) FROM compact_edit_journal"
+                    ).fetchone()[0]
+                    if (
+                        len(payload.encode()) > 2_100_000
+                        or size - len(row[0].encode()) + len(payload.encode()) > self._max_bytes
+                    ):
+                        raise CompactEditError("journal cannot retain client acknowledgement")
+                    self._db.execute(
+                        "UPDATE compact_edit_journal SET payload=? WHERE scope=? AND key=?",
+                        (payload, scope, "call:" + call),
+                    )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
     def __enter__(self) -> ReplayJournal:
         return self
 
