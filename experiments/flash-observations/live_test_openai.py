@@ -275,6 +275,8 @@ def run_chat_session(
         }
         if args.effort:
             body["reasoning_effort"] = args.effort
+        if args.no_parallel:
+            body["parallel_tool_calls"] = False
         started = time.monotonic()
         try:
             resp = http.post(url, json=body)
@@ -415,6 +417,11 @@ def main() -> int:
         help="Responses API (GPT, Codex) or Chat Completions (DeepSeek, Gemini, ...)",
     )
     ap.add_argument("--injection", action="store_true")
+    ap.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="chat: parallel_tool_calls=false (one suite per turn, so outputs get stubbed)",
+    )
     ap.add_argument("--fake", action="store_true", help="run against fake_openai.py (no key)")
     ap.add_argument(
         "--base-url", default=None, help="OpenAI-compatible upstream (default official)"

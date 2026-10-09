@@ -450,3 +450,63 @@ list prices instead of the estimated $6–7.
     proxy integration works end to end on a real model.
 - **Not yet measured:** repeats (one session per arm), and OpenAI's own API,
   where caching is reliable and the saving at this length should be smaller.
+
+## DeepSeek and Gemini through oneprovider (Chat Completions, 2026-10-09)
+
+`live_test_openai.py --api chat --base-url https://api.oneprovider.dev/v1
+--suites 12`, one session per arm. `$` is at each model's list price found on
+2026-10-09 (DeepSeek V4 Pro: $0.435 input / $0.0036 cache hit / $0.87 output;
+Gemini 3.1 Pro: $2 / $0.20 / $12, $4 / $18 above 200k). oneprovider's own
+billing may differ.
+
+**Preflight (`preflight_openai.py --api chat`).**
+
+| Check | DeepSeek V4 Pro | Gemini 3.1 Pro |
+|---|---|---|
+| Edited earlier output accepted | Yes, with `reasoning_content` passed back | Yes |
+| Prefix before the edit cached | Yes (8,960 tokens) | Not reported |
+| Newest output readable | Yes | Yes |
+| Cached tokens in `usage` | Slow to appear (0 on immediate repeats, then hits) | Never |
+
+The chat preflight forces only the first tool call (`tool_choice: "required"`).
+oneprovider's Gemini returned an empty reply for a named `tool_choice`, and for
+any forced call once the history held a tool result.
+
+**DeepSeek V4 Pro: no saving, and one quality miss.**
+
+| Arm | Input | Cached | $ | Score |
+|---|---|---|---|---|
+| control-direct | 945,660 | 798,336 | 0.068 | 1.00 |
+| flash-direct | 180,419 | 26,624 | 0.069 | **0.80** |
+| flash-proxy | 218,872 | 60,800 | 0.075 | 1.00 |
+
+- **No saving:** DeepSeek's cache works well, and a cache hit costs under 1%
+  of an input token. Re-reading old outputs is almost free, so stubbing them
+  saves nothing. Flash also wrote more output (the notice asks for notes).
+- **The miss:** in flash-direct the model named the right `api` tests but
+  invented their error values. It did not write the numbers into its reply
+  while the log was visible; they were probably only in its reasoning.
+- **Verdict:** do not enable Flash Observations for DeepSeek.
+
+**Gemini 3.1 Pro: −80% client-side; the proxy session did not test flash.**
+
+| Arm | Requests | Input | $ | Score |
+|---|---|---|---|---|
+| control-direct | 13 | 1,310,784 | 2.677 | 1.00 |
+| flash-direct | 13 | 245,888 | **0.544 (−80%)** | 1.00 |
+| flash-proxy | 2 | 205,775 | 0.488 | 1.00 |
+
+- **Why −80%:** oneprovider reports no caching for Gemini, so every turn
+  re-bills the whole context. Control also reached 207k tokens, past Gemini's
+  200k whole-request tier; the harness prices it at the lower tier, so
+  control's real cost is higher still.
+- **flash-proxy did not test flash.** In both attempts Gemini called all 12
+  suites in its first turn, so nothing was ever stubbed. The second attempt
+  sent `parallel_tool_calls: false`, which the gateway ignored.
+- **Cause:** Horizon injected its `horizon_retrieve` tool on the first request
+  (`tool_injection_decision decision=inject_eager`, a CCR feature separate from
+  flash). The direct arms never saw a second tool.
+- **A fair proxy test** needs CCR tool injection off in both proxy arms.
+
+**Spend:** about $4.40 at list prices: DeepSeek $0.21, Gemini $4.19
+(including the second flash-proxy attempt).
