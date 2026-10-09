@@ -442,4 +442,11 @@ list prices instead of the estimated $6–7.
   model found all 6 failures. The session first scored 0.00 because the scorer
   compared full pytest ids literally; that is fixed, and the answer re-scores
   1.00.
-- **Not yet measured:** a full flash-proxy session at 12 suites, and repeats.
+- **Full flash-proxy session (same logs, 12 suites):** 13 requests, 285,281
+  input tokens, **$0.596 (−53% against control's $1.272)**, score 1.00.
+  - Horizon flashed every step (1 shown once, then 1 → 11 stubbed).
+  - No errors and no retrievals; each suite ran once.
+  - It matches flash-direct (283,468 tokens, $0.581) to within 1%, so the
+    proxy integration works end to end on a real model.
+- **Not yet measured:** repeats (one session per arm), and OpenAI's own API,
+  where caching is reliable and the saving at this length should be smaller.
