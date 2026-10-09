@@ -366,18 +366,49 @@ def test_flash_on_an_upstream_that_never_caches_prices_as_fresh_input() -> None:
         "cache_read_tokens": 0,
         "uncached_input_tokens": 40_000,
     }
-    flashed = _o(**gemini, transforms_applied=("flash_saved:10000",))
+    flashed = _o(**gemini, transforms_applied=("flash:1/2", "flash_saved:10000"))
     # Not enough evidence yet: the cache-read floor.
     assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-7)
-    for _ in range(3):
-        policy_savings.price(_o(**gemini))
+    # Later turns of a conversation no stub edited, none reading the cache.
+    for _ in range(4):
+        policy_savings.price(_o(**gemini, conversation_key="chat-a"))
     assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-6)
+
+
+def test_misses_a_stub_caused_are_not_evidence() -> None:
+    """Native Gemini, 2026-10-09: the flashed session never hit the cache because
+    its stubs edited the history, while the same task unflashed did hit."""
+    model = {
+        "provider": "gemini",
+        "model": "gemini-3-flash-preview",
+        "cache_read_tokens": 0,
+        "uncached_input_tokens": 18_000,
+        "conversation_key": "conv-flashed",
+    }
+    for k in range(1, 9):
+        policy_savings.price(_o(**model, transforms_applied=(f"flash:1/{k}", "flash_saved:8000")))
+    assert not policy_savings.upstream_never_caches("gemini", "gemini-3-flash-preview")
+
+
+def test_first_requests_of_new_conversations_are_not_evidence() -> None:
+    """A conversation's first request misses on any provider: nothing was cached yet."""
+    for n in range(6):
+        policy_savings.price(
+            _o(
+                provider="openai",
+                model="gpt-5.4",
+                cache_read_tokens=0,
+                uncached_input_tokens=30_000,
+                conversation_key=f"new-{n}",
+            )
+        )
+    assert not policy_savings.upstream_never_caches("openai", "gpt-5.4")
 
 
 def test_one_cache_read_keeps_the_floor_for_good() -> None:
     model = {"provider": "openai", "model": "gpt-5.4", "uncached_input_tokens": 40_000}
     for _ in range(5):
-        policy_savings.price(_o(**model, cache_read_tokens=0))
+        policy_savings.price(_o(**model, cache_read_tokens=0, conversation_key="c"))
     policy_savings.price(_o(**model, cache_read_tokens=30_000))
     flashed = _o(**model, cache_read_tokens=0, transforms_applied=("flash_saved:10000",))
     assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2.5e-7)

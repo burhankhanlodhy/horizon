@@ -14,8 +14,8 @@ markers its handler appended to ``transforms_applied``:
     can itself break the cache (the OpenAI form edits an earlier item), and
     pricing removed tokens as fresh input there credited about three times
     the measured saving. The exception is an upstream that evidently does not
-    cache (:func:`upstream_never_caches`: several sizeable requests for the
-    model, none with a cache read): without the flash those tokens would have
+    cache (:func:`upstream_never_caches`: several later turns of conversations
+    no stub edited, none with a cache read, and no read anywhere): without the flash those tokens would have
     been billed as fresh input too, so they price at the input rate. The turn
     that shows an output in full is not credited, nor a request whose usage
     reports nothing. Tokens are counted on the forwarded (already compressed)
@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -136,18 +137,46 @@ _cache_seen: OrderedDict[tuple[str, str], list[int]] = OrderedDict()
 _CACHE_SEEN_MAX = 1_024
 
 
+#: Conversations already seen, so a later request in one is known to repeat a
+#: prefix the upstream was sent before.
+_seen_conversations: OrderedDict[str, None] = OrderedDict()
+_STUBBED = re.compile(r"^flash:\d+/[1-9]\d*$")
+
+
 def observe_cache(outcome: Any) -> None:
-    """Record whether a sizeable successful request for this model read the cache."""
+    """Record whether a sizeable successful request for this model read the cache.
+
+    A cache read anywhere counts. A request without one counts as evidence that
+    the upstream does not cache only when a caching upstream would have had to
+    hit: a later turn of a conversation already seen, which no flash stub
+    edited. A conversation's first request, or one a stub rewrote, can miss on
+    any provider; counting those made a caching upstream look like one that
+    never caches, and priced flash at the input rate several times over the
+    measured saving (native Gemini, 2026-10-09).
+    """
     try:
         prompt = (
             outcome.cache_read_tokens + outcome.cache_write_tokens + outcome.uncached_input_tokens
         ) or outcome.provider_input_tokens
+        conversation = str(getattr(outcome, "conversation_key", None) or "")
+        with _counts_lock:
+            continuing = bool(conversation) and conversation in _seen_conversations
+            if conversation:
+                _seen_conversations[conversation] = None
+                _seen_conversations.move_to_end(conversation)
+                while len(_seen_conversations) > _CACHE_SEEN_MAX * 4:
+                    _seen_conversations.popitem(last=False)
         if prompt < _CACHE_EVIDENCE_MIN_PROMPT:
             return
+        read = outcome.cache_read_tokens > 0
+        if not read:
+            stubbed = any(_STUBBED.match(str(t)) for t in (outcome.transforms_applied or ()))
+            if not continuing or stubbed:
+                return
         key = (str(outcome.provider or "").lower(), str(outcome.model or "").lower())
         with _counts_lock:
             seen = _cache_seen.setdefault(key, [0, 0])
-            seen[1 if outcome.cache_read_tokens > 0 else 0] += 1
+            seen[1 if read else 0] += 1
             _cache_seen.move_to_end(key)
             while len(_cache_seen) > _CACHE_SEEN_MAX:
                 _cache_seen.popitem(last=False)
@@ -170,6 +199,7 @@ def upstream_never_caches(provider: str, model: str) -> bool:
 def reset_for_tests() -> None:
     with _counts_lock:
         _cache_seen.clear()
+        _seen_conversations.clear()
         _COUNTS.clear()
 
 

@@ -31,8 +31,10 @@ All notable changes to Horizon are documented here.
 - Flash credit is priced at the cache-read rate. Priced from the flashed
   request's own cache usage, it could exceed the measured saving severalfold
   on OpenAI-format upstreams, where a stub can break the cache. On an upstream
-  that evidently does not cache (several sizeable requests for the model, none
-  with a cache read), it prices at the input rate instead.
+  that evidently does not cache, it prices at the input rate instead. Only
+  later turns of conversations no stub edited count as that evidence: in a
+  live native-Gemini run the flashed session's own misses (caused by its
+  stubs) made a caching upstream look non-caching and overcredited flash.
 - The account ledger's request cost no longer bills OpenAI's inferred cache
   writes on top of the same uncached tokens (it nearly doubled `cost_usd` on
   cache misses).
