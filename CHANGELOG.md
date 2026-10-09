@@ -4,6 +4,10 @@ All notable changes to Horizon are documented here.
 
 ## [Unreleased]
 
+## [0.41.0] — Savings profile and Flash safety nets
+
+`HORIZON_SAVINGS` defaults to `off`, so nothing changes until it is set.
+
 ### Added
 - `HORIZON_SAVINGS=off|auto|max`: one switch that fills in the cost features'
   defaults. `auto` enables what was measured to save money (Claude and
