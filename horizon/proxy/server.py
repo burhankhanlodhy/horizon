@@ -2512,6 +2512,8 @@ class HorizonProxy(
         correct and original bytes do not exist).
         """
         from horizon.proxy.body_forwarding import select_outbound_body, serialize_body_canonical
+        from horizon.proxy.flash_guard import fallback_body as flash_fallback_body
+        from horizon.proxy.flash_guard import record_retry as flash_record_retry
         from horizon.proxy.flex_policy import fallback_body
         from horizon.proxy.helpers import log_outbound_request
 
@@ -2563,6 +2565,18 @@ class HorizonProxy(
                         response = await self.http_client.post(  # type: ignore[union-attr]
                             url, **post_kwargs
                         )
+
+                    # The upstream rejected a request Horizon flashed: send it
+                    # once unflashed; a success switches flash off for that
+                    # host and model (flash_guard).
+                    flash_retry = flash_fallback_body(body, response.status_code)
+                    if flash_retry is not None:
+                        body = flash_retry
+                        post_kwargs["content"] = serialize_body_canonical(body)
+                        response = await self.http_client.post(  # type: ignore[union-attr]
+                            url, **post_kwargs
+                        )
+                        flash_record_retry(response.status_code)
 
                     # Transient overloads (429 rate-limit, 529 overloaded):
                     # retry honoring Retry-After, but return verbatim once
@@ -3027,12 +3041,34 @@ class WebSocketProjectPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
+def _savings_profile_snapshot() -> dict[str, object] | None:
+    try:
+        from horizon.proxy.savings_profile import snapshot
+
+        return snapshot()
+    except Exception:  # pragma: no cover - stats must never fail
+        return None
+
+
+def _flash_stats_snapshot() -> dict[str, object] | None:
+    try:
+        from horizon.proxy.flash_guard import stats
+
+        return stats()
+    except Exception:  # pragma: no cover - stats must never fail
+        return None
+
+
 def create_app(config: ProxyConfig | None = None) -> FastAPI:
     """Create FastAPI application."""
     if not FASTAPI_AVAILABLE:
         raise ImportError("FastAPI required. Install: pip install fastapi uvicorn httpx")
 
     from horizon.proxy.forwarded_headers import load_trusted_dashboard_client_cidrs
+    from horizon.proxy.savings_profile import apply_savings_profile
+
+    # HORIZON_SAVINGS for embedded callers that skip the CLI (idempotent).
+    apply_savings_profile()
 
     # Parse once at startup so invalid operator configuration fails loudly.
     trusted_dashboard_client_cidrs = load_trusted_dashboard_client_cidrs()
@@ -4762,6 +4798,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             "summary": summary,
             "agent_usage": agent_usage,
             "routing": get_routing_stats(),
+            "savings_profile": _savings_profile_snapshot(),
+            "flash": _flash_stats_snapshot(),
             "cache_misses": (
                 proxy.cache_miss_watch.stats()
                 if getattr(proxy, "cache_miss_watch", None) is not None

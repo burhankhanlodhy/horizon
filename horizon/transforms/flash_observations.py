@@ -49,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -87,10 +88,82 @@ class FlashResult:
     stubbed: int = 0  # tool results replaced by a stub (flashed now or earlier)
     chars_kept_out: int = 0  # original characters no longer in the permanent context
     keys: list[tuple[str, str]] = field(default_factory=list)  # (ccr key, original)
+    # Index of a tool call that re-ran a command whose output had been stubbed.
+    # Nothing after it is flashed: the model went back for something it lost.
+    paused_at: int | None = None
 
     @property
     def changed(self) -> bool:
         return self.stubbed > 0
+
+    @property
+    def paused(self) -> bool:
+        return self.paused_at is not None
+
+
+#: Arguments that may differ between two runs of the same command.
+_VOLATILE_ARGS = frozenset(
+    {"description", "timeout", "timeout_ms", "justification", "run_in_background"}
+)
+
+
+def call_signature(name: str, args: Any) -> str:
+    """Tool name plus arguments, ignoring fields a re-run may change (``description``)."""
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            pass
+    if isinstance(args, dict):
+        args = {k: v for k, v in args.items() if k not in _VOLATILE_ARGS}
+    return name + "\x00" + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+
+
+#: What differs between two runs that saw the same state: durations, clock times
+#: and timestamps. Other numbers (test counts, values) are real differences.
+_RUN_NOISE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?"
+    r"|\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"|\b\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds|m|min|mins|minutes)\b"
+)
+
+
+def _same_output(a: str, b: str) -> bool:
+    """Equal once durations, clock times and timestamps are blanked."""
+    return _RUN_NOISE.sub("#", a).strip() == _RUN_NOISE.sub("#", b).strip()
+
+
+def first_rerun(
+    calls: dict[str, tuple[int, str]],
+    outputs: dict[str, str],
+    stubbed: dict[str, int],
+) -> int | None:
+    """Index of the first call that fetched a stubbed output again.
+
+    A re-need is a later call with the same signature as the call behind a
+    stubbed output that returned the same output: the model went back for data
+    it had already been shown. A re-run that returns something different (tests
+    run again after an edit) is ordinary work and does not count.
+
+    ``calls``: call id -> (index of the call, signature). ``outputs``: call id ->
+    output text, for every output in the history. ``stubbed``: call id of each
+    stubbed output -> index of that output.
+    """
+    reruns = []
+    for stubbed_id, output_index in stubbed.items():
+        if stubbed_id not in calls or stubbed_id not in outputs:
+            continue
+        sig = calls[stubbed_id][1]
+        for call_id, (index, other_sig) in calls.items():
+            if (
+                call_id != stubbed_id
+                and other_sig == sig
+                and index > output_index
+                and call_id in outputs
+                and _same_output(outputs[call_id], outputs[stubbed_id])
+            ):
+                reruns.append(index)
+    return min(reruns) if reruns else None
 
 
 def ccr_key(original: str) -> str:
@@ -182,13 +255,43 @@ def apply_flash(
         return FlashResult(messages=messages)
 
 
+def _rerun_index(
+    messages: list[dict[str, Any]], horizon: int, policy: FlashPolicy, names: dict[str, str]
+) -> int | None:
+    calls: dict[str, tuple[int, str]] = {}
+    outputs: dict[str, str] = {}
+    stubbed: dict[str, int] = {}
+    for index, msg in enumerate(messages):
+        if not isinstance(msg, dict) or not isinstance(msg.get("content"), list):
+            continue
+        for block in msg["content"]:
+            if not isinstance(block, dict):
+                continue
+            if msg.get("role") == "assistant" and block.get("type") == "tool_use":
+                if isinstance(block.get("id"), str):
+                    calls[block["id"]] = (
+                        index,
+                        call_signature(str(block.get("name")), block.get("input")),
+                    )
+            elif msg.get("role") == "user" and block.get("type") == "tool_result":
+                text = _text_of(block.get("content"))
+                tool_use_id = block.get("tool_use_id")
+                if isinstance(tool_use_id, str) and text is not None:
+                    outputs[tool_use_id] = text
+                    if index >= horizon and _stub_block(block, names, policy) is not None:
+                        stubbed[tool_use_id] = index
+    return first_rerun(calls, outputs, stubbed)
+
+
 def _apply(messages: list[dict[str, Any]], horizon: int, policy: FlashPolicy) -> FlashResult:
     names = _tool_names(messages)
     result = FlashResult(messages=[])
+    result.paused_at = _rerun_index(messages, horizon, policy, names)
     out = result.messages
     for index, msg in enumerate(messages):
         if (
             index < horizon
+            or (result.paused_at is not None and index > result.paused_at)
             or not isinstance(msg, dict)
             or msg.get("role") != "user"
             or not isinstance(msg.get("content"), list)

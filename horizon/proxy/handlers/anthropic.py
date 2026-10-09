@@ -50,6 +50,7 @@ from horizon.proxy.buffered_ccr_response import (
     buffered_ccr_asgi_call,
 )
 from horizon.proxy.compression_decision import CompressionDecision
+from horizon.proxy.flash_guard import sent_value as _flash_sent_value
 from horizon.proxy.forwarded_headers import resolve_client_ip
 from horizon.proxy.handlers._debug_dump import _debug_dump_mode, _redact_debug_value
 from horizon.proxy.helpers import (
@@ -882,6 +883,13 @@ class AnthropicHandlerMixin:
             # A gateway that rewrites system messages or drops caching would
             # bill the flashed text on every turn: a cost increase.
             return False, None
+        from urllib.parse import urlparse
+
+        from horizon.proxy import flash_guard
+
+        host = urlparse(self.ANTHROPIC_API_URL).hostname or ""
+        if flash_guard.is_disabled(host, str(model)):
+            return False, None
         from horizon.proxy.helpers import (
             _MID_CONVERSATION_SYSTEM_FAMILIES,
             _model_in_families,
@@ -901,9 +909,18 @@ class AnthropicHandlerMixin:
         horizon = horizons.horizon(messages)
         policy = flash.flash_policy()
         result = flash.apply_flash(messages, horizon=horizon, policy=policy)
+        if result.paused:
+            flash_guard.record_rerun_pause(flash.conversation_key(messages))
         if result.changed:
             body["messages"] = result.messages
             body_mutation_tracker.mark_mutated("flash_observations")
+            # A 400 on this request is retried once with the unflashed messages.
+            flash_guard.arm("messages", messages, host=host, model=str(model))
+            flash_guard.record_flash(
+                shown_once=result.flashed,
+                stubbed=result.stubbed,
+                chars_kept_out=result.chars_kept_out,
+            )
             transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
             try:
                 from horizon.cache.compression_store import get_compression_store
@@ -3830,7 +3847,10 @@ class AnthropicHandlerMixin:
                         # mode falls back to full unmodified passthrough every
                         # turn instead of compressing the append-only delta.
                         next_original_messages = copy.deepcopy(original_client_messages)
-                        next_forwarded_messages = copy.deepcopy(optimized_messages)
+                        next_forwarded_messages = copy.deepcopy(
+                            # What the upstream accepted (an unflashed retry, if any).
+                            _flash_sent_value("messages", optimized_messages)
+                        )
                         assistant_message = self._assistant_message_from_response_json(
                             backend_response.body
                         )
@@ -4129,6 +4149,10 @@ class AnthropicHandlerMixin:
                     optimized_tokens = original_tokens
                     tokens_saved = 0
                     transforms_applied = []
+                    # The flash was discarded with the other edits: nothing to retry.
+                    from horizon.proxy.flash_guard import disarm as _flash_disarm
+
+                    _flash_disarm()
 
                 log_cache_breakpoints(
                     request_id=request_id,
@@ -4830,7 +4854,10 @@ class AnthropicHandlerMixin:
 
                         # Update prefix cache tracker for next turn
                         next_original_messages = copy.deepcopy(original_client_messages)
-                        next_forwarded_messages = copy.deepcopy(optimized_messages)
+                        next_forwarded_messages = copy.deepcopy(
+                            # What the upstream accepted (an unflashed retry, if any).
+                            _flash_sent_value("messages", optimized_messages)
+                        )
                         assistant_message = self._assistant_message_from_response_json(resp_json)
                         if assistant_message is not None:
                             next_original_messages.append(copy.deepcopy(assistant_message))

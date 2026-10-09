@@ -51,7 +51,9 @@ from horizon.transforms.flash_observations import (
     FlashPolicy,
     FlashResult,
     build_stub,
+    call_signature,
     ccr_key,
+    first_rerun,
 )
 
 logger = logging.getLogger(__name__)
@@ -284,26 +286,39 @@ def _apply(
         names = responses_tool_names(items)
         answered_before = responses_tail_start(items)
         field_name = "output"
-    result = FlashResult(messages=[])
-    out = result.messages
+    # First pass: the outputs this policy covers, by index.
+    eligible: dict[int, tuple[str, str]] = {}
     for index, item in enumerate(items):
         is_output = isinstance(item, dict) and (
             item.get("role") == "tool" if chat else item.get("type") in OUTPUT_ITEM_TYPES
         )
         if index < horizon or not is_output:
-            out.append(item)
             continue
         call_id = item.get("tool_call_id") if chat else _call_id(item)
         if not isinstance(call_id, str) or not policy.allows(names.get(call_id, "")):
-            out.append(item)
             continue
         current = _parts_text(item.get(field_name))
         original = (originals or {}).get(call_id)
         if original is None and current is not None:
             original = _strip_notice(current)
         if original is None or len(original) < policy.min_chars:
+            continue
+        eligible[index] = (call_id, original)
+
+    result = FlashResult(messages=[])
+    outputs = chat_originals(items) if chat else responses_originals(items)
+    outputs.update(originals or {})
+    result.paused_at = first_rerun(
+        _call_signatures(items, chat=chat),
+        outputs,
+        {call_id: index for index, (call_id, _) in eligible.items()},
+    )
+    out = result.messages
+    for index, item in enumerate(items):
+        if index not in eligible or (result.paused_at is not None and index > result.paused_at):
             out.append(item)
             continue
+        call_id, original = eligible[index]
         if index < answered_before:
             stub = build_stub(names[call_id], original)
             out.append({**item, field_name: stub})
@@ -314,6 +329,39 @@ def _apply(
             out.append({**item, field_name: _with_notice(item.get(field_name))})
             result.flashed += 1
     return result
+
+
+def _call_signatures(items: list[Any], *, chat: bool) -> dict[str, tuple[int, str]]:
+    """Call id -> (index of the call, signature) for every tool call in ``items``."""
+    calls: dict[str, tuple[int, str]] = {}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        if chat:
+            if item.get("role") != "assistant":
+                continue
+            for call in item.get("tool_calls") or []:
+                function = call.get("function") if isinstance(call, dict) else None
+                if isinstance(function, dict) and isinstance(call.get("id"), str):
+                    calls[call["id"]] = (
+                        index,
+                        call_signature(str(function.get("name")), function.get("arguments")),
+                    )
+            continue
+        kind = item.get("type")
+        if kind not in CALL_ITEM_TYPES:
+            continue
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(call_id, str):
+            continue
+        if kind == "local_shell_call":
+            sig = call_signature("local_shell", item.get("action"))
+        elif kind == "custom_tool_call":
+            sig = call_signature(str(item.get("name")), item.get("input"))
+        else:
+            sig = call_signature(str(item.get("name")), item.get("arguments"))
+        calls[call_id] = (index, sig)
+    return calls
 
 
 def conversation_key(items: Iterable[Any]) -> str:
@@ -394,7 +442,8 @@ OPENAI_HOSTS = frozenset({"api.openai.com", "chatgpt.com"})
 
 
 def upstream_supports_flash_openai(url: str) -> bool:
-    """OpenAI's own hosts, plus hosts listed in ``HORIZON_FLASH_OPENAI_UPSTREAMS``.
+    """OpenAI's own hosts, plus hosts listed in ``HORIZON_FLASH_OPENAI_UPSTREAMS``
+    (``*`` for any host).
 
     Another OpenAI-compatible provider may cache differently or reject an
     edited history next to its reasoning state, so add a host (comma list, a
@@ -418,4 +467,9 @@ def upstream_supports_flash_openai(url: str) -> bool:
         return True
     extra = runtime_env.getenv("HORIZON_FLASH_OPENAI_UPSTREAMS", "") or ""
     allowed = {h.strip().lower().lstrip(".") for h in extra.split(",") if h.strip()}
+    if "*" in allowed:
+        # Any host (HORIZON_SAVINGS=auto): a stub only shrinks what is billed, and
+        # a host that rejects a flashed request is retried unflashed and switched
+        # off (horizon.proxy.flash_guard).
+        return bool(host)
     return any(host == h or host.endswith("." + h) for h in allowed)
