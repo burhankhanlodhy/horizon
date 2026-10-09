@@ -51,3 +51,21 @@ def test_pings_never_count_as_requests():
         assert analytics.REQUEST in line, column
     for column in ("keepalive_pings", "keepalive_spend_usd", "keepalive_avoided_usd"):
         assert f"AS {column}" in analytics.TOTALS
+
+
+def test_policy_savings_are_accepted_per_known_feature():
+    e = analytics.EventIn.model_validate(_event(policy_usd={"flash": 0.12, "flex": 0.03}))
+    assert e.policy_usd == {"flash": 0.12, "flex": 0.03}
+    assert analytics.EventIn.model_validate(_event()).policy_usd == {}
+
+
+@pytest.mark.parametrize("bad", [{"other": 1.0}, {"flash": -0.5}])
+def test_unknown_or_negative_policy_savings_are_rejected(bad):
+    with pytest.raises(ValidationError):
+        analytics.EventIn.model_validate(_event(policy_usd=bad))
+
+
+def test_policy_savings_have_totals():
+    for feature in ("flash", "fast_mode", "flex", "modernize"):
+        assert f"'policy_usd'->>'{feature}'" in analytics.TOTALS
+        assert f"AS {feature}_savings_usd" in analytics.TOTALS

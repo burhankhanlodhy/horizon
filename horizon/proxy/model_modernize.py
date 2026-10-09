@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -119,6 +120,20 @@ def _matches(model: str, prefix: str) -> bool:
 
 def supports_fast_mode(model: str) -> bool:
     return any(_matches(model, p) for p in FAST_MODE_MODELS)
+
+
+#: Tokens the Claude 4.7+ tokenizer produces per token of the older one, for the
+#: same text (see the module docstring).
+NEW_TOKENIZER_RATIO = 1.30
+_CLAUDE_VERSION = re.compile(r"claude-(?:opus|sonnet|haiku)-(\d+)(?:-(\d)(?!\d))?")
+
+
+def uses_new_tokenizer(model: str) -> bool:
+    """True for Claude 4.7 and later, which tokenize text about 30% larger."""
+    match = _CLAUDE_VERSION.search(model or "")
+    if match is None:
+        return False
+    return (int(match.group(1)), int(match.group(2) or 0)) >= (4, 7)
 
 
 #: The lowest thinking setting each successor accepts, or ``None`` when it

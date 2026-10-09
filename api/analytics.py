@@ -10,7 +10,7 @@ import io
 import json
 import os
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import db
@@ -34,6 +34,9 @@ class AuthorizeIn(BaseModel):
 class RunIn(BaseModel):
     runtime_id: UUID
     started_at: datetime
+
+
+PolicyFeature = Literal["flash", "fast_mode", "flex", "modernize"]
 
 
 class EventIn(BaseModel):
@@ -70,6 +73,9 @@ class EventIn(BaseModel):
     # rewrite it avoided because a ping kept its session warm (in savings_usd).
     kind: Literal["request", "keepalive"] = "request"
     keepalive_usd: float = Field(default=0, ge=0)
+    # Savings of Flash Observations and the price policies, per feature, already
+    # inside savings_usd (horizon/proxy/policy_savings.py).
+    policy_usd: dict[PolicyFeature, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
 
 
 class BatchIn(BaseModel):
@@ -168,7 +174,11 @@ TOTALS = f"""
    AS keepalive_spend_usd,
  count(*) FILTER (WHERE (data->>'keepalive_usd')::double precision > 0)::bigint
    AS keepalive_resumes,
- COALESCE(sum((data->>'keepalive_usd')::double precision),0) AS keepalive_avoided_usd
+ COALESCE(sum((data->>'keepalive_usd')::double precision),0) AS keepalive_avoided_usd,
+ COALESCE(sum((data->'policy_usd'->>'flash')::double precision),0) AS flash_savings_usd,
+ COALESCE(sum((data->'policy_usd'->>'fast_mode')::double precision),0) AS fast_mode_savings_usd,
+ COALESCE(sum((data->'policy_usd'->>'flex')::double precision),0) AS flex_savings_usd,
+ COALESCE(sum((data->'policy_usd'->>'modernize')::double precision),0) AS modernize_savings_usd
 """
 
 

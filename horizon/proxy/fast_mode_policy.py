@@ -49,6 +49,9 @@ from horizon.proxy import runtime_env
 logger = logging.getLogger(__name__)
 
 POLICY_ENV = "HORIZON_FAST_MODE_POLICY"
+#: Fast-mode price over standard, every token class (Opus 5.5: $8 / $40 per
+#: MTok against $4 / $20). Prices the premium a dropped ``speed`` saved.
+PRICE_MULTIPLIER = 2.0
 ENTRYPOINTS_ENV = "HORIZON_FAST_MODE_HEADLESS_ENTRYPOINTS"
 INTERACTIVE_HEADER = "x-horizon-interactive"
 

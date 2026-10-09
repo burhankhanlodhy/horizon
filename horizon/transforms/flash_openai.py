@@ -303,7 +303,9 @@ def _apply(
             original = _strip_notice(current)
         if original is None or len(original) < policy.min_chars:
             continue
-        eligible[index] = (call_id, original)
+        # What would be forwarded without the stub (compressed or replayed).
+        forwarded = _strip_notice(current) if current is not None else original
+        eligible[index] = (call_id, original, forwarded)
 
     result = FlashResult(messages=[])
     outputs = chat_originals(items) if chat else responses_originals(items)
@@ -311,20 +313,23 @@ def _apply(
     result.paused_at = first_rerun(
         _call_signatures(items, chat=chat),
         outputs,
-        {call_id: index for index, (call_id, _) in eligible.items()},
+        {call_id: index for index, (call_id, _, _) in eligible.items()},
     )
     out = result.messages
     for index, item in enumerate(items):
         if index not in eligible or (result.paused_at is not None and index > result.paused_at):
             out.append(item)
             continue
-        call_id, original = eligible[index]
+        call_id, original, forwarded = eligible[index]
         if index < answered_before:
             stub = build_stub(names[call_id], original)
             out.append({**item, field_name: stub})
             result.stubbed += 1
             result.chars_kept_out += len(original)
             result.keys.append((ccr_key(original), original))
+            # A prefix replayed from an earlier turn already carries the stub:
+            # without the flash it would carry the output.
+            result.cleared.append((original if forwarded == stub else forwarded, stub))
         else:
             out.append({**item, field_name: _with_notice(item.get(field_name))})
             result.flashed += 1

@@ -386,6 +386,40 @@ export default function Usage() {
         </Card>
       )}
 
+      {/* Flash Observations and price policies: shown once one has saved something */}
+      {t.flashSavingsUsd + t.fastModeSavingsUsd + t.flexSavingsUsd + t.modernizeSavingsUsd >
+        0 && (
+        <Card className="p-6">
+          <SectionHeader
+            eyebrow="Cost features"
+            title="Savings beyond compression"
+          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Figure
+              label="Flash Observations"
+              value={fmtUsd(t.flashSavingsUsd)}
+              sub="Large tool outputs kept out of later turns"
+            />
+            <Figure
+              label="Fast mode off when unattended"
+              value={fmtUsd(t.fastModeSavingsUsd)}
+              sub="Premium not paid on headless runs"
+            />
+            <Figure
+              label="OpenAI Flex tier"
+              value={fmtUsd(t.flexSavingsUsd)}
+              sub="Half-price tier on headless runs"
+            />
+            <Figure
+              label="Newer models"
+              value={fmtUsd(t.modernizeSavingsUsd)}
+              sub="Old model ids served on cheaper successors"
+            />
+          </div>
+          <p className="mt-4 text-sm text-ink-3">Already included in Est. savings.</p>
+        </Card>
+      )}
+
       {/* sessions table */}
       <Card className="overflow-hidden">
         <div className="px-6 pb-1 pt-6">

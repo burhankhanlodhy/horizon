@@ -263,7 +263,7 @@
           <div class="card">
             <label>Estimated savings</label>
             <div class="value" id="savings">$0</div>
-            <small>Catalog estimate, adjusted for provider cache; net of keep-alive pings</small>
+            <small>Catalog estimate, adjusted for provider cache; includes flash and price policies, net of keep-alive pings</small>
           </div>
           <div class="card">
             <label>Estimated provider spend</label>
@@ -294,6 +294,11 @@
             <label>Cache kept warm (net)</label>
             <div class="value" id="keepalive">$0</div>
             <small id="keepalive-detail">Rewrites avoided after a pause, minus every ping</small>
+          </div>
+          <div class="card">
+            <label>Beyond compression</label>
+            <div class="value" id="policy">$0</div>
+            <small id="policy-detail">Flash Observations and price policies</small>
           </div>
         </div>
         <div class="panel">
@@ -482,6 +487,18 @@
           $("keepalive-detail").textContent =
             `${money(t.keepalive_avoided_usd)} rewrites avoided on ${num(t.keepalive_resumes)} ` +
             `resumes · ${money(t.keepalive_spend_usd)} on ${num(t.keepalive_pings)} pings`;
+          const policy = {
+            Flash: Number(t.flash_savings_usd || 0),
+            "Fast mode": Number(t.fast_mode_savings_usd || 0),
+            Flex: Number(t.flex_savings_usd || 0),
+            "Newer models": Number(t.modernize_savings_usd || 0),
+          };
+          $("policy").textContent = money(Object.values(policy).reduce((a, b) => a + b, 0));
+          $("policy-detail").textContent =
+            Object.entries(policy)
+              .filter(([, v]) => v > 0)
+              .map(([k, v]) => `${k} ${money(v)}`)
+              .join(" · ") || "Flash Observations and price policies";
           rows("daily", s.series, [
             (r) => r.date,
             (r) => num(r.requests),

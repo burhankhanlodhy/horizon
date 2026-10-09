@@ -138,6 +138,20 @@
   allows that one path, the account middleware requires the account key, and
   the proxy ends only that account's session with that id. Ping rows need an
   API that knows `kind`; deploy the API before turning keep-alive on.
+- Flash Observations and the price policies (`HORIZON_SAVINGS`) lower a
+  request's price without removing tokens before it is counted, so the proxy
+  prices them per request (`horizon/proxy/policy_savings.py`), adds them to
+  `savings_usd` and lists them in `policy_usd` (`flash`, `fast_mode`, `flex`,
+  `modernize`). They therefore count toward Est. savings, the Pro fee and the
+  Free cap. Flash credits only outputs a request no longer carries, priced as
+  the cache reads they replace, and nothing when usage has no cache breakdown;
+  fast mode credits the premium on models that bill it; Flex credits standard
+  minus Flex price only when no 429 fallback happened, and the row's
+  `cost_usd` is the Flex price; modernization compares the requested model's
+  price on its own tokenizer. Prices come from the catalog only, never a
+  fallback rate. The price-cliff guard's extra compression is already in the
+  compression figure. Rows with `policy_usd` need an API that knows it; deploy
+  the API first.
 - Revocation immediately blocks new requests/connections and the next incoming
   WebSocket turn (revalidated before forwarding). An inference operation already
   sent upstream can finish.

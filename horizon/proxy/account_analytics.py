@@ -196,6 +196,7 @@ async def record_account_outcome(
     success = outcome.status_code < 400
     prices = {}
     cost = 0.0
+    policy = {}
     if success:
         try:
             from horizon.proxy.savings_tracker import (
@@ -226,6 +227,15 @@ async def record_account_outcome(
                     cache_write_tokens=outcome.cache_write_tokens,
                     uncached_input_tokens=outcome.uncached_input_tokens,
                 ) + _estimate_output_cost_usd(outcome.model, outcome.output_tokens)
+            # Flash Observations and the price policies (fast mode, Flex,
+            # model modernization) lower the bill without removing tokens
+            # before the request is counted; priced from this request's usage.
+            from horizon.proxy import policy_savings
+            from horizon.proxy.flex_policy import served_flex
+
+            priced = policy_savings.price(outcome, flex_served=served_flex())
+            policy = {k: round(v, 8) for k, v in priced.usd.items()}
+            cost = max(0.0, cost + priced.cost_delta)
         except Exception as exc:
             # A pricing-catalog failure must not discard measured token usage.
             logger.warning(
@@ -233,6 +243,7 @@ async def record_account_outcome(
             )
             prices = {}
             cost = 0.0
+            policy = {}
     event = {
         "event_id": str(
             uuid5(UUID(context.service.runtime_id), context.key_id + ":" + outcome.request_id)
@@ -266,7 +277,8 @@ async def record_account_outcome(
         "savings_usd": prices.get("compression", 0)
         + prices.get("tool_schema", 0)
         + prices.get("retained", 0)
-        + (keepalive_usd if success else 0),
+        + (keepalive_usd if success else 0)
+        + sum(policy.values()),
         "cost_usd": cost,
         "pricing_basis": prices.get("basis", "unavailable"),
         "transforms": [str(t)[:150] for t in outcome.transforms_applied][:100],
@@ -274,6 +286,9 @@ async def record_account_outcome(
     if success and keepalive_usd > 0:
         # Only when present: an ordinary row keeps the shape older APIs accept.
         event["keepalive_usd"] = keepalive_usd
+    if policy:
+        # Per feature, already inside savings_usd. Same rule as keepalive_usd.
+        event["policy_usd"] = policy
     await asyncio.to_thread(context.service._enqueue, event)
 
 

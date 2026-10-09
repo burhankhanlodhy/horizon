@@ -13,6 +13,11 @@ interface LedgerTotals {
   keepalive_spend_usd?: number;
   keepalive_resumes?: number;
   keepalive_avoided_usd?: number;
+  /** Flash Observations and the price policies, already inside savings_usd. */
+  flash_savings_usd?: number;
+  fast_mode_savings_usd?: number;
+  flex_savings_usd?: number;
+  modernize_savings_usd?: number;
 }
 interface UsageResponse {
   days: number;
@@ -121,6 +126,10 @@ const mapped = (r?: LedgerTotals) => ({
   keepaliveSpendUsd: Number(r?.keepalive_spend_usd ?? 0),
   keepaliveResumes: Number(r?.keepalive_resumes ?? 0),
   keepaliveAvoidedUsd: Number(r?.keepalive_avoided_usd ?? 0),
+  flashSavingsUsd: Number(r?.flash_savings_usd ?? 0),
+  fastModeSavingsUsd: Number(r?.fast_mode_savings_usd ?? 0),
+  flexSavingsUsd: Number(r?.flex_savings_usd ?? 0),
+  modernizeSavingsUsd: Number(r?.modernize_savings_usd ?? 0),
 });
 export const pct = (current: number, previous: number) =>
   previous > 0 ? ((current - previous) / previous) * 100 : undefined;

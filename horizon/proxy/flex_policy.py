@@ -66,6 +66,15 @@ _flex_added: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+def served_flex() -> bool:
+    """True when this request still carries the Flex tier Horizon added.
+
+    False after a 429 fallback to the standard tier, so the ledger credits Flex
+    only where the upstream billed it.
+    """
+    return _flex_added.get()
+
+
 def policy() -> str:
     value = (runtime_env.getenv(POLICY_ENV, "off") or "off").strip().lower()
     if value not in POLICIES:

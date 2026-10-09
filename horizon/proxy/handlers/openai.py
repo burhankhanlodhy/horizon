@@ -2001,6 +2001,7 @@ class OpenAIHandlerMixin:
         transforms_applied: list[str] | None = None,
         request_id: str = "",
         arm_guard: bool = True,
+        ledger_tag: bool = True,
     ) -> tuple[Any, bool]:
         """Flash Observations, next-turn form (opt-in, ``HORIZON_FLASH_OPENAI=1``).
 
@@ -2077,6 +2078,18 @@ class OpenAIHandlerMixin:
         )
         if transforms_applied is not None:
             transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
+            if ledger_tag and result.cleared:
+                # Tokens this request no longer carries, for the account ledger.
+                from horizon.proxy import policy_savings
+
+                count_text = None
+                try:
+                    count_text = self.openai_provider.get_token_counter(model).count_text
+                except Exception:
+                    logger.debug("flash: no tokenizer for %s", model, exc_info=True)
+                cleared = policy_savings.cleared_tokens(result.cleared, count_text)
+                if cleared:
+                    transforms_applied.append(policy_savings.flash_tag(cleared))
         if result.keys:
             try:
                 from horizon.cache.compression_store import get_compression_store
@@ -2128,8 +2141,10 @@ class OpenAIHandlerMixin:
             chat=False,
             url=url,
             model=str(payload.get("model") or ""),
-            # WebSocket frames have no HTTP status to retry on.
+            # WebSocket frames have no HTTP status to retry on, and a socket's
+            # transforms list spans all its turns, so no per-turn ledger marker.
             arm_guard=False,
+            ledger_tag=False,
             transforms_applied=transforms_applied,
             request_id=request_id,
         )
@@ -4723,7 +4738,13 @@ class OpenAIHandlerMixin:
         if 0 < tool_tokens_after_compaction < tool_tokens_before_compaction:
             original_tokens += tool_tokens_before_compaction
             optimized_tokens += tool_tokens_after_compaction
-        tokens_saved = max(0, original_tokens - optimized_tokens)
+        # Stubs are credited by the account ledger as flash savings, priced as
+        # the cache reads they replace (horizon.proxy.policy_savings); keep them
+        # out of compression's figure so they are not counted twice.
+        from horizon.proxy.policy_savings import flash_tokens as _flash_tokens
+
+        _flash_saved = _flash_tokens(transforms_applied)
+        tokens_saved = max(0, original_tokens - optimized_tokens - _flash_saved)
 
         # Turn hooks (opt-in extensions): a registered hook may rewrite the
         # outbound tools/messages before we send. on_response re-drive (below, in
@@ -4784,7 +4805,7 @@ class OpenAIHandlerMixin:
                 optimized_tokens = _th_msg_after
                 if 0 < tool_tokens_after_compaction < tool_tokens_before_compaction:
                     optimized_tokens += tool_tokens_after_compaction
-                tokens_saved = max(0, original_tokens - optimized_tokens)
+                tokens_saved = max(0, original_tokens - optimized_tokens - _flash_saved)
                 # Attribute to the hook ONLY when the hook itself reduced tokens.
                 if _th_msg_before is not None and _th_msg_after < _th_msg_before:
                     transforms_applied.append("turn_hook")

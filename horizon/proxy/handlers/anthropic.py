@@ -864,6 +864,7 @@ class AnthropicHandlerMixin:
         body_mutation_tracker: Any,
         transforms_applied: list[str],
         request_id: str = "",
+        count_text: Any = None,
     ) -> tuple[bool, Any]:
         """Apply Flash Observations.
 
@@ -922,6 +923,12 @@ class AnthropicHandlerMixin:
                 chars_kept_out=result.chars_kept_out,
             )
             transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
+            # Tokens this request no longer carries, for the account ledger.
+            from horizon.proxy import policy_savings
+
+            _cleared = policy_savings.cleared_tokens(result.cleared, count_text)
+            if _cleared:
+                transforms_applied.append(policy_savings.flash_tag(_cleared))
             try:
                 from horizon.cache.compression_store import get_compression_store
 
@@ -1292,10 +1299,19 @@ class AnthropicHandlerMixin:
             # fail-closed and bypass handling live in the helper. A model override
             # comes from a provider URL (for example Vertex rawPredict), where
             # rewriting body["model"] would not change the upstream model.
+            # Price-policy markers, appended to transforms_applied just before
+            # forwarding so the account ledger can price what each one saved
+            # (horizon.proxy.policy_savings).
+            _policy_tags: list[str] = []
             if model_override is None:
+                _requested_model = model
                 model = self._maybe_modernize_model(
                     model, body, body_mutation_tracker, _bypass, request_id
                 )
+                if model != _requested_model:
+                    from horizon.proxy.policy_savings import modernize_tag
+
+                    _policy_tags.append(modernize_tag(str(_requested_model), str(model)))
                 model = self._maybe_route_model(
                     model, messages, body, body_mutation_tracker, _bypass
                 )
@@ -1310,6 +1326,7 @@ class AnthropicHandlerMixin:
                 if _fast_reason:
                     body_mutation_tracker.mark_mutated("fast_mode_policy")
                     logger.info(f"[{request_id}] {_fast_reason}")
+                    _policy_tags.append(_fast_reason)
 
             # NOTE: Upstream temporarily disabled broad image compression due to
             # token-counting inaccuracies. We only compress the latest non-frozen
@@ -3597,10 +3614,16 @@ class AnthropicHandlerMixin:
             # the turn that acts on it and then cleared at no input cost. Runs
             # after every other message change (including cache-marker
             # placement) so the turn-scoped message is last and unmarked.
+            transforms_applied.extend(_policy_tags)
             _flash_beta_needed = False
             if not _bypass and not upstream_base_url:
                 _flash_beta_needed, _flash_view = self._maybe_flash_observations(
-                    body, model, body_mutation_tracker, transforms_applied, request_id
+                    body,
+                    model,
+                    body_mutation_tracker,
+                    transforms_applied,
+                    request_id,
+                    count_text=getattr(tokenizer, "count_text", None),
                 )
                 if _flash_view is not None and prefix_tracker is not None:
                     prefix_tracker.flash_view = _flash_view

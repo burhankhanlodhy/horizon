@@ -4,6 +4,20 @@ All notable changes to Horizon are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- The account ledger now credits Flash Observations, the fast-mode governor,
+  the OpenAI Flex tier and model modernization. Their savings were missing
+  from Est. savings (in cache mode, Claude flash recorded no savings at all).
+  Each is priced from the request's own usage, added to `savings_usd` and
+  listed per feature in `policy_usd`. A Flex request's cost is now its Flex
+  price.
+- Chat Completions no longer counts flashed outputs as compression at the
+  fresh-input price; they are credited as flash, priced as cache reads.
+
+### Added
+- Usage and Advanced Analytics show the savings beyond compression per
+  feature.
+
 ## [0.41.0] — Savings profile and Flash safety nets
 
 `HORIZON_SAVINGS` defaults to `off`, so nothing changes until it is set.

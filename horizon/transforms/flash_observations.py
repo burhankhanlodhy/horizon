@@ -88,6 +88,10 @@ class FlashResult:
     stubbed: int = 0  # tool results replaced by a stub (flashed now or earlier)
     chars_kept_out: int = 0  # original characters no longer in the permanent context
     keys: list[tuple[str, str]] = field(default_factory=list)  # (ccr key, original)
+    # (forwarded text, stub) for each output this request no longer carries in
+    # full: stubbed, and not shown in a flash this request renders. What the
+    # account ledger credits (horizon.proxy.policy_savings).
+    cleared: list[tuple[str, str]] = field(default_factory=list)
     # Index of a tool call that re-ran a command whose output had been stubbed.
     # Nothing after it is flashed: the model went back for something it lost.
     paused_at: int | None = None
@@ -287,6 +291,11 @@ def _apply(messages: list[dict[str, Any]], horizon: int, policy: FlashPolicy) ->
     names = _tool_names(messages)
     result = FlashResult(messages=[])
     result.paused_at = _rerun_index(messages, horizon, policy, names)
+    # A flash renders only while no later user message exists.
+    last_user = max(
+        (i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"),
+        default=-1,
+    )
     out = result.messages
     for index, msg in enumerate(messages):
         if (
@@ -311,6 +320,8 @@ def _apply(messages: list[dict[str, Any]], horizon: int, policy: FlashPolicy) ->
             result.stubbed += 1
             result.chars_kept_out += len(original)
             result.keys.append((ccr_key(original), original))
+            if index < last_user:
+                result.cleared.append((original, str(new_block.get("content") or "")))
         if not flashes:
             out.append(msg)
             continue
