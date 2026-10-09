@@ -295,6 +295,12 @@ Rep 1 uses the same logs as both heavy-retrieval sessions.
 **Spend:** about $10.60 this round. All live runs together cost about $24 at
 list price, plus hidden CCR continuations in the retrieval sessions.
 
+**oneprovider.dev (2026-10-09): not applicable.** Its `/v1/models` lists no
+Claude model (DeepSeek, Gemini, GLM, GPT, Grok and Kimi only), and
+`claude-opus-5-5` returns "The requested model is not available". Flash
+Observations depends on Claude's `clear_at` system messages, so it cannot run
+there.
+
 ### What decides it
 
 1. **Zero 400s in the flash arms.** No `clear_at` placement error, no
