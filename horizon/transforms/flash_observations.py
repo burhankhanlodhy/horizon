@@ -279,7 +279,7 @@ def upstream_supports_flash(api_url: str) -> bool:
     return host in OFFICIAL_HOSTS
 
 
-def flash_policy() -> FlashPolicy:
+def flash_policy(default_tools: Iterable[str] = DEFAULT_TOOLS) -> FlashPolicy:
     """``HORIZON_FLASH_TOOLS`` (comma list) and ``HORIZON_FLASH_MIN_CHARS``."""
     from horizon.proxy import runtime_env
 
@@ -287,7 +287,7 @@ def flash_policy() -> FlashPolicy:
     tools = (
         frozenset(t.strip() for t in raw_tools.split(",") if t.strip())
         if raw_tools is not None
-        else frozenset(DEFAULT_TOOLS)
+        else frozenset(default_tools)
     )
     try:
         min_chars = int(runtime_env.getenv("HORIZON_FLASH_MIN_CHARS", "") or DEFAULT_MIN_CHARS)
@@ -372,11 +372,15 @@ class FlashHorizons:
         key = conversation_key(messages)
         if not key:
             return len(messages)
+        return self.horizon_for(key, newest_user_index(messages))
+
+    def horizon_for(self, key: str, initial: int) -> int:
+        """The stored horizon for ``key``, recording ``initial`` on first sight."""
         with self._lock:
             if key in self._map:
                 self._map.move_to_end(key)
                 return self._map[key]
-            value = newest_user_index(messages)
+            value = initial
             self._map[key] = value
             while len(self._map) > self._max:
                 self._map.popitem(last=False)
