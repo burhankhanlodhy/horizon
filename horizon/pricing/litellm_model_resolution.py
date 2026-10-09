@@ -62,6 +62,9 @@ MODEL_PREFIX_RULES: tuple[LiteLLMModelPrefixRule, ...] = (
     LiteLLMModelPrefixRule("gemini-", "google/"),
     LiteLLMModelPrefixRule("minimax-", "minimax/"),
     LiteLLMModelPrefixRule("deepseek-", "deepseek/"),
+    # xAI's API and OpenAI-compatible gateways send bare ``grok-4.6``; the
+    # catalog keys xAI's own pricing as ``xai/grok-4.6``.
+    LiteLLMModelPrefixRule("grok-", "xai/"),
 )
 
 
@@ -157,12 +160,37 @@ def pricing_lookup_candidates(model: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(candidates))
 
 
+def gateway_fallback_candidates(model: str) -> tuple[str, ...]:
+    """Last-resort keys for a name a gateway spells differently from the catalog.
+
+    Tried only after :func:`resolution_candidates` found nothing:
+
+    * the name without its gateway vendor segment (OpenRouter-style
+      ``x-ai/grok-4.6`` or ``google/gemini-3.1-pro``), through the prefix rules;
+    * the ``-preview`` entry of a model the catalog lists only under its
+      preview name (gateways serve ``gemini-3.1-pro``; the catalog has
+      ``gemini-3.1-pro-preview``, at the same price).
+    """
+    primary = set(resolution_candidates(model))
+    forms = [model, *unwrapped_model_forms(model)]
+    out: list[str] = []
+    for form in forms[1:]:
+        out.extend(resolution_candidates(form))
+    for form in forms:
+        if not form.endswith("-preview"):
+            out.extend(resolution_candidates(form + "-preview"))
+    return tuple(c for c in dict.fromkeys(out) if c not in primary)
+
+
 def resolve_litellm_model_name(
     model: str,
     is_known_model: Callable[[str], bool],
 ) -> str:
     """Resolve ``model`` to the first candidate accepted by LiteLLM."""
     for candidate in resolution_candidates(model):
+        if is_known_model(candidate):
+            return candidate
+    for candidate in gateway_fallback_candidates(model):
         if is_known_model(candidate):
             return candidate
     return model

@@ -8,16 +8,18 @@ markers its handler appended to ``transforms_applied``:
 
 ``flash``
     ``flash_saved:N``: tokens of stubbed tool outputs this request no longer
-    carries, priced at the model's cache-read rate. Without the flash they
-    would sit in the cached prefix, so a cache read is what they would have
-    cost on a warm turn. The flashed request's own cache reads are not used:
-    a stub can itself break the cache (the OpenAI form edits an earlier item),
-    and pricing removed tokens as fresh input there credited about three times
-    the measured saving. When the upstream cache misses, the real saving is
-    larger than this floor. The turn that shows an output in full is not
-    credited, nor a request whose usage reports nothing. Tokens are counted on
-    the forwarded (already compressed) text, so nothing compression claimed is
-    counted again.
+    carries. Without the flash they would sit in the cached prefix, so they
+    price at the model's cache-read rate: what they would have cost on a warm
+    turn. The flashed request's own cache reads are not used, because a stub
+    can itself break the cache (the OpenAI form edits an earlier item), and
+    pricing removed tokens as fresh input there credited about three times
+    the measured saving. The exception is an upstream that evidently does not
+    cache (:func:`upstream_never_caches`: several sizeable requests for the
+    model, none with a cache read): without the flash those tokens would have
+    been billed as fresh input too, so they price at the input rate. The turn
+    that shows an output in full is not credited, nor a request whose usage
+    reports nothing. Tokens are counted on the forwarded (already compressed)
+    text, so nothing compression claimed is counted again.
 ``fast_mode``
     ``fast_mode:dropped:*`` on a model that bills the fast premium: the
     request at fast price minus the same request at standard price.
@@ -123,6 +125,52 @@ def cleared_tokens(pairs: Iterable[tuple[str, str]], count_text: Any = None) -> 
             logger.debug("flash token count failed; using a character estimate", exc_info=True)
         total += max(0, len(text) - len(stub)) // 4
     return total
+
+
+#: Prompt size from which a request is evidence about caching: providers cache
+#: only prefixes of at least about 1,024 tokens.
+_CACHE_EVIDENCE_MIN_PROMPT = 2_048
+#: Sizeable requests, none with a cache read, before an upstream counts as not caching.
+_NEVER_CACHES_AFTER = 3
+_cache_seen: OrderedDict[tuple[str, str], list[int]] = OrderedDict()
+_CACHE_SEEN_MAX = 1_024
+
+
+def observe_cache(outcome: Any) -> None:
+    """Record whether a sizeable successful request for this model read the cache."""
+    try:
+        prompt = (
+            outcome.cache_read_tokens + outcome.cache_write_tokens + outcome.uncached_input_tokens
+        ) or outcome.provider_input_tokens
+        if prompt < _CACHE_EVIDENCE_MIN_PROMPT:
+            return
+        key = (str(outcome.provider or "").lower(), str(outcome.model or "").lower())
+        with _counts_lock:
+            seen = _cache_seen.setdefault(key, [0, 0])
+            seen[1 if outcome.cache_read_tokens > 0 else 0] += 1
+            _cache_seen.move_to_end(key)
+            while len(_cache_seen) > _CACHE_SEEN_MAX:
+                _cache_seen.popitem(last=False)
+    except Exception:  # pragma: no cover - evidence only
+        logger.debug("cache observation failed", exc_info=True)
+
+
+def upstream_never_caches(provider: str, model: str) -> bool:
+    """True once several sizeable requests for ``model`` reported no cache read and none did.
+
+    Process-wide and one-way per model: a single read anywhere keeps the
+    model on the cache-read floor, so evidence from one account never raises
+    another's credit above it while their upstream caches.
+    """
+    with _counts_lock:
+        seen = _cache_seen.get((str(provider or "").lower(), str(model or "").lower()))
+    return bool(seen) and seen[1] == 0 and seen[0] >= _NEVER_CACHES_AFTER
+
+
+def reset_for_tests() -> None:
+    with _counts_lock:
+        _cache_seen.clear()
+        _COUNTS.clear()
 
 
 @dataclass
@@ -251,7 +299,11 @@ def _flash(outcome: Any, tokens: int) -> float:
         long_context=is_long_context_for(outcome.model, size),
         provider=outcome.provider,
     )
-    return 0.0 if rates is None else tokens * rates.read
+    if rates is None:
+        return 0.0
+    if upstream_never_caches(outcome.provider, outcome.model):
+        return tokens * rates.uncached
+    return tokens * rates.read
 
 
 def _modernize(outcome: Any, usage: _Usage, requested: str) -> float:
@@ -271,6 +323,7 @@ def _modernize(outcome: Any, usage: _Usage, requested: str) -> float:
 def price(outcome: Any, *, flex_served: bool = True) -> PolicySavings:
     """Dollar savings per feature for one successful request."""
     result = PolicySavings()
+    observe_cache(outcome)
     try:
         transforms = [str(t) for t in (outcome.transforms_applied or ())]
         if not transforms:

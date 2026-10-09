@@ -28,6 +28,14 @@ from tests.test_keepalive_hosted import _context, _outcome, _Service
 OPUS_READ, OPUS_IN, OPUS_OUT = 2e-7, 4e-6, 2e-5  # claude-opus-5-5, from the catalog
 
 
+@pytest.fixture(autouse=True)
+def _fresh_cache_evidence():
+    """Cache observations are process-wide; never let one test's feed another."""
+    policy_savings.reset_for_tests()
+    yield
+    policy_savings.reset_for_tests()
+
+
 def _o(**kw: Any) -> SimpleNamespace:
     base = {
         "provider": "anthropic",
@@ -325,3 +333,51 @@ def test_flash_is_priced_as_cache_reads_even_when_its_request_missed_the_cache()
         transforms_applied=("flash_saved:10000",),
     )
     assert policy_savings.price(cold).usd["flash"] == pytest.approx(10_000 * OPUS_READ)
+
+
+def test_an_inferred_cache_write_is_not_billed_on_top_of_fresh_input() -> None:
+    """OpenAI reports no writes; the handler's inferred write is the uncached tokens again."""
+
+    def outcome(inferred: bool) -> RequestOutcome:
+        return RequestOutcome(
+            request_id="r1",
+            provider="openai",
+            model="gpt-5.4",
+            original_tokens=20_000,
+            optimized_tokens=20_000,
+            output_tokens=0,
+            tokens_saved=0,
+            attempted_input_tokens=20_000,
+            cache_read_tokens=0,
+            cache_write_tokens=20_000,
+            uncached_input_tokens=20_000,
+            cache_inferred=inferred,
+        )
+
+    assert _row(outcome(True))["cost_usd"] == pytest.approx(20_000 * 2.5e-6)
+    assert _row(outcome(False))["cost_usd"] > 20_000 * 2.5e-6
+
+
+def test_flash_on_an_upstream_that_never_caches_prices_as_fresh_input() -> None:
+    """oneprovider's Gemini reports no cache reads at all: the counterfactual paid input."""
+    gemini = {
+        "provider": "openai",
+        "model": "gemini-3.1-pro",
+        "cache_read_tokens": 0,
+        "uncached_input_tokens": 40_000,
+    }
+    flashed = _o(**gemini, transforms_applied=("flash_saved:10000",))
+    # Not enough evidence yet: the cache-read floor.
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-7)
+    for _ in range(3):
+        policy_savings.price(_o(**gemini))
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2e-6)
+
+
+def test_one_cache_read_keeps_the_floor_for_good() -> None:
+    model = {"provider": "openai", "model": "gpt-5.4", "uncached_input_tokens": 40_000}
+    for _ in range(5):
+        policy_savings.price(_o(**model, cache_read_tokens=0))
+    policy_savings.price(_o(**model, cache_read_tokens=30_000))
+    flashed = _o(**model, cache_read_tokens=0, transforms_applied=("flash_saved:10000",))
+    assert policy_savings.price(flashed).usd["flash"] == pytest.approx(10_000 * 2.5e-7)

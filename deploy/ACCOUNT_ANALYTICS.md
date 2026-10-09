@@ -147,7 +147,9 @@
   the cache reads they replace, and nothing when usage has no cache breakdown;
   fast mode credits the premium on models that bill it; Flex credits standard
   minus Flex price only when no 429 fallback happened, and the row's
-  `cost_usd` is the Flex price; modernization compares the requested model's
+  `cost_usd` is the Flex price (flash is priced at the cache-read rate, or the
+  input rate once a model's upstream has shown it does not cache);
+  modernization compares the requested model's
   price on its own tokenizer. Prices come from the catalog only, never a
   fallback rate. The price-cliff guard's extra compression is already in the
   compression figure. Rows with `policy_usd` need an API that knows it; deploy
