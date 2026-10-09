@@ -86,7 +86,14 @@ def fallback_body(body: dict[str, Any], status_code: int) -> dict[str, Any] | No
     One retry per request: the guard moves to "retried" when this returns a body.
     """
     state = _armed.get()
-    if status_code != 400 or state is None or state[0] == "retried":
+    if state is None or state[0] == "retried":
+        return None
+    if status_code < 400:
+        # The flashed request was accepted. Later upstream calls in this request
+        # (CCR or hook continuations) send other messages: never swap theirs.
+        _armed.set(None)
+        return None
+    if status_code != 400:
         return None
     field, unflashed, key = state
     if field not in body:

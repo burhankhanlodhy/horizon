@@ -20,7 +20,7 @@ def test_not_armed_means_no_retry() -> None:
 
 def test_retry_once_then_switch_off_on_success() -> None:
     flash_guard.arm("messages", ["raw"], host="api.example", model="m1")
-    assert flash_guard.fallback_body({"messages": ["stub"]}, 200) is None
+    assert flash_guard.fallback_body({"messages": ["stub"]}, 429) is None  # still armed
     retry = flash_guard.fallback_body({"model": "m1", "messages": ["stub"]}, 400)
     assert retry == {"model": "m1", "messages": ["raw"]}
     assert flash_guard.fallback_body(retry, 400) is None  # one retry per request
@@ -29,6 +29,14 @@ def test_retry_once_then_switch_off_on_success() -> None:
     stats = flash_guard.stats()
     assert stats["rejected_then_retried"] == 1
     assert stats["switched_off"][0]["host"] == "api.example"
+
+
+def test_accepted_request_disarms_before_continuations() -> None:
+    flash_guard.arm("messages", ["raw"], host="h", model="m")
+    assert flash_guard.fallback_body({"messages": ["stub"]}, 200) is None
+    # A CCR continuation in the same request is rejected: its own messages stay.
+    assert flash_guard.fallback_body({"messages": ["stub", "a", "t"]}, 400) is None
+    assert not flash_guard.is_disabled("h", "m")
 
 
 def test_failed_retry_does_not_blame_flash() -> None:
