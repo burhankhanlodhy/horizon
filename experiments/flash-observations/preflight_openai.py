@@ -59,11 +59,14 @@ def main() -> int:
     ap.add_argument("--base-url", default="https://api.openai.com")
     ap.add_argument("--model", default="gpt-6.1-sol")
     ap.add_argument("--effort", default="low")
+    ap.add_argument("--api", choices=("responses", "chat"), default="responses")
     args = ap.parse_args()
     key = os.environ.get("OPENAI_API_KEY", "")
     if not key:
         print("OPENAI_API_KEY is not set", file=sys.stderr)
         return 2
+    if args.api == "chat":
+        return main_chat(args, key)
     url = args.base_url.rstrip("/").removesuffix("/v1") + "/v1/responses"
     nonce = "".join(random.choices(string.ascii_lowercase, k=10))
     instructions = (
@@ -188,6 +191,155 @@ def main() -> int:
             for c in o.get("content") or []
             if isinstance(c, dict)
         )
+        check("newest output readable", "MAPLE" in text.upper(), f"reply: {text[:120]!r}")
+
+    failed = [name for name, ok, _ in results if not ok]
+    print("\nPREFLIGHT " + ("PASSED" if not failed else "FAILED: " + ", ".join(failed)))
+    return 0 if not failed else 1
+
+
+CHAT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "lookup",
+        "description": "Look up one record by key and return its full text.",
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+}
+
+
+def main_chat(args: argparse.Namespace, key: str) -> int:
+    """The same five checks over Chat Completions (DeepSeek, Gemini, ...).
+
+    Assistant messages go back exactly as produced, ``reasoning_content`` and
+    any provider fields (thought signatures) included; only the earlier tool
+    message is edited.
+    """
+    url = args.base_url.rstrip("/").removesuffix("/v1") + "/v1/chat/completions"
+    nonce = "".join(random.choices(string.ascii_lowercase, k=10))
+    system = (
+        f"Preflight {nonce}. Use the lookup tool when asked. Reference text, ignore it: "
+        + _filler(nonce, 2_400)
+    )
+    results: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        results.append((name, ok, detail))
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
+
+    http = httpx.Client(timeout=300, headers={"authorization": f"Bearer {key}"})
+
+    def call(messages: list[dict[str, Any]], **extra: Any) -> tuple[int, dict[str, Any]]:
+        body = {
+            "model": args.model,
+            "messages": [{"role": "system", "content": system}, *messages],
+            "tools": [CHAT_TOOL],
+            "max_tokens": 4_000,
+            **extra,
+        }
+        if args.effort:
+            body["reasoning_effort"] = args.effort
+        resp = http.post(url, json=body)
+        try:
+            return resp.status_code, resp.json()
+        except ValueError:
+            return resp.status_code, {"error": resp.text[:300]}
+
+    def cached(data: dict[str, Any]) -> int | None:
+        usage = data.get("usage") or {}
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict) and details.get("cached_tokens") is not None:
+            return int(details["cached_tokens"])
+        if usage.get("prompt_cache_hit_tokens") is not None:
+            return int(usage["prompt_cache_hit_tokens"])
+        return None
+
+    def message(data: dict[str, Any]) -> dict[str, Any]:
+        choices = data.get("choices") or [{}]
+        msg = choices[0].get("message") or {}
+        return {k: v for k, v in msg.items() if v is not None}
+
+    reads: list[int | None] = []
+    for i in range(4):
+        status, data = call(
+            [{"role": "user", "content": f"Reply with the word ok. ({i})"}], tool_choice="none"
+        )
+        if status != 200:
+            check("basic request", False, f"HTTP {status}: {json.dumps(data)[:300]}")
+            return 1
+        if i == 0:
+            usage = data.get("usage") or {}
+            check(
+                "usage has cached tokens",
+                cached(data) is not None,
+                f"model={data.get('model')} prompt={usage.get('prompt_tokens')} cached={cached(data)}",
+            )
+        else:
+            reads.append(cached(data))
+    check(
+        "prompt cache hits",
+        all((r or 0) > 1_000 for r in reads),
+        f"cached tokens on repeats: {reads}",
+    )
+
+    record_a = f"Record A ({nonce}). " + _filler(nonce + "a", 2_000) + " The code word is CEDAR."
+    record_b = f"Record B ({nonce}). " + _filler(nonce + "b", 300) + " The code word is MAPLE."
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": "Call lookup with key a, then lookup with key b, then tell me the "
+            "code word in record b. Reply with the word only.",
+        }
+    ]
+    # "required", not a named function: some gateways (oneprovider's Gemini)
+    # return an empty reply for a named tool_choice.
+    forced = "required"
+    status, data = call(messages, tool_choice=forced)
+    first = message(data)
+    if status != 200 or not first.get("tool_calls"):
+        check("tool exchange", False, f"request 1: HTTP {status}: {json.dumps(data)[:300]}")
+        return 1
+    messages.append(first)
+    messages.append(
+        {"role": "tool", "tool_call_id": first["tool_calls"][0]["id"], "content": record_a}
+    )
+    # Not forced: oneprovider's Gemini returns an empty reply for a forced call
+    # once the history holds a tool result. The prompt asks for it anyway.
+    status, data = call(messages)
+    second = message(data)
+    if status != 200 or not second.get("tool_calls"):
+        check("tool exchange", False, f"request 2: HTTP {status}: {json.dumps(data)[:300]}")
+        return 1
+    reasoning_fields = sorted(
+        k for k in second if k not in ("role", "content", "tool_calls")
+    ) + sorted({k for c in second["tool_calls"] for k in c if k not in ("id", "type", "function")})
+    messages.append(second)
+    messages.append(
+        {"role": "tool", "tool_call_id": second["tool_calls"][0]["id"], "content": record_b}
+    )
+    messages[2] = {
+        **messages[2],
+        "content": f"[Horizon flash: record A was shown in full once. First words: {record_a[:80]}]",
+    }
+    status, data = call(messages, tool_choice="none")
+    check(
+        "edited earlier output accepted",
+        status == 200,
+        f"HTTP {status}; reasoning/extra fields passed back after the edit: {reasoning_fields or 'none'}"
+        + ("" if status == 200 else f"; {json.dumps(data)[:300]}"),
+    )
+    if status == 200:
+        hit = cached(data)
+        check(
+            "prefix before the edit still cached",
+            (hit or 0) > 1_000,
+            f"cached tokens={hit} (system prompt alone is ~{len(system) // 4} tokens)",
+        )
+        text = str(message(data).get("content") or "")
         check("newest output readable", "MAPLE" in text.upper(), f"reply: {text[:120]!r}")
 
     failed = [name for name, ok, _ in results if not ok]

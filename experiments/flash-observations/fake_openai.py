@@ -212,6 +212,109 @@ def _message(n: int, text: str) -> dict[str, Any]:
     }
 
 
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request) -> JSONResponse:
+    """Chat Completions with the same cache, validation and scripted model.
+
+    Assistant messages may carry ``reasoning_content`` (DeepSeek style); like
+    encrypted reasoning it must come back exactly as it was produced.
+    """
+    CALLS["n"] += 1
+    n = CALLS["n"]
+    body = await request.json()
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return _error("messages must be a non-empty list")
+    calls: set[str] = set()
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "assistant":
+            reasoning = msg.get("reasoning_content")
+            if reasoning is not None and not str(reasoning).startswith(
+                "rc:" + _sig(str(msg.get("tool_calls")))[4:16]
+            ):
+                return _error(f"messages[{i}].reasoning_content does not match what was produced")
+            calls.update(str(c.get("id")) for c in msg.get("tool_calls") or [])
+        elif msg.get("role") == "tool" and str(msg.get("tool_call_id")) not in calls:
+            return _error(f"messages[{i}]: tool message without a matching tool call")
+    total, cached = _cache({"instructions": None, "tools": body.get("tools")}, messages)
+
+    first_user = next((m for m in messages if m.get("role") == "user"), {})
+    task = SUITE_RE.search(_text(first_user.get("content")))
+    forced = body.get("tool_choice")
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] = []
+    if task is None and (isinstance(forced, dict) or forced == "required"):
+        made = sum(len(m.get("tool_calls") or []) for m in messages if m.get("role") == "assistant")
+        name = (
+            (forced.get("function") or {}).get("name", "lookup")
+            if isinstance(forced, dict)
+            else "lookup"
+        )
+        tool_calls.append(
+            {
+                "id": f"call_{n:05d}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps({"key": "abcdefgh"[made % 8]})},
+            }
+        )
+    elif task is None:
+        content = "I can see: " + " ".join(_text(m.get("content")) for m in messages)[-400:]
+    else:
+        suites = task.group(1).split(", ")
+        done = sum(len(m.get("tool_calls") or []) for m in messages if m.get("role") == "assistant")
+        newest = next((m for m in reversed(messages) if m.get("role") == "tool"), None)
+        found = FAIL_RE.findall(_text(newest.get("content"))) if newest and done else []
+        note = "Failures: " + ("; ".join(f"{t} | {e}" for t, e in found) if found else "none")
+        if done < len(suites):
+            content = note if done else None
+            tool_calls.append(
+                {
+                    "id": f"call_{n:05d}",
+                    "type": "function",
+                    "function": {
+                        "name": "run_tests",
+                        "arguments": json.dumps({"suite": suites[done]}),
+                    },
+                }
+            )
+        else:
+            notes = [_text(m.get("content")) for m in messages if m.get("role") == "assistant"] + [
+                note
+            ]
+            answer = []
+            for line in notes:
+                for entry in line.removeprefix("Failures: ").split("; "):
+                    if " | " in entry:
+                        test, err = entry.split(" | ", 1)
+                        answer.append({"suite": test.split("_")[1], "test": test, "error": err})
+            content = json.dumps(answer)
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    message["reasoning_content"] = "rc:" + _sig(str(tool_calls or None))[4:16] + " thinking"
+    out_tokens = 40 + _tokens(message)
+    return JSONResponse(
+        {
+            "id": f"chatcmpl_{n:05d}",
+            "object": "chat.completion",
+            "model": body.get("model"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": "tool_calls" if tool_calls else "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": total,
+                "completion_tokens": out_tokens,
+                "total_tokens": total + out_tokens,
+                "prompt_tokens_details": {"cached_tokens": cached},
+            },
+        }
+    )
+
+
 @app.get("/healthz")
 async def healthz() -> dict[str, bool]:
     return {"ok": True}
