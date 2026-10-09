@@ -256,3 +256,12 @@ After review the harness also serializes HTTP handling/escrow updates and stops
 new paid attempts after an error. Those refinements were linted/compiled, not
 rerun against the provider; the recorded measurements remain from the earlier
 completed calls.
+
+## Subsequent Gemini check
+
+The user then supplied a OneProvider key and Gemini IDs. That separate
+[compatibility report](../gemini/REPORT.md) records a valid Flash compact payload,
+an interrupted script trial and an output/usage-cap mismatch. It does not certify
+this Claude route or Codex. Further Gemini paid calls stopped, and the shared
+ledger now includes returned Gemini usage and an unreconciled request; the
+earlier spend figures above describe only this Claude validation phase.

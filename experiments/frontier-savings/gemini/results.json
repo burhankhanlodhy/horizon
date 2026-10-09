@@ -1,0 +1,86 @@
+{
+  "provider": "https://api.oneprovider.dev/v1",
+  "pricing_source": "https://oneprovider.dev/pricing",
+  "pricing_checked": "2026-10-09",
+  "prior_shared_upper_usd": 1.9770944,
+  "budget_usd": 3,
+  "new_upper_usd": 0.1139955,
+  "new_study_cap_usd": 0.85,
+  "accounting": "Published catalog rates; no cache discount. The original 2x usage/reservation bookkeeping is not a verified upper bound after the output-cap mismatch. Not an invoice.",
+  "production_qualified": false,
+  "full_workflow": false,
+  "stopped": true,
+  "rows": [
+    {
+      "id": "smoke-flash-tools",
+      "model": "gemini-3.8-flash",
+      "phase": "smoke",
+      "status": 200,
+      "cost_upper_usd": 0.0004755,
+      "seconds": 4.816,
+      "usage": {
+        "prompt_tokens": 52,
+        "completion_tokens": 53,
+        "total_tokens": 105
+      },
+      "catalog_priced_usd": 0.00023775,
+      "returned_model": "gemini-3.8-flash",
+      "finish_reason": "tool_calls",
+      "tools": [
+        "ping"
+      ]
+    },
+    {
+      "id": "gemini-3.8-flash-4-script-1",
+      "model": "gemini-3.8-flash",
+      "phase": "fixture",
+      "count": 4,
+      "arm": "script",
+      "repetition": 1,
+      "status": "interrupted",
+      "cost_upper_usd": 0.037605,
+      "usage_unknown": true,
+      "full_reservation_retained": true,
+      "requested_max_tokens": 4096,
+      "initial_reservation_not_a_verified_upper_bound": true
+    },
+    {
+      "id": "gemini-3.8-flash-4-compact-1",
+      "model": "gemini-3.8-flash",
+      "phase": "fixture",
+      "count": 4,
+      "arm": "compact",
+      "repetition": 1,
+      "status": 200,
+      "cost_upper_usd": 0.075915,
+      "seconds": 141.411,
+      "usage": {
+        "prompt_tokens": 1630,
+        "completion_tokens": 9796,
+        "total_tokens": 11426
+      },
+      "catalog_priced_usd": 0.0379575,
+      "returned_model": "gemini-3.8-flash",
+      "finish_reason": "tool_calls",
+      "tools": [
+        "horizon_compact_edit_v1"
+      ],
+      "passed": true,
+      "script_pending_review": false,
+      "selected_tool": "horizon_compact_edit_v1",
+      "ast_matches": true,
+      "comments_match": true,
+      "requested_max_tokens": 2048,
+      "reported_cap_violation": true
+    }
+  ],
+  "stop_reason": "Gemini reported 9796 completion tokens with max_tokens=2048. Further paid tests stopped; interrupted request usage remains unknown.",
+  "resumptions": [
+    {
+      "note": "Node execution timed out before request settlement. Preserve the full bounded 4096-token reserve; no repeat of that request id. New trials use 2048 output tokens and a longer execution window.",
+      "reserved_upper_usd": 0.0380805
+    }
+  ],
+  "prospective_budget_bounds_valid": false,
+  "ledger_total_is_not_a_verified_upper_bound": true
+}
