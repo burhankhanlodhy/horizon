@@ -315,3 +315,13 @@ def test_openai_chat_flash_is_not_also_counted_as_compression(monkeypatch, tmp_p
         0, outcome.original_tokens - outcome.optimized_tokens - flash
     )
     json.dumps(outcome.transforms_applied)  # plain strings
+
+
+def test_flash_is_priced_as_cache_reads_even_when_its_request_missed_the_cache() -> None:
+    """A stub can break the cache itself; fresh-input pricing tripled the credit."""
+    cold = _o(
+        cache_read_tokens=1_000,
+        uncached_input_tokens=90_000,
+        transforms_applied=("flash_saved:10000",),
+    )
+    assert policy_savings.price(cold).usd["flash"] == pytest.approx(10_000 * OPUS_READ)

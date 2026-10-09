@@ -469,3 +469,185 @@ def test_claude_messages_book_each_removal_once_through_the_handler(monkeypatch,
     for previous, (total, saved, retained) in zip([0, *totals], booked, strict=False):
         assert (saved, retained) == (max(0, total - previous), total - max(0, total - previous))
     assert sum(saved for _, saved, _ in booked) == totals[-1]  # each removal booked once
+
+
+# ── Gemini and Bedrock ─────────────────────────────────────────────────
+
+
+def _rows_text() -> str:
+    import json as _json
+
+    return _json.dumps(
+        [{"id": i, "name": f"item{i}", "status": "ok", "value": i * 7} for i in range(600)]
+    )
+
+
+def _gemini_app(monkeypatch, tmp_path, mode: str):
+    import httpx
+
+    from horizon.proxy.server import ProxyConfig, create_app
+
+    monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(tmp_path))
+
+    def respond(*_a, **_kw):
+        payload = {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 5000,
+                "cachedContentTokenCount": 3000,
+                "candidatesTokenCount": 5,
+                "totalTokens": 900,
+            },
+            "totalTokens": 900,
+        }
+        return httpx.Response(
+            200, json=payload, request=httpx.Request("POST", "https://g.example/x")
+        )
+
+    app = create_app(
+        ProxyConfig(
+            optimize=True,
+            cache_enabled=False,
+            rate_limit_enabled=False,
+            cost_tracking_enabled=False,
+            ccr_inject_tool=False,
+            ccr_handle_responses=False,
+            ccr_context_tracking=False,
+            mode=mode,
+        )
+    )
+    return app, respond
+
+
+def _install(client, respond) -> None:
+    http = MagicMock()
+    http.post = AsyncMock(side_effect=respond)
+    http.request = AsyncMock(side_effect=respond)
+    http.send = AsyncMock(side_effect=respond)
+    http.aclose = AsyncMock()
+    client.app.state.proxy.http_client = http
+
+
+@pytest.mark.parametrize("mode", ["cache", "token"])
+def test_gemini_books_each_removal_once_through_the_handler(monkeypatch, tmp_path, mode):
+    from fastapi.testclient import TestClient
+
+    booked: list[tuple[int, int, int]] = []
+
+    async def _record(outcome, **kwargs):
+        booked.append((outcome.tokens_saved, kwargs["saved"], kwargs["retained"]))
+
+    monkeypatch.setattr(account_analytics, "record_account_outcome", _record)
+    app, respond = _gemini_app(monkeypatch, tmp_path, mode)
+    rows = _rows_text()
+
+    def contents(turns: int) -> list[dict]:
+        out: list[dict] = [{"role": "user", "parts": [{"text": "inspect the data"}]}]
+        for t in range(turns):
+            out += [
+                {"role": "model", "parts": [{"text": rows + f"#{t}"}]},
+                {"role": "user", "parts": [{"text": f"next {t}"}]},
+            ]
+        return out
+
+    with TestClient(app) as client:
+        _install(client, respond)
+        for turns in (1, 2, 3):
+            response = client.post(
+                "/v1beta/models/gemini-3.1-pro:generateContent",
+                json={"contents": contents(turns)},
+                headers={"x-goog-api-key": "test"},
+            )
+            assert response.status_code == 200
+    totals = [total for total, _, _ in booked]
+    assert totals[0] > 0 and totals[2] > totals[0]  # the whole transcript, every turn
+    assert sum(saved for _, saved, _ in booked) == totals[-1]
+    assert booked[2][2] == totals[1]
+
+
+def test_gemini_count_tokens_books_no_savings(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    outcomes: list[Any] = []
+
+    async def _record(outcome, **kwargs):
+        outcomes.append((outcome, kwargs))
+
+    monkeypatch.setattr(account_analytics, "record_account_outcome", _record)
+    app, respond = _gemini_app(monkeypatch, tmp_path, "token")
+    body = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "count this"}]},
+            {"role": "model", "parts": [{"text": _rows_text()}]},
+            {"role": "user", "parts": [{"text": "and this"}]},
+        ]
+    }
+    with TestClient(app) as client:
+        _install(client, respond)
+        response = client.post(
+            "/v1beta/models/gemini-3.1-pro:countTokens",
+            json=body,
+            headers={"x-goog-api-key": "test"},
+        )
+        assert response.status_code == 200
+    ((outcome, kwargs),) = outcomes
+    assert outcome.tokens_saved == 0 and kwargs["saved"] == 0
+    assert outcome.original_tokens > outcome.optimized_tokens  # still visible
+
+
+def _bedrock_run(monkeypatch, *, status: int, totals: list[int]) -> list[tuple[Any, dict]]:
+    from fastapi.testclient import TestClient
+
+    from horizon.proxy.server import create_app
+    from tests.test_proxy.test_bedrock_passthrough import (
+        INVOKE,
+        _FakeResult,
+        _FakeUpstream,
+        _install_fake_client,
+        _make_config,
+    )
+
+    seen: list[tuple[Any, dict]] = []
+
+    async def _record(outcome, **kwargs):
+        seen.append((outcome, kwargs))
+
+    monkeypatch.setattr(account_analytics, "record_account_outcome", _record)
+    app = create_app(_make_config())
+    with TestClient(app) as client:
+        proxy = client.app.state.proxy
+        _install_fake_client(proxy, _FakeUpstream(status_code=status))
+        for turn, saved in enumerate(totals, start=1):
+            messages = [{"role": "user", "content": "inspect"}] + [
+                {"role": "user", "content": f"turn {t}"} for t in range(turn)
+            ]
+            compressed = [{"role": "user", "content": "x"}]
+            monkeypatch.setattr(
+                proxy.anthropic_pipeline,
+                "apply",
+                lambda saved=saved, compressed=compressed, **_kw: _FakeResult(
+                    compressed, 10_000 + saved, 10_000
+                ),
+            )
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 8,
+                "messages": messages,
+            }
+            client.post(INVOKE, json=body)
+    return seen
+
+
+def test_bedrock_books_each_removal_once(monkeypatch):
+    seen = _bedrock_run(monkeypatch, status=200, totals=[6_000, 9_000, 13_000])
+    assert [(k["saved"], k["retained"]) for _, k in seen] == [
+        (6_000, 0),
+        (3_000, 6_000),
+        (4_000, 9_000),
+    ]
+
+
+def test_a_rejected_bedrock_call_is_booked_as_failed(monkeypatch):
+    seen = _bedrock_run(monkeypatch, status=403, totals=[6_000])
+    ((outcome, kwargs),) = seen
+    assert outcome.status_code == 403 and "saved" not in kwargs

@@ -166,6 +166,13 @@ class BedrockHandlerMixin:
         transforms_applied: tuple[str, ...] = ()
         pipeline_timing: dict[str, float] | None = None
 
+        # The pipeline recompresses the whole transcript every turn, so
+        # tokens_saved is a running total; under this key the outcome funnel
+        # books each removal once (conversation_savings.transcript_savings_key).
+        from horizon.proxy.conversation_savings import transcript_savings_key
+
+        _savings_key = transcript_savings_key(messages, system=body.get("system"))
+
         if not bypass:
             try:
                 context_limit = self.anthropic_provider.get_context_limit(model_id)  # type: ignore[attr-defined]
@@ -227,11 +234,15 @@ class BedrockHandlerMixin:
                     request_id=request_id,
                     provider="bedrock",
                     model=model_id,
+                    # A rejected call saved nothing; the funnel books it as failed.
+                    status_code=getattr(response, "status_code", 200),
                     original_tokens=original_tokens,
                     optimized_tokens=optimized_tokens,
                     output_tokens=0,
                     tokens_saved=tokens_saved,
                     attempted_input_tokens=original_tokens,
+                    conversation_key=_savings_key,
+                    conversation_tokens_saved=tokens_saved if _savings_key else None,
                     total_latency_ms=(time.time() - start_time) * 1000,
                     transforms_applied=transforms_applied,
                     pipeline_timing=pipeline_timing,

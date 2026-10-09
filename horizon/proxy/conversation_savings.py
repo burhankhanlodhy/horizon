@@ -48,6 +48,7 @@ from horizon.proxy.output_savings_policy import _unwrap_response_create_body
 __all__ = [
     "ConversationSavings",
     "ResponseChainSavings",
+    "gemini_savings_key",
     "is_transcript_running_total",
     "transcript_savings_key",
     "get_conversation_savings",
@@ -188,6 +189,16 @@ def transcript_savings_key(messages: Any, *, system: Any = None) -> str | None:
             digest = hashlib.sha256(("transcript-savings:" + seed).encode("utf-8", "ignore"))
             return TRANSCRIPT_KEY_PREFIX + digest.hexdigest()
     return None
+
+
+def gemini_savings_key(contents: Any, system_instruction: Any = None) -> str | None:
+    """:func:`transcript_savings_key` for Gemini ``contents`` (``parts``, ``user``/``model``)."""
+    if not isinstance(contents, list):
+        return None
+    messages = [
+        {"role": c.get("role"), "content": c.get("parts")} for c in contents if isinstance(c, dict)
+    ]
+    return transcript_savings_key(messages, system=system_instruction)
 
 
 def is_transcript_running_total(conversation_key: str | None) -> bool:

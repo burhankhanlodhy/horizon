@@ -23,6 +23,14 @@ All notable changes to Horizon are documented here.
   re-booked earlier removals (five turns: 44,915 tokens booked for 8,983
   removed in cache mode). Keyed the same way; the key ignores
   `cache_control`, which Claude Code moves every turn.
+- Gemini `generateContent` (and the Code Assist stream) and Bedrock
+  `InvokeModel` re-booked earlier removals every turn the same way; keyed
+  likewise. Gemini `countTokens` booked its compression as savings although
+  nothing is billed for a count; it now books none. A rejected Bedrock call
+  was recorded as a success with savings; it now carries the upstream status.
+- Flash credit is priced at the cache-read rate. Priced from the flashed
+  request's own cache usage, it could exceed the measured saving severalfold
+  on OpenAI-format upstreams, where a stub can break the cache.
 
 ### Added
 - Usage and Advanced Analytics show the savings beyond compression per

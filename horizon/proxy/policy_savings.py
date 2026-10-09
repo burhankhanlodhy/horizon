@@ -8,12 +8,16 @@ markers its handler appended to ``transforms_applied``:
 
 ``flash``
     ``flash_saved:N``: tokens of stubbed tool outputs this request no longer
-    carries. Without the flash they would sit in the cached prefix, so they
-    price like compression's retained tokens: cache reads first, fresh input
-    past the request's own reads. The turn that shows an output in full is not
-    credited, nor a request whose usage carries no cache breakdown. Tokens are
-    counted on the forwarded (already compressed) text, so nothing compression
-    claimed is counted again.
+    carries, priced at the model's cache-read rate. Without the flash they
+    would sit in the cached prefix, so a cache read is what they would have
+    cost on a warm turn. The flashed request's own cache reads are not used:
+    a stub can itself break the cache (the OpenAI form edits an earlier item),
+    and pricing removed tokens as fresh input there credited about three times
+    the measured saving. When the upstream cache misses, the real saving is
+    larger than this floor. The turn that shows an output in full is not
+    credited, nor a request whose usage reports nothing. Tokens are counted on
+    the forwarded (already compressed) text, so nothing compression claimed is
+    counted again.
 ``fast_mode``
     ``fast_mode:dropped:*`` on a model that bills the fast premium: the
     request at fast price minus the same request at standard price.
@@ -228,7 +232,7 @@ def _cost(
 
 
 def _flash(outcome: Any, tokens: int) -> float:
-    from horizon.pricing.counterfactual import CacheMix, Region, price_savings
+    from horizon.pricing.counterfactual import CacheMix, is_long_context_for, resolve_rates
 
     mix = CacheMix.from_usage(
         cache_read_tokens=outcome.cache_read_tokens,
@@ -239,20 +243,15 @@ def _flash(outcome: Any, tokens: int) -> float:
         cache_inferred=outcome.cache_inferred,
     )
     if not mix.has_signal():
-        # Without the provider's cache breakdown the only price is list input,
-        # a ceiling for tokens that would mostly have been cache reads.
         return 0.0
     # Long-context tier from the size the request would have had.
-    local = (outcome.provider_input_tokens or outcome.optimized_tokens) + tokens
-    priced = price_savings(
-        tokens,
-        model=outcome.model,
-        mix=mix,
-        region=Region.PREFIX,
-        local_tokens=local,
+    size = (outcome.provider_input_tokens or outcome.optimized_tokens) + tokens
+    rates = resolve_rates(
+        outcome.model,
+        long_context=is_long_context_for(outcome.model, size),
         provider=outcome.provider,
     )
-    return priced.usd
+    return 0.0 if rates is None else tokens * rates.read
 
 
 def _modernize(outcome: Any, usage: _Usage, requested: str) -> float:

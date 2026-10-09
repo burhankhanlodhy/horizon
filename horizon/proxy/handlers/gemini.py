@@ -420,6 +420,12 @@ class GeminiHandlerMixin:
 
         # Convert Gemini format to messages for optimization
         system_instruction = body.get("systemInstruction")
+        # The router recompresses the whole transcript every turn, so
+        # tokens_saved is a running total; under this key the outcome funnel
+        # books each removal once (conversation_savings.transcript_savings_key).
+        from horizon.proxy.conversation_savings import gemini_savings_key
+
+        _savings_key = gemini_savings_key(contents, system_instruction)
         messages, preserved_indices = self._gemini_contents_to_messages(
             contents, system_instruction
         )
@@ -786,6 +792,8 @@ class GeminiHandlerMixin:
                     tags,
                     optimization_latency,
                     outcome_provider=provider_name,
+                    conversation_key=_savings_key,
+                    conversation_tokens_saved=tokens_saved if _savings_key else None,
                 )
             else:
                 response = await self._retry_request("POST", url, headers, body)
@@ -957,6 +965,8 @@ class GeminiHandlerMixin:
                     output_tokens=output_tokens,
                     tokens_saved=tokens_saved,
                     attempted_input_tokens=total_input_tokens + tokens_saved,
+                    conversation_key=_savings_key,
+                    conversation_tokens_saved=tokens_saved if _savings_key else None,
                     cache_read_tokens=cache_read_tokens,
                     uncached_input_tokens=uncached_input_tokens,
                     total_latency_ms=total_latency,
@@ -1098,6 +1108,9 @@ class GeminiHandlerMixin:
 
         system_instruction = request_payload.get("systemInstruction")
         optimization_system_instruction = None if is_antigravity else system_instruction
+        from horizon.proxy.conversation_savings import gemini_savings_key
+
+        _savings_key = gemini_savings_key(contents, system_instruction)
         messages, preserved_indices = self._gemini_contents_to_messages(
             contents if isinstance(contents, list) else [], optimization_system_instruction
         )
@@ -1199,6 +1212,8 @@ class GeminiHandlerMixin:
             transforms_applied,
             tags,
             optimization_latency,
+            conversation_key=_savings_key,
+            conversation_tokens_saved=tokens_saved if _savings_key else None,
         )
 
     async def handle_gemini_stream_generate_content(
@@ -1478,6 +1493,9 @@ class GeminiHandlerMixin:
             # countTokens is a sizing helper; it never generates output
             # tokens and never touches cache. The funnel handles the
             # "nothing to report" shape with all-zero cache defaults.
+            # Nothing is billed for a count, so nothing is saved: the
+            # compressed size stays in tok_before/tok_after and the response
+            # headers, but never reaches savings or the account ledger.
             await self._record_request_outcome(
                 RequestOutcome(
                     request_id=request_id,
@@ -1487,7 +1505,7 @@ class GeminiHandlerMixin:
                     original_tokens=original_tokens,
                     optimized_tokens=compressed_tokens,
                     output_tokens=0,
-                    tokens_saved=tokens_saved,
+                    tokens_saved=0,
                     attempted_input_tokens=compressed_tokens + tokens_saved,
                     total_latency_ms=total_latency,
                     transforms_applied=tuple(transforms_applied),

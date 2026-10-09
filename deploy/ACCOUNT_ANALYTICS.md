@@ -152,7 +152,8 @@
   fallback rate. The price-cliff guard's extra compression is already in the
   compression figure. Rows with `policy_usd` need an API that knows it; deploy
   the API first.
-- Chat Completions and Claude Messages requests carry the whole transcript,
+- Chat Completions, Claude Messages, Gemini `generateContent` and Bedrock
+  `InvokeModel` requests carry the whole transcript,
   and every earlier removal is sent compressed again (replayed in cache mode,
   recompressed in token mode), so a request's `tokens_saved` is the
   conversation's running total. The proxy keys it by the account, the system
