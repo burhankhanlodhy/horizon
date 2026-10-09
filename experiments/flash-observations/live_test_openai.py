@@ -344,7 +344,7 @@ def start_fake(workdir: Path) -> subprocess.Popen:
     return proc
 
 
-def start_proxy(arm: str, workdir: Path, upstream: str) -> subprocess.Popen:
+def start_proxy(arm: str, workdir: Path, upstream: str, no_ccr: bool = False) -> subprocess.Popen:
     env = dict(os.environ)
     env.update(
         HORIZON_WORKSPACE_DIR=str(workdir / arm),
@@ -355,6 +355,10 @@ def start_proxy(arm: str, workdir: Path, upstream: str) -> subprocess.Popen:
         HORIZON_FLASH_ANY_UPSTREAM="0",
         HORIZON_FLASH_OPENAI_UPSTREAMS=urlparse(upstream).hostname or "",
     )
+    if no_ccr:
+        # No horizon_retrieve tool: with a second tool in the list Gemini batched
+        # every call into one turn, so nothing was stubbed (2026-10-09).
+        env["HORIZON_NO_CCR"] = "1"
     log = open(workdir / f"{arm}.log", "w")  # noqa: SIM115 - closed with the process
     cmd = [
         sys.executable,
@@ -418,6 +422,11 @@ def main() -> int:
     )
     ap.add_argument("--injection", action="store_true")
     ap.add_argument(
+        "--proxy-no-ccr",
+        action="store_true",
+        help="proxy arms: HORIZON_NO_CCR=1 (no injected horizon_retrieve tool)",
+    )
+    ap.add_argument(
         "--no-parallel",
         action="store_true",
         help="chat: parallel_tool_calls=false (one suite per turn, so outputs get stubbed)",
@@ -455,7 +464,7 @@ def main() -> int:
             procs["fake"] = start_fake(workdir)
         for arm in arms:
             if arm.endswith("-proxy"):
-                procs[arm] = start_proxy(arm, workdir, upstream)
+                procs[arm] = start_proxy(arm, workdir, upstream, no_ccr=args.proxy_no_ccr)
         with httpx.Client(timeout=600, headers={"authorization": f"Bearer {key}"}) as http:
             for rep in range(args.reps):
                 for arm in arms:

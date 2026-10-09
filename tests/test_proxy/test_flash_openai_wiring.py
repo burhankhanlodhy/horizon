@@ -169,3 +169,17 @@ def test_chat_completions_newest_output_shown_once_then_stubbed(
         assert all(t.startswith("[Horizon flash") for t in tool[:-1])
     for earlier, later in zip(forwarded, forwarded[1:], strict=False):
         assert later[: len(earlier) - 1] == earlier[:-1]
+
+
+def test_model_where_cache_reads_are_nearly_free_is_left_alone(monkeypatch, tmp_path) -> None:
+    from horizon.transforms import flash_openai
+
+    flash_openai._DECISIONS.clear()
+    monkeypatch.delenv("HORIZON_FLASH_MIN_READ_RATIO", raising=False)
+    app = _app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        http = _install_fake_client(client.app.state.proxy)
+        body = {"model": "deepseek-v4-pro", "messages": _chat_messages(2)}
+        assert client.post("/v1/chat/completions", json=body, headers=AUTH).status_code == 200
+        tool = [m["content"] for m in _sent(http)["messages"] if m.get("role") == "tool"]
+    assert not any(NOTICE in t or t.startswith("[Horizon flash") for t in tool)

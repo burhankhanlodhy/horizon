@@ -1996,6 +1996,7 @@ class OpenAIHandlerMixin:
         *,
         chat: bool,
         url: str,
+        model: str = "",
         transforms_applied: list[str] | None = None,
         request_id: str = "",
     ) -> tuple[Any, bool]:
@@ -2013,6 +2014,16 @@ class OpenAIHandlerMixin:
             return items, False
         if not flash.upstream_supports_flash_openai(url):
             return items, False
+        if model:
+            pays, reason = flash.flash_pays_for(model)
+            if not pays:
+                logged = getattr(self, "_flash_openai_skip_logged", None)
+                if logged is None:
+                    logged = self._flash_openai_skip_logged = set()
+                if model not in logged:
+                    logged.add(model)
+                    logger.info(f"[{request_id}] flash observations off for {model}: {reason}")
+                return items, False
         try:
             key = flash.conversation_key(items)
             if not key:
@@ -2101,6 +2112,7 @@ class OpenAIHandlerMixin:
             original_input,
             chat=False,
             url=url,
+            model=str(payload.get("model") or ""),
             transforms_applied=transforms_applied,
             request_id=request_id,
         )
@@ -4649,6 +4661,7 @@ class OpenAIHandlerMixin:
                 original_client_messages,
                 chat=True,
                 url=upstream_base_url or self.OPENAI_API_URL,
+                model=str(body.get("model") or ""),
                 transforms_applied=transforms_applied,
                 request_id=request_id,
             )
@@ -6402,6 +6415,7 @@ class OpenAIHandlerMixin:
                 input_data,
                 chat=False,
                 url=url,
+                model=str(body.get("model") or ""),
                 transforms_applied=transforms_applied,
                 request_id=request_id,
             )

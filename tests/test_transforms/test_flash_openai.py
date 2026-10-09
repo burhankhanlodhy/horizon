@@ -208,3 +208,35 @@ def test_never_raises_on_garbage() -> None:
     garbage = [None, 3, "x", {"type": "function_call_output"}, {"role": "tool"}]
     assert apply_responses(garbage, horizon=0, policy=POLICY).messages == garbage
     assert apply_chat(garbage, horizon=0, policy=POLICY).messages == garbage
+
+
+def _clear_decisions() -> None:
+    from horizon.transforms import flash_openai
+
+    flash_openai._DECISIONS.clear()
+
+
+def test_per_model_decision_from_list_prices(monkeypatch) -> None:
+    from horizon.transforms.flash_openai import flash_pays_for
+
+    monkeypatch.delenv("HORIZON_FLASH_MIN_READ_RATIO", raising=False)
+    _clear_decisions()
+    # Catalog rates: DeepSeek V4 Pro reads at ~0.033x input, GPT-6.1 Sol at 0.05x.
+    pays, reason = flash_pays_for("deepseek-v4-pro")
+    assert pays is False and "nearly free" in reason
+    assert flash_pays_for("gpt-6.1-sol")[0] is True
+    # A model Horizon cannot price is flashed (gated by host already).
+    assert flash_pays_for("some-unknown-model-xyz") == (True, "price unknown")
+
+
+def test_per_model_decision_threshold_is_configurable(monkeypatch) -> None:
+    from horizon.transforms.flash_openai import flash_pays_for
+
+    _clear_decisions()
+    monkeypatch.setenv("HORIZON_FLASH_MIN_READ_RATIO", "0")
+    assert flash_pays_for("deepseek-v4-pro") == (True, "price check off")
+    # Gemini 3.1 Pro's catalog row: reads at 0.10x input, no write premium.
+    monkeypatch.setenv("HORIZON_FLASH_MIN_READ_RATIO", "0.2")
+    assert flash_pays_for("gemini/gemini-3.1-pro-preview")[0] is False
+    monkeypatch.setenv("HORIZON_FLASH_MIN_READ_RATIO", "0.05")
+    assert flash_pays_for("gemini/gemini-3.1-pro-preview")[0] is True

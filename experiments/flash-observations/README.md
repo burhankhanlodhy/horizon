@@ -510,3 +510,45 @@ any forced call once the history held a tool result.
 
 **Spend:** about $4.40 at list prices: DeepSeek $0.21, Gemini $4.19
 (including the second flash-proxy attempt).
+
+### Fair Gemini proxy test (2026-10-09)
+
+`--proxy-no-ccr` (`HORIZON_NO_CCR=1`, so no injected `horizon_retrieve` tool):
+$0.474, score 1.00. Gemini **again called all 12 suites in its first turn**, so
+nothing was stubbed. Through the proxy that is 3 of 3 sessions; called
+directly, 2 of 2 sessions and 6 of 6 single first-turn probes made one call.
+
+**The CCR tool was not the cause.**
+- The real CLI proxy's forwarded request was captured against a local
+  recorder. It differs from the direct request only in `max_tokens` being
+  renamed `max_completion_tokens` (Horizon's GPT-5/o-series shim). Headers and
+  user agent are the same.
+- Direct probes with either field made one call each time.
+- The batching is most likely nondeterminism in the gateway or the model.
+- Batched sessions cost about the same as flash ($0.47–0.49 against control's
+  $2.68), because they avoid re-reads too.
+- **Status:** a Gemini session that exercises stubbing through the proxy has
+  not happened. flash-direct shows the mechanism works on Gemini (−80%,
+  score 1.00).
+
+## Per-model decision (`HORIZON_FLASH_MIN_READ_RATIO`)
+
+The OpenAI-format path now asks, per model, whether stubbing pays
+(`flash_pays_for` in `horizon/transforms/flash_openai.py`):
+
+| Case | Decision |
+|---|---|
+| List cache-read price below 0.04x input and no write premium (DeepSeek V4 Pro: 0.033x in the catalog, about 0.008x in July 2026 listings) | **Skip**: re-reading old outputs is nearly free, so stubbing only adds risk |
+| Everything else (GPT-6.1 Sol 0.05x, Gemini 3.1 Pro 0.10x) | Flash |
+| A model Horizon cannot price (oneprovider's `gemini-3.1-pro` name) | Flash: opt-in and host-gated, and an upstream that does not cache is where stubbing pays most |
+
+- **Threshold:** 0.04 lies between the measured no-saving case (DeepSeek) and
+  the measured saving (GPT, 0.05x). Set `HORIZON_FLASH_MIN_READ_RATIO` to
+  change it, or `0` to turn the check off.
+- **No live observation of caching:** a "does this upstream cache?" signal
+  was dropped from the design. oneprovider's DeepSeek replies sometimes omit
+  the cache field entirely, even when hits occur, so a missing field cannot be
+  read as "not caching".
+- **Notice wording:** the notice on a shown-once output now asks for exact
+  details (names, numbers, paths, error messages) in the reply text, not only
+  in reasoning. That is the failure seen in the DeepSeek session.

@@ -92,10 +92,13 @@ MODEL_ITEM_TYPES = frozenset(
         "mcp_call",
     }
 )
+# Asks for exact details in the visible reply: in a live DeepSeek run the model
+# kept them only in its reasoning and later invented the error values.
 NOTICE = (
     "\n\n[Horizon flash: this output is shown in full for this turn only. From the "
-    "next turn it is replaced by its first and last lines, so write down in your "
-    "reply anything you will need later.]"
+    "next turn only its first and last lines remain, so write the exact details you "
+    "will need later (names, numbers, paths, error messages) in your reply text, "
+    "not only in your reasoning.]"
 )
 
 
@@ -320,6 +323,63 @@ def conversation_key(items: Iterable[Any]) -> str:
             raw = json.dumps(item.get("content"), sort_keys=True, ensure_ascii=False, default=str)
             return hashlib.blake2b(raw.encode("utf-8", "ignore"), digest_size=12).hexdigest()
     return ""
+
+
+DEFAULT_MIN_READ_RATIO = 0.04
+_DECISIONS: dict[str, tuple[bool, str]] = {}
+
+
+def flash_pays_for(model: str) -> tuple[bool, str]:
+    """Whether next-turn stubbing is worth doing for ``model``, and why.
+
+    Stubbing saves the re-reads of an old output on every later turn. Where a
+    cache read costs almost nothing and there is no cache-write premium, that
+    saving is close to zero while the risk (the model needing an output it no
+    longer sees) stays. Live runs, 2026-10-09: GPT-6.1 Sol (reads 0.05x input)
+    saved 53%; DeepSeek V4 Pro (0.008x-0.033x) saved nothing and one session
+    invented values from a stubbed log.
+
+    Skips the model when its list cache-read price is below
+    ``HORIZON_FLASH_MIN_READ_RATIO`` x its input price (default 0.04) and it
+    has no write premium. A model Horizon cannot price is flashed: the feature
+    is opt-in and gated by host, and an upstream that does not cache at all is
+    where stubbing pays most. ``HORIZON_FLASH_MIN_READ_RATIO=0`` turns the
+    check off.
+    """
+    from horizon.proxy import runtime_env
+
+    raw = runtime_env.getenv("HORIZON_FLASH_MIN_READ_RATIO", "") or ""
+    try:
+        threshold = float(raw) if raw.strip() else DEFAULT_MIN_READ_RATIO
+    except ValueError:
+        threshold = DEFAULT_MIN_READ_RATIO
+    if threshold <= 0:
+        return True, "price check off"
+    key = f"{model.lower()}|{threshold}"
+    if key in _DECISIONS:
+        return _DECISIONS[key]
+    decision = _decide(model, threshold)
+    _DECISIONS[key] = decision
+    return decision
+
+
+def _decide(model: str, threshold: float) -> tuple[bool, str]:
+    try:
+        from horizon.pricing.counterfactual import resolve_rates
+
+        rates = resolve_rates(model)
+    except Exception:
+        rates = None
+    if rates is None or not rates.uncached:
+        return True, "price unknown"
+    ratio = rates.read / rates.uncached
+    write_premium = rates.write_5m > rates.uncached * 1.05
+    if ratio < threshold and not write_premium:
+        return False, (
+            f"cache reads cost {ratio:.3f}x input (below {threshold:g}x) and there is no "
+            "write premium: re-reading old outputs is nearly free"
+        )
+    return True, f"cache reads cost {ratio:.3f}x input"
 
 
 def flash_openai_enabled() -> bool:

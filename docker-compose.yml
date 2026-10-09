@@ -52,6 +52,8 @@ services:
       - HORIZON_FLASH_OPENAI=${HORIZON_FLASH_OPENAI:-0}
       # Extra hosts for the OpenAI version only, after preflight_openai.py passed on them.
       - HORIZON_FLASH_OPENAI_UPSTREAMS=${HORIZON_FLASH_OPENAI_UPSTREAMS:-}
+      # Skip models whose cache reads cost under this fraction of input (no saving there).
+      - HORIZON_FLASH_MIN_READ_RATIO=${HORIZON_FLASH_MIN_READ_RATIO:-0.04}
       # Telemetry: client-caused prompt-cache misses priced per cause in /stats.
       - HORIZON_CACHE_MISS_WATCH=${HORIZON_CACHE_MISS_WATCH:-0}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
