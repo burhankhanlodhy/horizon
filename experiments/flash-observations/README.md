@@ -416,3 +416,30 @@ untested; it can only be checked on the official API.
 ModelFlare failed the Claude preflight twice. So the allow-list is per
 feature: `HORIZON_FLASH_OPENAI_UPSTREAMS` enables the OpenAI version on a
 host without enabling the Claude one.
+
+### Live run through ModelFlare (2026-10-09, stopped after one pair)
+
+`live_test_openai.py --base-url https://modelflare.dev/v1 --reps 3 --suites 12
+--effort medium`, `gpt-6.1-sol`. Stopped after the first control/flash pair:
+logs are about 15k tokens each on GPT, not the fake's 8.4k, and ModelFlare's
+cache missed often, so the full run was heading for about $10–11 at OpenAI
+list prices instead of the estimated $6–7.
+
+| Arm | Requests | Input tokens | Cached | $ (OpenAI list) | Score |
+|---|---|---|---|---|---|
+| control-direct | 13 | 1,327,413 | 744,970 | 1.272 | 1.00 |
+| flash-direct | 13 | 283,468 | 6,810 | **0.581 (−54%)** | 1.00 |
+
+- **Context growth:** with flash, the context grew about 650 tokens per tool
+  call (the stub) instead of about 15k. Every suite ran once, and the model
+  listed all 36 failures.
+- **ModelFlare caching:** it missed on 4 of 13 control requests, including
+  the two largest (134k and 218k tokens, billed in full). That is why flash
+  saves so much here. On an endpoint that caches reliably, the estimate at 12
+  suites is closer to 15–20%.
+- **Smoke test of the real proxy integration (flash-proxy, 2 suites):** every
+  request accepted, the log flashed, and on the next turn it was stubbed. The
+  model found all 6 failures. The session first scored 0.00 because the scorer
+  compared full pytest ids literally; that is fixed, and the answer re-scores
+  1.00.
+- **Not yet measured:** a full flash-proxy session at 12 suites, and repeats.
