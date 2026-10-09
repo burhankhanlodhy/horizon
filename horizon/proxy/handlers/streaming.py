@@ -998,6 +998,11 @@ class StreamingMixin:
         # Open connection before generator to capture upstream response headers
         # (needed to forward ratelimit headers to the client via StreamingResponse)
         assert self.http_client is not None, "http_client must be initialized before streaming"
+        from horizon.proxy.body_forwarding import (
+            serialize_body_canonical as _serialize_body_canonical,
+        )
+        from horizon.proxy.flex_policy import fallback_body as _flex_fallback_body
+
         try:
             retry_attempts = max(1, getattr(self.config, "retry_max_attempts", 3))
             upstream_response = None
@@ -1009,6 +1014,17 @@ class StreamingMixin:
                         "POST", url, content=outbound_bytes, headers=outbound_headers
                     )
                     upstream_response = await self.http_client.send(_upstream_req, stream=True)
+                    # A Flex tier Horizon added ran out of capacity: retry once,
+                    # immediately, at the standard tier (flex_policy).
+                    _flex_retry = _flex_fallback_body(body, upstream_response.status_code)
+                    if _flex_retry is not None:
+                        await upstream_response.aclose()
+                        body = _flex_retry
+                        outbound_bytes = _serialize_body_canonical(body)
+                        _upstream_req = self.http_client.build_request(
+                            "POST", url, content=outbound_bytes, headers=outbound_headers
+                        )
+                        upstream_response = await self.http_client.send(_upstream_req, stream=True)
                     if _codex_wire_debug:
                         capture_codex_wire_debug(
                             "http_stream_upstream_response_headers",

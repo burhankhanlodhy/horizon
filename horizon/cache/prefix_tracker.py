@@ -964,7 +964,17 @@ class PrefixCacheTracker:
 
         # Estimate per-message token counts if not provided
         if message_token_counts is None:
-            message_token_counts = self._estimate_message_tokens(messages)
+            # Flash Observations forwards large tool outputs as stubs: count the
+            # messages as the provider cached them, or the frozen count would
+            # come out short and already-cached messages would be treated as live.
+            view = messages
+            flash_view = getattr(self, "flash_view", None)
+            if flash_view is not None:
+                try:
+                    view = flash_view(messages)
+                except Exception:
+                    view = messages
+            message_token_counts = self._estimate_message_tokens(view)
 
         # Walk messages from the start, accumulating tokens until we exceed
         # the cached amount. All messages within the cached prefix are frozen.

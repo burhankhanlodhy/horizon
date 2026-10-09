@@ -261,3 +261,46 @@ def test_dashboard_card_shows_the_cache_discount_separately():
 
     assert "provider cache discount" in html
     assert "cost?.provider_cache_discount_usd" in html
+
+
+def test_haiku_5_5_turn_past_100k_is_priced_at_its_own_tier():
+    """Haiku 5.5's tier starts at 100k, not the 200k most rows use."""
+    import litellm
+
+    from horizon.pricing.litellm_pricing import resolve_litellm_model
+    from horizon.proxy.server import CostTracker
+
+    info = litellm.model_cost.get(resolve_litellm_model("claude-haiku-5-5"), {})
+    long_output = info["output_cost_per_token_above_100k_tokens"]
+
+    ct = CostTracker()
+    ct.record_tokens(
+        "claude-haiku-5-5",
+        tokens_saved=0,
+        tokens_sent=150_000,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        uncached_tokens=150_000,
+        output_tokens=5_000,
+    )
+    assert abs(ct.stats()["output_cost_usd"] - 5_000 * long_output) < 1e-9
+
+
+def test_flat_rated_model_past_200k_stays_at_its_base_rate():
+    import litellm
+
+    from horizon.pricing.litellm_pricing import resolve_litellm_model
+    from horizon.proxy.server import CostTracker
+
+    info = litellm.model_cost.get(resolve_litellm_model("claude-opus-5-5"), {})
+    ct = CostTracker()
+    ct.record_tokens(
+        "claude-opus-5-5",
+        tokens_saved=0,
+        tokens_sent=600_000,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        uncached_tokens=600_000,
+        output_tokens=5_000,
+    )
+    assert abs(ct.stats()["output_cost_usd"] - 5_000 * info["output_cost_per_token"]) < 1e-9

@@ -360,12 +360,91 @@ def test_relocate_system_messages_preserves_consecutive_valid_section_at_end() -
     ]
 
     clean, system, changed = relocate_system_messages_to_top_level(
-        messages, None, "global.anthropic.claude-sonnet-5-v1:0"
+        messages, None, "global.anthropic.claude-sonnet-5-5-v1:0"
     )
 
     assert changed is False
     assert clean is messages
     assert system is None
+
+
+EFFORT_LOW = {"role": "system", "content": [], "output_config": {"effort": "low"}}
+
+
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
+def test_effort_only_system_message_is_never_dropped_or_hoisted(model: str) -> None:
+    """Per-message effort may sit anywhere; dropping it undoes the client's effort change."""
+    messages = [
+        EFFORT_LOW,
+        {"role": "user", "content": "plan the migration"},
+        {"role": "assistant", "content": "1. export 2. import"},
+        EFFORT_LOW,
+        {"role": "user", "content": "summarize"},
+    ]
+
+    clean, system, changed = relocate_system_messages_to_top_level(messages, "base", model)
+
+    assert changed is False
+    assert clean is messages
+    assert system == "base"
+
+
+def test_effort_only_message_does_not_break_a_valid_text_section() -> None:
+    messages = [
+        {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+        {"role": "system", "content": "file changed: a.py"},
+        EFFORT_LOW,
+        {"role": "assistant", "content": "noted"},
+    ]
+
+    clean, system, changed = relocate_system_messages_to_top_level(
+        messages, None, "claude-opus-5-5"
+    )
+
+    assert changed is False
+    assert clean is messages
+
+
+def test_effort_only_message_is_still_dropped_where_unsupported() -> None:
+    messages = [{"role": "user", "content": "hi"}, EFFORT_LOW]
+
+    clean, system, changed = relocate_system_messages_to_top_level(
+        messages, None, "claude-sonnet-4-6"
+    )
+
+    assert changed is True
+    assert clean == [{"role": "user", "content": "hi"}]
+
+
+def test_haiku_5_5_keeps_valid_mid_conversation_system_messages() -> None:
+    """Hoisting would rewrite the top-level system prompt: a full cache miss each time."""
+    messages = [
+        {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+        {"role": "system", "content": "file changed: a.py"},
+    ]
+
+    clean, system, changed = relocate_system_messages_to_top_level(
+        messages, "base", "claude-haiku-5-5-20260801"
+    )
+
+    assert changed is False
+    assert clean is messages
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-sonnet-5", "claude-sonnet-5-20260101", "global.anthropic.claude-sonnet-5-v1:0"],
+)
+def test_sonnet_5_has_no_mid_conversation_system_messages(model: str) -> None:
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "system", "content": "mid-turn instruction"},
+    ]
+
+    clean, system, changed = relocate_system_messages_to_top_level(messages, None, model)
+
+    assert changed is True
+    assert system == [{"type": "text", "text": "mid-turn instruction"}]
 
 
 @pytest.mark.parametrize(

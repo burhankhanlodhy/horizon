@@ -170,14 +170,32 @@ def test_untagged_writes_default_to_the_five_minute_ttl():
     assert mix.write_1h == 0
 
 
-def test_long_context_derives_the_one_hour_rate_and_says_so():
-    """No catalog publishes a combined 1h + above-200k rate, so it derives."""
+def test_long_context_uses_the_published_one_hour_rate():
+    """A row with a combined 1h + long-tier rate is read, not derived."""
     rates = resolve_rates(SONNET, long_context=True)
 
-    assert rates.basis == BASIS_CATALOG_TTL_RATIO
+    assert rates.basis == BASIS_CATALOG
     assert rates.write_1h / rates.uncached == pytest.approx(2.00, abs=1e-6)
     # And it is the EXPENSIVE tier, not the base one.
     assert rates.uncached > resolve_rates(SONNET).uncached
+
+
+def test_long_context_derives_the_one_hour_rate_when_unpublished(monkeypatch):
+    import litellm
+
+    from horizon.pricing.litellm_pricing import resolve_litellm_model
+
+    key = resolve_litellm_model(SONNET)
+    row = dict(litellm.model_cost[key])
+    row.pop("cache_creation_input_token_cost_above_1hr_above_200k_tokens", None)
+    monkeypatch.setitem(litellm.model_cost, key, row)
+    resolve_rates.cache_clear()
+    try:
+        rates = resolve_rates(SONNET, long_context=True)
+        assert rates.basis == BASIS_CATALOG_TTL_RATIO
+        assert rates.write_1h / rates.uncached == pytest.approx(2.00, abs=1e-6)
+    finally:
+        resolve_rates.cache_clear()
 
 
 # ── Provider agnosticism: every harness, every backend ────────────────────

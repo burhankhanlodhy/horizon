@@ -61,6 +61,11 @@ def set_routing_stats_provider(fn: Callable[[], dict | None]) -> None:
     _provider = fn
 
 
+def has_routing_stats_provider() -> bool:
+    """Whether a provider is registered (an extension's provider is never replaced)."""
+    return _provider is not None
+
+
 def clear_routing_stats_provider() -> None:
     """Test/reset helper."""
     global _provider

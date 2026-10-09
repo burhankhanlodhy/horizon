@@ -21,8 +21,10 @@ proxy, where a request without one is never kept warm), else, on a local proxy,
 a hash of the provider credential. How long: while the expected saving stays
 positive. A rewrite costs ``write - read`` per token and each ping ``read``, so
 with a ``return_odds`` chance the user resumes, pinging pays for
-``return_odds * (write - read) / read`` pings: about 9 on the 1-hour lane
-(~8 hours) and 5 on the 5-minute lane (~20 minutes). A ping that misses (had to
+``return_odds * (write - read) / read`` pings, at the model's own rates. At
+0.1x reads that is about 9 on the 1-hour lane (~8 hours) and 5 on the 5-minute
+lane (~20 minutes); at the 0.05x reads of Opus and Sonnet 5.5 it is 19 and 12,
+because each ping costs half as much. A ping that misses (had to
 write, or read nothing) stops the group: the cache was already gone. So does a
 window the scheduler missed: a late ping would only pay to rebuild it.
 
@@ -320,8 +322,22 @@ class CacheKeeper:
 
     # -- pinging --------------------------------------------------------------
 
-    def max_pings(self, ttl: int) -> int:
-        return int(self.return_odds * (WRITE_MULTIPLIER[ttl] - READ_MULTIPLIER) / READ_MULTIPLIER)
+    def max_pings(self, ttl: int, model: str = "") -> int:
+        """Pings worth sending before the expected rewrite saving runs out.
+
+        Priced with ``model``'s own read and write rates: newer models read the
+        cache at 0.05x or 0.025x input, so a ping costs a half or a quarter of
+        what the 0.1x structural ratio assumes and the session is worth keeping
+        warm for longer. An unpriced model uses the structural ratio.
+        """
+        read, write = READ_MULTIPLIER, WRITE_MULTIPLIER[ttl]
+        if model:
+            rates = _rates(model)
+            if rates["basis"] != "fallback" and rates["read"] > 0:
+                read, write = rates["read"], rates["w1h" if ttl == TTL_1H else "w5m"]
+        if write <= read:
+            return 0
+        return int(self.return_odds * (write - read) / read)
 
     def due(self) -> list[_Group]:
         now = self._clock()
@@ -331,7 +347,7 @@ class CacheKeeper:
                 continue
             if now - g.last_request_at > self.max_idle_seconds:
                 self._release(g, "idle")
-            elif g.pings >= self.max_pings(g.ttl):
+            elif g.pings >= self.max_pings(g.ttl, g.model):
                 self._release(g, "budget")
             elif now >= g.last_touch_at + g.ttl - LATE:
                 g.stopped = True  # the scheduler fell behind; a ping now would rebuild

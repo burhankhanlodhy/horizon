@@ -1876,6 +1876,42 @@ def test_thinking_block_key_reorder_is_not_an_edit(monkeypatch: pytest.MonkeyPat
     assert thinking_blocks_survived_mutation(mutated, original) is True
 
 
+def test_inserted_turn_scoped_message_is_not_a_thinking_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flash Observations re-sends an earlier turn-scoped message in place.
+
+    That shifts later messages by one but moves no thinking block between
+    turns, so the edit must still reach the wire.
+    """
+    monkeypatch.setenv("HORIZON_THINKING_PRESERVING_MUTATIONS", "1")
+    original = json.dumps(_tb_body()).encode()
+    mutated = json.loads(original)
+    flash = {
+        "role": "system",
+        "content": [{"type": "text", "text": "full output"}],
+        "clear_at": "next_user_message",
+    }
+    mutated["messages"].insert(1, flash)
+
+    assert thinking_blocks_survived_mutation(mutated, original) is True
+    assert _tb_select(mutated, original).source == "canonical"
+
+
+def test_thinking_block_moved_to_another_turn_is_still_an_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skipping turn-scoped messages must not hide a block moved between turns."""
+    monkeypatch.setenv("HORIZON_THINKING_PRESERVING_MUTATIONS", "1")
+    original = json.dumps(_tb_body()).encode()
+    mutated = json.loads(original)
+    mutated["messages"].insert(
+        1, {"role": "assistant", "content": [{"type": "text", "text": "extra turn"}]}
+    )
+
+    assert thinking_blocks_survived_mutation(mutated, original) is False
+
+
 def test_is_client_bytes_agrees_with_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """The CCR buffering probe must never disagree with the forwarder (#2952)."""
     monkeypatch.setenv("HORIZON_THINKING_PRESERVING_MUTATIONS", "1")

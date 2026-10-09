@@ -1989,6 +1989,138 @@ class OpenAIHandlerMixin:
         """
         return _resolve_openai_upstream_base(request.headers) or self.OPENAI_API_URL
 
+    def _maybe_flash_openai(
+        self,
+        items: Any,
+        original_items: Any,
+        *,
+        chat: bool,
+        url: str,
+        model: str = "",
+        transforms_applied: list[str] | None = None,
+        request_id: str = "",
+    ) -> tuple[Any, bool]:
+        """Flash Observations, next-turn form (opt-in, ``HORIZON_FLASH_OPENAI=1``).
+
+        ``items`` is the Responses ``input`` list or the Chat ``messages`` list
+        about to be forwarded; ``original_items`` is the client's own list, the
+        source of every stub (so compression or prefix replay upstream of here
+        never changes a stub's bytes). Returns ``(items, changed)``. OpenAI's
+        own hosts only, unless ``HORIZON_FLASH_ANY_UPSTREAM=1``.
+        """
+        from horizon.transforms import flash_openai as flash
+
+        if not flash.flash_openai_enabled() or not isinstance(items, list) or not items:
+            return items, False
+        if not flash.upstream_supports_flash_openai(url):
+            return items, False
+        if model:
+            pays, reason = flash.flash_pays_for(model)
+            if not pays:
+                logged = getattr(self, "_flash_openai_skip_logged", None)
+                if logged is None:
+                    logged = self._flash_openai_skip_logged = set()
+                if model not in logged:
+                    logged.add(model)
+                    logger.info(f"[{request_id}] flash observations off for {model}: {reason}")
+                return items, False
+        try:
+            key = flash.conversation_key(items)
+            if not key:
+                return items, False
+            horizons = getattr(self, "_flash_openai_horizons", None)
+            if horizons is None:
+                from horizon.paths import workspace_dir
+                from horizon.transforms.flash_observations import FlashHorizons
+
+                horizons = FlashHorizons(workspace_dir() / "flash_horizons_openai.json")
+                self._flash_openai_horizons = horizons
+            originals_from = original_items if isinstance(original_items, list) else items
+            from horizon.transforms.flash_observations import flash_policy
+
+            policy = flash_policy(flash.DEFAULT_OPENAI_TOOLS)
+            if chat:
+                horizon = horizons.horizon_for(key, flash.chat_tail_start(items))
+                result = flash.apply_chat(
+                    items,
+                    horizon=horizon,
+                    policy=policy,
+                    originals=flash.chat_originals(originals_from),
+                )
+            else:
+                horizon = horizons.horizon_for(key, flash.responses_tail_start(items))
+                result = flash.apply_responses(
+                    items,
+                    horizon=horizon,
+                    policy=policy,
+                    originals=flash.responses_originals(originals_from),
+                )
+        except Exception:
+            logger.debug("flash observations (openai) skipped", exc_info=True)
+            return items, False
+        if not result.stubbed and not result.flashed:
+            return items, False
+        if transforms_applied is not None:
+            transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
+        if result.keys:
+            try:
+                from horizon.cache.compression_store import get_compression_store
+
+                store = get_compression_store()
+                for ccr_hash, original in result.keys:
+                    store.store(
+                        original,
+                        original,
+                        compression_strategy="flash_observations",
+                        explicit_hash=ccr_hash,
+                    )
+            except Exception:
+                logger.debug("flash observations (openai): CCR store failed", exc_info=True)
+        logger.info(
+            f"[{request_id}] flash observations: {result.flashed} shown once, "
+            f"{result.stubbed} stubbed, ~{result.chars_kept_out // 4} tokens kept out "
+            "of the permanent context"
+        )
+        return result.messages, True
+
+    def _maybe_flash_openai_ws_frame(
+        self,
+        raw_msg: str,
+        original_input: Any,
+        *,
+        url: str,
+        transforms_applied: list[str],
+        request_id: str = "",
+    ) -> tuple[str, bool]:
+        """:meth:`_maybe_flash_openai` on a WebSocket ``response.create`` frame.
+
+        Skipped for frames chained with ``previous_response_id``: those send
+        only new items and the history lives with the provider.
+        """
+        try:
+            parsed = json.loads(raw_msg)
+        except (json.JSONDecodeError, TypeError):
+            return raw_msg, False
+        if not isinstance(parsed, dict) or parsed.get("type") != "response.create":
+            return raw_msg, False
+        wrapped = isinstance(parsed.get("response"), dict)
+        payload = parsed["response"] if wrapped else parsed
+        if payload.get("previous_response_id") or payload.get("conversation"):
+            return raw_msg, False
+        new_input, changed = self._maybe_flash_openai(
+            payload.get("input"),
+            original_input,
+            chat=False,
+            url=url,
+            model=str(payload.get("model") or ""),
+            transforms_applied=transforms_applied,
+            request_id=request_id,
+        )
+        if not changed:
+            return raw_msg, False
+        payload["input"] = new_input
+        return json.dumps(parsed, ensure_ascii=False), True
+
     @staticmethod
     def _strict_previous_turn_frozen_count(
         messages: list[dict[str, Any]],
@@ -4520,6 +4652,23 @@ class OpenAIHandlerMixin:
             except Exception as _rc_exc:  # never break the request on compaction
                 logger.warning("[%s] reasoning compaction skipped: %s", request_id, _rc_exc)
 
+        # Flash Observations, next-turn form (opt-in, HORIZON_FLASH_OPENAI=1).
+        # After the frozen-prefix restore and replay: stubs are built from the
+        # client's originals, so the replayed bytes and the stub always agree.
+        if not _bypass:
+            _flash_messages, _flash_changed = self._maybe_flash_openai(
+                optimized_messages,
+                original_client_messages,
+                chat=True,
+                url=upstream_base_url or self.OPENAI_API_URL,
+                model=str(body.get("model") or ""),
+                transforms_applied=transforms_applied,
+                request_id=request_id,
+            )
+            if _flash_changed:
+                optimized_messages = _flash_messages
+                body["messages"] = optimized_messages
+
         presend_event = self.pipeline_extensions.emit(
             PipelineStage.PRE_SEND,
             operation="proxy.request",
@@ -6255,6 +6404,37 @@ class OpenAIHandlerMixin:
                     waste_signals_dict = _waste.to_dict()
             except Exception:
                 pass
+
+        # Flash Observations, next-turn form (opt-in, HORIZON_FLASH_OPENAI=1):
+        # an answered large tool output is forwarded as a stub. Not when the
+        # history lives server-side (previous_response_id / conversation): the
+        # proxy does not see it and must not rewrite it.
+        if not _bypass and not body.get("previous_response_id") and not body.get("conversation"):
+            _flash_input, _flash_changed = self._maybe_flash_openai(
+                body.get("input"),
+                input_data,
+                chat=False,
+                url=url,
+                model=str(body.get("model") or ""),
+                transforms_applied=transforms_applied,
+                request_id=request_id,
+            )
+            if _flash_changed:
+                body["input"] = _flash_input
+                body_mutation_tracker.mark_mutated("flash_observations")
+
+        # OpenAI Flex tier (opt-in, HORIZON_OPENAI_FLEX_POLICY): Batch-rate
+        # pricing on API-key traffic nobody is waiting on. Last body change
+        # before forwarding; the forwarders retry once at the standard tier
+        # on a Flex 429 (horizon.proxy.flex_policy.fallback_body).
+        if not _bypass:
+            from horizon.proxy.flex_policy import MUTATION_REASON as _FLEX_REASON
+            from horizon.proxy.flex_policy import apply_flex
+
+            if apply_flex(body, url=url, headers=request.headers, chatgpt_auth=is_chatgpt_auth):
+                body_mutation_tracker.mark_mutated(_FLEX_REASON)
+                transforms_applied.append("service_tier:flex")
+                logger.info(f"[{request_id}] OpenAI Flex tier applied")
 
         # CCR: a stream:true request whose tool list carries horizon_retrieve
         # can't be intercepted mid-SSE-stream without full event-level
@@ -8120,6 +8300,17 @@ class OpenAIHandlerMixin:
                 )
 
             if not _ws_bypass:
+                _first_original = body.get("response", body) if isinstance(body, dict) else {}
+                first_msg_raw, _flash_modified = self._maybe_flash_openai_ws_frame(
+                    first_msg_raw,
+                    _first_original.get("input") if isinstance(_first_original, dict) else None,
+                    url=upstream_url,
+                    transforms_applied=transforms_applied,
+                    request_id=request_id,
+                )
+                if _flash_modified and not first_frame_rewritten:
+                    ws_frames_compressed += 1
+                    first_frame_rewritten = True
                 (
                     first_msg_raw,
                     _shape_modified,
@@ -8620,6 +8811,16 @@ class OpenAIHandlerMixin:
                                     frame_index=client_frame_index,
                                 )
                                 if not _ws_bypass:
+                                    msg, _flash_modified = self._maybe_flash_openai_ws_frame(
+                                        msg,
+                                        current_response_input,
+                                        url=upstream_url,
+                                        transforms_applied=transforms_applied,
+                                        request_id=request_id,
+                                    )
+                                    if _flash_modified and not _frame_modified:
+                                        ws_frames_compressed += 1
+                                        _frame_modified = True
                                     (
                                         msg,
                                         _shape_modified,

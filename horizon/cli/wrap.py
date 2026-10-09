@@ -3023,6 +3023,27 @@ def _apply_keepalive_header_env(env: dict[str, str]) -> str | None:
     return keepalive_id
 
 
+_INTERACTIVE_HEADER_NAME = "X-Horizon-Interactive"
+
+
+def _apply_interactive_header_env(env: dict[str, str], claude_args: tuple | list) -> None:
+    """Tell the proxy whether a person is waiting on this launch.
+
+    ``claude -p`` / ``--print`` runs headless: the proxy's fast-mode governor
+    (``HORIZON_FAST_MODE_POLICY=headless``) drops the 2x fast-mode premium
+    there. Fixed for the whole launch, so the decision never changes inside a
+    session (switching speed would invalidate the prompt cache). A
+    user-supplied header of the same name wins.
+    """
+    existing = env.get("ANTHROPIC_CUSTOM_HEADERS") or ""
+    for line in existing.splitlines():
+        if line.split(":", 1)[0].strip().lower() == _INTERACTIVE_HEADER_NAME.lower():
+            return
+    headless = any(arg in ("-p", "--print") for arg in claude_args or ())
+    header_line = f"{_INTERACTIVE_HEADER_NAME}: {0 if headless else 1}"
+    env["ANTHROPIC_CUSTOM_HEADERS"] = f"{existing}\n{header_line}" if existing else header_line
+
+
 def _end_keepalive(proxy_url: str | None, keepalive_id: str | None) -> None:
     """Tell the proxy the wrapped tool exited. Best effort: never delays or fails the exit."""
     if not proxy_url or not keepalive_id:
@@ -5596,6 +5617,7 @@ def claude(
         # directory's name via X-Horizon-Project (user override wins).
         _apply_project_header_env(env)
         _keepalive_id = _apply_keepalive_header_env(env)
+        _apply_interactive_header_env(env, claude_args)
 
         # Issue #746: keep Claude Code's on-demand tool loading on through the
         # proxy so tool schemas are not eagerly materialized into local context.
