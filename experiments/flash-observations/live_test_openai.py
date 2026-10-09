@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -118,8 +119,11 @@ class RunResult:
             answer = json.loads(match.group(0)) if match else []
         except (ValueError, TypeError):
             return 0.0
+        # GPT often names a test by its full pytest id (path::name); compare the name.
         found = {
-            (str(a.get("test", "")), str(a.get("error", ""))) for a in answer if isinstance(a, dict)
+            (str(a.get("test", "")).rsplit("::", 1)[-1], str(a.get("error", "")))
+            for a in answer
+            if isinstance(a, dict)
         }
         truth = {(t["test"], t["error"]) for t in self.truth}
         if not truth:
@@ -236,7 +240,10 @@ def start_proxy(arm: str, workdir: Path, upstream: str) -> subprocess.Popen:
         HORIZON_WORKSPACE_DIR=str(workdir / arm),
         HORIZON_FLASH_OPENAI="1" if arm == "flash-proxy" else "0",
         HORIZON_FLASH_TOOLS="run_tests",
-        HORIZON_FLASH_ANY_UPSTREAM="0" if upstream == OFFICIAL else "1",
+        # A non-OpenAI upstream is allowed by host, the way a user enables one
+        # that passed preflight_openai.py (the fake is 127.0.0.1).
+        HORIZON_FLASH_ANY_UPSTREAM="0",
+        HORIZON_FLASH_OPENAI_UPSTREAMS=urlparse(upstream).hostname or "",
     )
     log = open(workdir / f"{arm}.log", "w")  # noqa: SIM115 - closed with the process
     cmd = [
