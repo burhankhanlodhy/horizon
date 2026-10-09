@@ -121,7 +121,6 @@ def _clip(line: str) -> str:
 
 def build_stub(tool_name: str, original: str) -> str:
     lines = original.splitlines()
-    key = ccr_key(original)
     head = "\n".join(_clip(x) for x in lines[:STUB_LINES])
     parts = [
         f"[Horizon flash: this {tool_name} output ({len(lines)} lines, "
@@ -133,10 +132,10 @@ def build_stub(tool_name: str, original: str) -> str:
     ]
     if len(lines) > 2 * STUB_LINES:
         parts += ["Last lines:", "\n".join(_clip(x) for x in lines[-STUB_LINES:])]
-    parts.append(
-        "Only if you need exact lines you did not write down, call horizon_retrieve "
-        f"with hash={key}.]"
-    )
+    # No retrieval hash: offered one, the live model sometimes re-fetched every
+    # cleared output, and Horizon's retrieval re-adds it to the cached prefix
+    # (about 2x the cost of not flashing). Without the offer it never needed one.
+    parts[-1] += "]"
     return "\n".join(parts)
 
 

@@ -50,7 +50,10 @@ def test_newest_large_result_is_stubbed_and_flashed() -> None:
     assert result.flashed == 1 and result.stubbed == 1
     assert len(out) == len(messages) + 1
     stub = out[2]["content"][0]["content"]
-    assert stub.startswith("[Horizon flash") and f"hash={ccr_key(BIG + chr(10) + 'run 0')}" in stub
+    assert stub.startswith("[Horizon flash") and stub.endswith("]")
+    # Not offered for retrieval: re-fetching put every output back in the prefix.
+    assert "hash=" not in stub and "horizon_retrieve" not in stub
+    assert result.keys == [(ccr_key(BIG + chr(10) + "run 0"), BIG + chr(10) + "run 0")]
     flash = out[3]
     assert flash["role"] == "system" and flash["clear_at"] == CLEAR_AT
     assert BIG in flash["content"][0]["text"]
