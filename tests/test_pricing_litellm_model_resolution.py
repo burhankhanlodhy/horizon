@@ -127,3 +127,21 @@ def test_vertex_versioned_model_resolves_to_known_key() -> None:
         resolve_litellm_model_name("claude-unknown@20251001", lambda _: False)
         == "claude-unknown@20251001"
     )
+
+
+def test_gateway_spellings_fall_back_to_the_catalog_name() -> None:
+    """Grok as xAI keys it, a vendor-prefixed gateway name, a GA name priced as -preview."""
+    known = {"xai/grok-4.6", "gemini-3.1-pro-preview", "openai/gpt-4o"}.__contains__
+
+    assert resolve_litellm_model_name("grok-4.6", known) == "xai/grok-4.6"
+    assert resolve_litellm_model_name("x-ai/grok-4.6", known) == "xai/grok-4.6"
+    assert resolve_litellm_model_name("gemini-3.1-pro", known) == "gemini-3.1-pro-preview"
+    assert resolve_litellm_model_name("google/gemini-3.1-pro", known) == "gemini-3.1-pro-preview"
+    assert resolve_litellm_model_name("mystery-model", known) == "mystery-model"
+
+
+def test_gateway_fallbacks_never_override_a_direct_match() -> None:
+    known = {"gemini-3.1-pro", "gemini-3.1-pro-preview"}.__contains__
+    assert resolve_litellm_model_name("gemini-3.1-pro", known) == "gemini-3.1-pro"
+    # The primary candidate list itself is unchanged.
+    assert resolution_candidates("gpt-4o") == ("gpt-4o", "openai/gpt-4o")

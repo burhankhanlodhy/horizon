@@ -30,7 +30,17 @@ All notable changes to Horizon are documented here.
   was recorded as a success with savings; it now carries the upstream status.
 - Flash credit is priced at the cache-read rate. Priced from the flashed
   request's own cache usage, it could exceed the measured saving severalfold
-  on OpenAI-format upstreams, where a stub can break the cache.
+  on OpenAI-format upstreams, where a stub can break the cache. On an upstream
+  that evidently does not cache (several sizeable requests for the model, none
+  with a cache read), it prices at the input rate instead.
+- The account ledger's request cost no longer bills OpenAI's inferred cache
+  writes on top of the same uncached tokens (it nearly doubled `cost_usd` on
+  cache misses).
+- Pricing resolves gateway spellings: bare `grok-*` names (xAI's catalog key
+  is `xai/grok-*`), vendor-prefixed names such as `x-ai/grok-4.6` or
+  `google/gemini-3.1-pro`, and GA names the catalog lists only as `-preview`
+  (`gemini-3.1-pro`). Before, those models were unpriced: no savings credited
+  and a $3/M fallback cost.
 
 ### Added
 - Usage and Advanced Analytics show the savings beyond compression per

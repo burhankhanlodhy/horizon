@@ -224,7 +224,9 @@ async def record_account_outcome(
                     outcome.model,
                     outcome.provider_input_tokens or outcome.optimized_tokens,
                     cache_read_tokens=outcome.cache_read_tokens,
-                    cache_write_tokens=outcome.cache_write_tokens,
+                    # An inferred write (OpenAI) is the uncached tokens again,
+                    # with no write premium: pricing both billed them twice.
+                    cache_write_tokens=0 if outcome.cache_inferred else outcome.cache_write_tokens,
                     uncached_input_tokens=outcome.uncached_input_tokens,
                 ) + _estimate_output_cost_usd(outcome.model, outcome.output_tokens)
             # Flash Observations and the price policies (fast mode, Flex,
