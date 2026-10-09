@@ -1001,6 +1001,8 @@ class StreamingMixin:
         from horizon.proxy.body_forwarding import (
             serialize_body_canonical as _serialize_body_canonical,
         )
+        from horizon.proxy.flash_guard import fallback_body as _flash_fallback_body
+        from horizon.proxy.flash_guard import record_retry as _flash_record_retry
         from horizon.proxy.flex_policy import fallback_body as _flex_fallback_body
 
         try:
@@ -1025,6 +1027,18 @@ class StreamingMixin:
                             "POST", url, content=outbound_bytes, headers=outbound_headers
                         )
                         upstream_response = await self.http_client.send(_upstream_req, stream=True)
+                    # A flashed request the upstream rejected: retry once
+                    # unflashed (flash_guard).
+                    _flash_retry = _flash_fallback_body(body, upstream_response.status_code)
+                    if _flash_retry is not None:
+                        await upstream_response.aclose()
+                        body = _flash_retry
+                        outbound_bytes = _serialize_body_canonical(body)
+                        _upstream_req = self.http_client.build_request(
+                            "POST", url, content=outbound_bytes, headers=outbound_headers
+                        )
+                        upstream_response = await self.http_client.send(_upstream_req, stream=True)
+                        _flash_record_retry(upstream_response.status_code)
                     if _codex_wire_debug:
                         capture_codex_wire_debug(
                             "http_stream_upstream_response_headers",

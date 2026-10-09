@@ -1131,6 +1131,12 @@ def proxy(
     _reexec_with_malloc_tuning()
     ensure_proxy_dependencies()
 
+    # HORIZON_SAVINGS=auto|max fills in unset cost-feature variables before any
+    # of them is read (horizon.proxy.savings_profile).
+    from horizon.proxy.savings_profile import apply_savings_profile
+
+    apply_savings_profile()
+
     # Import here to avoid slow startup
     from horizon.proxy.server import (
         ProxyConfig,

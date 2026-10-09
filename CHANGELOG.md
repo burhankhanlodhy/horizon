@@ -2,6 +2,28 @@
 
 All notable changes to Horizon are documented here.
 
+## [Unreleased]
+
+### Added
+- `HORIZON_SAVINGS=off|auto|max`: one switch that fills in the cost features'
+  defaults. `auto` enables what was measured to save money (Claude and
+  OpenAI-format Flash Observations, Flex and fast-mode governors for headless
+  traffic, the price-cliff guard and the cache-miss watch); `max` also enables
+  model modernization. Explicit variables still win. The active profile is
+  shown in `/stats`.
+- Flash safety nets:
+  - a flashed request the upstream rejects (400) is retried once unflashed,
+    and flash is switched off for that host and model;
+  - flash pauses in a conversation once the model re-fetches a stubbed output
+    and gets the same data back.
+- `/stats` → `flash`: outputs stubbed, tokens kept out, re-need pauses,
+  automatic switch-offs and price-check skips, each with a reason.
+- `HORIZON_FLASH_OPENAI_UPSTREAMS=*` allows any host.
+
+### Changed
+- `docker-compose.yml` leaves the cost-feature variables empty, so
+  `HORIZON_SAVINGS` decides; an explicit value in `.env` still overrides it.
+
 ## [0.40.0] — Cost policies and Flash Observations
 
 All new features are off by default. Evidence, run instructions and failure

@@ -30,6 +30,7 @@ from horizon.proxy.conversation_savings import (
     get_response_chain_savings,
     savings_conversation_key,
 )
+from horizon.proxy.flash_guard import sent_value as _flash_sent_value
 from horizon.proxy.helpers import (
     COMPRESSION_TIMEOUT_SECONDS,
     _horizon_bypass_enabled,
@@ -1999,6 +2000,7 @@ class OpenAIHandlerMixin:
         model: str = "",
         transforms_applied: list[str] | None = None,
         request_id: str = "",
+        arm_guard: bool = True,
     ) -> tuple[Any, bool]:
         """Flash Observations, next-turn form (opt-in, ``HORIZON_FLASH_OPENAI=1``).
 
@@ -2014,9 +2016,15 @@ class OpenAIHandlerMixin:
             return items, False
         if not flash.upstream_supports_flash_openai(url):
             return items, False
+        from horizon.proxy import flash_guard
+
+        host = urlparse(url).hostname or ""
+        if flash_guard.is_disabled(host, model):
+            return items, False
         if model:
             pays, reason = flash.flash_pays_for(model)
             if not pays:
+                flash_guard.record_price_skip(model, reason)
                 logged = getattr(self, "_flash_openai_skip_logged", None)
                 if logged is None:
                     logged = self._flash_openai_skip_logged = set()
@@ -2058,8 +2066,15 @@ class OpenAIHandlerMixin:
         except Exception:
             logger.debug("flash observations (openai) skipped", exc_info=True)
             return items, False
+        if result.paused:
+            flash_guard.record_rerun_pause(key)
         if not result.stubbed and not result.flashed:
             return items, False
+        if arm_guard:
+            flash_guard.arm("messages" if chat else "input", items, host=host, model=model)
+        flash_guard.record_flash(
+            shown_once=result.flashed, stubbed=result.stubbed, chars_kept_out=result.chars_kept_out
+        )
         if transforms_applied is not None:
             transforms_applied.append(f"flash:{result.flashed}/{result.stubbed}")
         if result.keys:
@@ -2113,6 +2128,8 @@ class OpenAIHandlerMixin:
             chat=False,
             url=url,
             model=str(payload.get("model") or ""),
+            # WebSocket frames have no HTTP status to retry on.
+            arm_guard=False,
             transforms_applied=transforms_applied,
             request_id=request_id,
         )
@@ -5146,7 +5163,8 @@ class OpenAIHandlerMixin:
                     openai_prefix_tracker.update_from_response(
                         cache_read_tokens=cache_read_tokens,
                         cache_write_tokens=cache_write_tokens,
-                        messages=optimized_messages,
+                        # What the upstream accepted (an unflashed retry, if any).
+                        messages=_flash_sent_value("messages", optimized_messages),
                         original_messages=original_client_messages,
                     )
 
@@ -5526,7 +5544,8 @@ class OpenAIHandlerMixin:
                 openai_prefix_tracker.update_from_response(
                     cache_read_tokens=cache_read_tokens,
                     cache_write_tokens=cache_write_tokens,
-                    messages=optimized_messages,
+                    # What the upstream accepted (an unflashed retry, if any).
+                    messages=_flash_sent_value("messages", optimized_messages),
                     original_messages=original_client_messages,
                 )
 

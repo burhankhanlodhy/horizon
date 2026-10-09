@@ -453,3 +453,73 @@ for a few cents.
 - [The Complexity Trap](https://arxiv.org/abs/2508.21433) · [CliffCompaction](https://arxiv.org/abs/2609.26779) · [TokenPilot](https://arxiv.org/pdf/2606.17016) · [Pichay / demand paging](https://arxiv.org/pdf/2603.09023) · [ContextPipe](https://arxiv.org/pdf/2609.00749) · [Cache-Aware Prompt Compression](https://arxiv.org/pdf/2607.15516) · [Keeping the Cache Warm Pays](https://arxiv.org/pdf/2607.19214)
 - [pydantic-ai turn-scoped parts (PR #9711)](https://github.com/pydantic/pydantic-ai/pull/9711) · [LangChain clear_at / Sonnet 5.5 hoisting issue (#40892)](https://github.com/langchain-ai/langchain/issues/40892)
 - [LiteLLM: routing and prompt caching](https://docs.litellm.ai/blog/auto-router-prompt-caching-benchmark) · [DigitalOcean cache-aware router](https://www.digitalocean.com/blog/inference-router-cache-aware)
+
+
+## Savings profile and safety nets (2026-10-09)
+
+**One switch: `HORIZON_SAVINGS=off | auto | max`** (default `off`;
+`horizon/proxy/savings_profile.py`).
+- **How it works:** at proxy start-up the profile fills in every cost-feature
+  variable the operator left unset or empty. An explicit value, including
+  `0`, always wins.
+- **Compose:** `docker-compose.yml` now leaves those variables empty so the
+  profile decides.
+- **`/stats` → `savings_profile`** shows the active profile and what it set.
+
+| Variable | `auto` | `max` |
+|---|---|---|
+| `HORIZON_CACHE_MISS_WATCH` | `1` | `1` |
+| `HORIZON_FLASH_OBSERVATIONS` (Claude, official API) | `1` | `1` |
+| `HORIZON_FLASH_OPENAI` | `1` | `1` |
+| `HORIZON_FLASH_OPENAI_UPSTREAMS` | `*` (any host) | `*` |
+| `HORIZON_OPENAI_FLEX_POLICY` | `headless` | `headless` |
+| `HORIZON_FAST_MODE_POLICY` | `headless` | `headless` |
+| `HORIZON_PRICE_CLIFF_GUARD` | `1` | `1` |
+| `HORIZON_MODEL_MODERNIZE` | — | `1` |
+
+`auto` never swaps the model the user chose; only `max` does.
+
+**Safety nets.** The proxy protects the user without configuration
+(`horizon/proxy/flash_guard.py`):
+
+1. **Reject-and-retry.**
+   - A flashed request arms a per-request guard with its unflashed form.
+   - On a 400, both shared forwarders (`_retry_request` and the streaming
+     path) retry once unflashed, the same mechanism as the Flex 429 fallback.
+   - If the retry succeeds, flash is switched off for that host and model for
+     the life of the process, and the client never sees the 400. If it also
+     fails, flash was not the cause and stays on.
+   - Prefix trackers record what the upstream accepted
+     (`flash_guard.sent_value`), so the next turn does not replay the
+     rejected stubs.
+   - WebSocket frames are not covered: they have no HTTP status.
+   - This guard is why `auto` can run the OpenAI-format version on any host.
+     A stub only ever shrinks what is billed, the per-model price check skips
+     models where it saves nothing, and a host that rejects edited history is
+     switched off after one retried request.
+2. **Re-need pause.**
+   - Triggered by a tool call that repeats the call behind a stubbed output
+     (same tool, same arguments, ignoring `description` and timeouts) and
+     returns the same output. Durations, clock times and timestamps are
+     ignored in the comparison.
+   - That means the model went back for data it had already been shown.
+     Nothing after that call is flashed in that conversation; earlier stubs
+     stay, so the cache is undisturbed.
+   - A re-run that returns something different, such as tests run again
+     after an edit, is ordinary work and does not count.
+   - Detection is a pure function of the history, so every turn gives the
+     same answer and no state is kept.
+3. **Per-model price check** (`HORIZON_FLASH_MIN_READ_RATIO`, earlier
+   section).
+
+**`/stats` → `flash`:** outputs shown once and stubbed, tokens kept out,
+`rerun_pauses`, `rejected_then_retried`, `switched_off` (host, model and
+reason), `price_skips` (model and reason) and recent events.
+
+**Not automatic yet:**
+- **Claude flash through a gateway.** A gateway that drops `clear_at` bills
+  the "cleared" text without returning an error, so there is nothing for the
+  guard to see. Claude flash therefore stays limited to `api.anthropic.com`
+  in every profile. Detecting it passively would need billed input compared
+  against the visible context, which tokenizer differences make unreliable.
+- **WebSocket frames:** no retry, as above.

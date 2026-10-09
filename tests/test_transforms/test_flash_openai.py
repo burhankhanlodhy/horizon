@@ -240,3 +240,44 @@ def test_per_model_decision_threshold_is_configurable(monkeypatch) -> None:
     assert flash_pays_for("gemini/gemini-3.1-pro-preview")[0] is False
     monkeypatch.setenv("HORIZON_FLASH_MIN_READ_RATIO", "0.05")
     assert flash_pays_for("gemini/gemini-3.1-pro-preview")[0] is True
+
+
+def test_rerun_with_the_same_output_pauses_flash_after_it() -> None:
+    items = _responses(2)
+    # The model runs the first command again and gets the same log back.
+    items += [
+        {"type": "function_call", "call_id": "again", "name": "shell", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "again", "output": LOG + "\n#0"},
+    ]
+    result = apply_responses(items, horizon=0, policy=POLICY)
+    assert result.paused and result.paused_at == 7
+    assert result.messages[3]["output"].startswith("[Horizon flash")  # earlier stub kept
+    assert result.messages[8] == items[8]  # nothing after the re-run is touched
+
+
+def test_rerun_with_different_output_is_ordinary_work() -> None:
+    items = _responses(2)
+    items += [
+        {"type": "function_call", "call_id": "again", "name": "shell", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "again", "output": LOG + "\n#0 FIXED"},
+    ]
+    result = apply_responses(items, horizon=0, policy=POLICY)
+    assert not result.paused
+    assert result.messages[8]["output"].endswith(NOTICE)
+
+
+def test_rerun_detection_ignores_timings_in_chat() -> None:
+    messages = _chat(1)
+    messages[2]["content"] = LOG + "\n5 passed in 3.21s"
+    messages += [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "again", "type": "function", "function": {"name": "bash", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "again", "content": LOG + "\n5 passed in 4.02s"},
+    ]
+    result = apply_chat(messages, horizon=0, policy=POLICY)
+    assert result.paused and result.messages[4] == messages[4]

@@ -252,3 +252,24 @@ def test_flash_runs_only_against_the_official_api_unless_overridden(
 
     monkeypatch.setenv("HORIZON_FLASH_ANY_UPSTREAM", override)
     assert upstream_supports_flash(url) is expected
+
+
+def test_claude_rerun_with_the_same_output_pauses_flash() -> None:
+    from horizon.transforms.flash_observations import apply_flash
+
+    messages = _conversation(1)
+    first = messages[2]["content"][0]["content"]
+    messages += [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "again", "name": "Bash", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "again", "content": first}],
+        },
+    ]
+    result = apply_flash(messages, horizon=0)
+    assert result.paused
+    assert result.messages[-1] == messages[-1]  # the re-fetched output stays raw
+    assert not any(m.get("clear_at") for m in result.messages[-2:])

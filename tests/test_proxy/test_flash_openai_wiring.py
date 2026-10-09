@@ -12,6 +12,18 @@ from horizon.transforms.flash_openai import NOTICE
 from tests.test_proxy.test_model_router_wiring import _install_fake_client
 
 LOG = "\n".join(f"tests/test_io.py::test_{i} PASSED" for i in range(800))
+
+
+@pytest.fixture(autouse=True)
+def _reset_flash_guard():
+    """The guard's switch-offs are process-wide: never let one test's leak into another."""
+    from horizon.proxy import flash_guard
+
+    flash_guard.reset_for_tests()
+    yield
+    flash_guard.reset_for_tests()
+
+
 AUTH = {"authorization": "Bearer sk-test-key"}
 
 
@@ -183,3 +195,44 @@ def test_model_where_cache_reads_are_nearly_free_is_left_alone(monkeypatch, tmp_
         assert client.post("/v1/chat/completions", json=body, headers=AUTH).status_code == 200
         tool = [m["content"] for m in _sent(http)["messages"] if m.get("role") == "tool"]
     assert not any(NOTICE in t or t.startswith("[Horizon flash") for t in tool)
+
+
+def test_rejected_flash_is_retried_unflashed_and_switched_off(monkeypatch, tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from horizon.proxy import flash_guard
+
+    app = _app(monkeypatch, tmp_path)
+    sent: list[dict] = []
+
+    async def upstream(url, **kwargs):
+        body = json.loads(kwargs["content"])
+        sent.append(body)
+        rejected = any(
+            str(m.get("content", "")).startswith("[Horizon flash")
+            or NOTICE in str(m.get("content"))
+            for m in body["messages"]
+        )
+        return httpx.Response(
+            400 if rejected else 200,
+            json={"error": {"message": "bad history"}} if rejected else {"ok": True},
+            request=httpx.Request("POST", url),
+        )
+
+    with TestClient(app) as client:
+        http = _install_fake_client(client.app.state.proxy)
+        http.post = AsyncMock(side_effect=upstream)
+        body = {"model": "gpt-6.1-sol", "messages": _chat_messages(2)}
+        assert client.post("/v1/chat/completions", json=body, headers=AUTH).status_code == 200
+        assert len(sent) == 2  # flashed, rejected, retried unflashed
+        assert [m["content"] for m in sent[1]["messages"] if m["role"] == "tool"] == [
+            LOG + "\n#0",
+            LOG + "\n#1",
+        ]
+        assert flash_guard.is_disabled("api.openai.com", "gpt-6.1-sol")
+        # The next request for that host and model is not flashed at all.
+        body = {"model": "gpt-6.1-sol", "messages": _chat_messages(3)}
+        assert client.post("/v1/chat/completions", json=body, headers=AUTH).status_code == 200
+        assert len(sent) == 3
