@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -66,6 +67,8 @@ from horizon.proxy.model_router import estimate_input_tokens
 from horizon.proxy.nonstream_sse_policy import should_recover_sse_reply
 from horizon.proxy.outcome import RequestOutcome
 from horizon.proxy.output_shaper import shaper_enabled_for, steering_allowed_for
+from horizon.proxy.semantic_cache_key_policy import compute_request_cache_partition
+from horizon.proxy.tenant_key import resolve_tenant_key, set_request_tenant_key
 from horizon.proxy.thinking_tokens import ThinkingTokens, extract_thinking_tokens
 from horizon.utils import format_exception_message
 
@@ -283,6 +286,57 @@ def _looks_like_sse_response(response: httpx.Response) -> bool:
         return True
     head = response.content[:64].lstrip()
     return head.startswith(b"event:") or head.startswith(b"data:")
+
+
+def _dump_prefix_mismatch(request_id: str, current: list, previous: list) -> None:
+    """Debug aid (HORIZON_DEBUG_PREFIX_MISMATCH=<dir>): log where the client's
+    history stopped matching the last turn, and dump both sides for diffing.
+
+    The dump holds the full conversation, user content included. It is for local
+    debugging only: never set this on a shared or production proxy.
+    """
+    from horizon.cache.prefix_tracker import (
+        _canonicalize_for_prefix_compare,
+        classify_history_relation,
+    )
+
+    rel = classify_history_relation(current, previous)
+    first = next(
+        (
+            i
+            for i in range(min(len(current), len(previous)))
+            if _canonicalize_for_prefix_compare(current[i])
+            != _canonicalize_for_prefix_compare(previous[i])
+        ),
+        None,
+    )
+    logger.info(
+        "[%s] prefix_mismatch_debug relation=%s first_diff_index=%s current_len=%d previous_len=%d",
+        request_id,
+        rel.kind,
+        first,
+        len(current),
+        len(previous),
+    )
+    try:
+        out = Path(os.environ["HORIZON_DEBUG_PREFIX_MISMATCH"]) / f"{request_id}.json"
+        out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Owner-only: the dump holds the full conversation. The mode passed to
+        # os.open applies only when the file is created, so tighten an existing
+        # file too before writing into it.
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # The context manager owns the descriptor from here, so it is closed
+        # even if tightening the mode fails.
+        with os.fdopen(fd, "w") as fh:
+            if hasattr(os, "fchmod"):  # POSIX; Windows has no POSIX modes to fix
+                os.fchmod(fh.fileno(), 0o600)
+            json.dump(
+                {"first_diff_index": first, "current": current, "previous": previous},
+                fh,
+                default=str,
+            )
+    except Exception:  # noqa: BLE001 - debug aid only
+        pass
 
 
 class AnthropicHandlerMixin:
@@ -1059,6 +1113,20 @@ class AnthropicHandlerMixin:
         request.state.auth_mode = auth_mode
         logger.debug(f"[{request_id}] auth_mode_classified mode={auth_mode.value}")
 
+        # Phase F PR-F3: resolve the per-tenant key for TOIN learning
+        # isolation. `set_request_tenant_key` populates the ContextVar
+        # the deep-stack `record_compression` / `record_retrieval` calls
+        # in SmartCrusher / ContentRouter read from. Pre-F3 every
+        # request's patterns aggregated into one global pool — F3
+        # partitions by header / hash / global namespace so two
+        # tenants can't cross-pollinate compression patterns. The
+        # resolver itself emits the structured `tenant_key_resolved`
+        # log on every call.
+        tenant_key, tenant_key_source = resolve_tenant_key(request)
+        request.state.tenant_key = tenant_key
+        request.state.tenant_key_source = tenant_key_source
+        set_request_tenant_key(tenant_key)
+
         # Unit 2: per-stage timings for the pre-upstream phase. The
         # finalizer emits one structured log line + Prometheus
         # observations even if the handler raises.
@@ -1529,10 +1597,21 @@ class AnthropicHandlerMixin:
             # unreachable entries. Reuse this raw snapshot verbatim at cache.set
             # (the same reason cache_key_fields is snapshotted here, #327).
             cache_lookup_messages = messages
+            # Response-cache partition: a cached response is only ever replayed to a
+            # caller presenting the same provider credentials and principal (01-F15).
+            # Snapshotted with the key fields so lookup and store agree. None means
+            # the principal could not be established: skip the cache entirely.
+            # Only resolved when the cache can be used, so streaming and
+            # cache-disabled requests never pay for identity resolution.
+            cache_partition = (
+                compute_request_cache_partition(request) if self.cache and not stream else None
+            )
             # Check cache (non-streaming only)
             cache_hit = False
-            if self.cache and not stream:
-                cached = await self.cache.get(messages, model, **cache_key_fields)
+            if self.cache and not stream and cache_partition is not None:
+                cached = await self.cache.get(
+                    messages, model, partition=cache_partition, **cache_key_fields
+                )
                 if cached:
                     cache_hit = True
                     self.pipeline_extensions.emit(
@@ -1719,6 +1798,11 @@ class AnthropicHandlerMixin:
                     "output_config": body.get("output_config"),
                 }
             )
+            # Resolve the request's actual provider TTL before tracker lookup:
+            # get_or_create may sweep expired sessions on this request.
+            from horizon.transforms.cold_prefix import anthropic_cache_ttl_seconds
+
+            _cc_ttl = anthropic_cache_ttl_seconds(model, original_client_messages, system_prompt)
             # Resolve the tracker by conversation lineage within the session id
             # (#2085): one model + system prompt spans a Claude Code session and
             # all its parallel subagents, so concurrent conversations share this
@@ -1730,6 +1814,7 @@ class AnthropicHandlerMixin:
                 "anthropic",
                 messages=session_messages,
                 cache_affinity=cache_affinity,
+                cache_ttl_seconds=_cc_ttl,
             )
             # Snapshot lineage state once.  Reusing the same pair for delta
             # extraction, byte-stable replay, and breakpoint placement keeps
@@ -1763,14 +1848,8 @@ class AnthropicHandlerMixin:
             # lossless whole-prefix recompaction instead of the byte-identical splice
             # (the splice preserves a dead cache) and skips the overlay replay. Both are
             # deterministic → the recompacted prefix re-caches byte-stable on warm turns.
-            from horizon.transforms.cold_prefix import (
-                anthropic_cache_ttl_seconds,
-                is_cold_prefix,
-            )
+            from horizon.transforms.cold_prefix import is_cold_prefix
 
-            # Resolve the authoritative request-level prompt-cache tier once.
-            # The same value drives cold-prefix handling and net-cost pricing.
-            _cc_ttl = anthropic_cache_ttl_seconds(model, original_client_messages, system_prompt)
             _cold_recompact_active = False
             if os.environ.get("HORIZON_COLD_RECOMPACT", "").strip().lower() in (
                 "1",
@@ -2338,6 +2417,10 @@ class AnthropicHandlerMixin:
                                 "[%s] Compression skipped: reason=cache_mode_prefix_mismatch",
                                 request_id,
                             )
+                            if os.environ.get("HORIZON_DEBUG_PREFIX_MISMATCH"):
+                                _dump_prefix_mismatch(
+                                    request_id, original_client_messages, previous_original_messages
+                                )
                             optimized_messages = messages
                             optimized_tokens = original_tokens
                         elif tracker_frozen_count > 0:
@@ -2517,11 +2600,11 @@ class AnthropicHandlerMixin:
 
             # Mechanism B: activity-based read maturation (flag-gated,
             # default off). Runs after compression so read_lifecycle
-            # markers are respected, and before body assembly so the
-            # held-Read breakpoint relocation lands in the forwarded
-            # request. Session state (matured markers) rides on the
-            # prefix tracker — same affinity and TTL cleanup as the
-            # freeze state. Advisory: must never fail the request.
+            # markers are respected, and before body assembly so a
+            # matured marker lands in the forwarded request. Session
+            # state (matured markers) rides on the prefix tracker — same
+            # affinity and TTL cleanup as the freeze state. Advisory:
+            # must never fail the request.
             # Bound when maturation runs, so the final accounting step below
             # can charge this request's replayed-marker debt. Every earlier
             # `tokens_saved` assignment is overwritten by that recount, so the
@@ -2530,10 +2613,7 @@ class AnthropicHandlerMixin:
             if self.config.read_maturation and not _bypass:
                 try:
                     from horizon.config import ReadMaturationConfig
-                    from horizon.transforms.read_maturation import (
-                        ReadMaturationManager,
-                        relocate_cache_breakpoint,
-                    )
+                    from horizon.transforms.read_maturation import ReadMaturationManager
 
                     maturation_mgr = prefix_tracker.read_maturation_manager
                     if maturation_mgr is None:
@@ -2548,15 +2628,20 @@ class AnthropicHandlerMixin:
                         )
                         prefix_tracker.read_maturation_manager = maturation_mgr
                     _maturation_mgr = maturation_mgr
+                    maturation_frozen_count = frozen_message_count
+                    if not _cold_recompact_active:
+                        # Replay may clamp the compression boundary before an
+                        # uncompressed Read. The provider can already have
+                        # cached it, so maturation must honor its full boundary.
+                        maturation_frozen_count = max(
+                            maturation_frozen_count, prefix_tracker.get_frozen_message_count()
+                        )
                     maturation = maturation_mgr.apply(
                         optimized_messages,
-                        frozen_message_count=frozen_message_count,
+                        frozen_message_count=maturation_frozen_count,
                     )
                     if maturation.replacements_applied or maturation.holding_msg_indices:
-                        optimized_messages = relocate_cache_breakpoint(
-                            maturation.messages,
-                            maturation.holding_msg_indices,
-                        )
+                        optimized_messages = maturation.messages
                         optimized_tokens = tokenizer.count_messages(optimized_messages)
                         tokens_saved = max(0, original_tokens - optimized_tokens)
                         if maturation.newly_matured:
@@ -4967,6 +5052,7 @@ class AnthropicHandlerMixin:
                         if (
                             self.cache
                             and not stream
+                            and cache_partition is not None
                             and response.status_code == 200
                             and resp_json is not None
                         ):
@@ -4976,6 +5062,7 @@ class AnthropicHandlerMixin:
                                 response.content,
                                 dict(response.headers),
                                 tokens_saved=tokens_saved,
+                                partition=cache_partition,
                                 **cache_key_fields,
                             )
 

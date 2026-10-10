@@ -24,9 +24,23 @@ except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[no-redef]
 
 import click
+from click.core import ParameterSource
 
+from horizon.cli.port_discovery import (
+    DEFAULT_PROXY_PORT,
+    env_port,
+    reconcile_default_port,
+    warn_codex_provider_port_change,
+)
 from horizon.install.models import ConfigScope, InstallPreset, RuntimeKind, SupervisorKind
-from horizon.install.paths import claude_settings_path, codex_config_path, validate_profile_name
+from horizon.install.paths import (
+    claude_settings_path,
+    codex_config_path,
+    codex_home_dir,
+    codex_hooks_path,
+    codex_project_config_path,
+    validate_profile_name,
+)
 from horizon.install.planner import build_manifest
 from horizon.install.providers import _apply_unix_env_scope, _apply_windows_env_scope
 from horizon.install.runtime import (
@@ -42,7 +56,11 @@ from horizon.install.state import ManifestError, load_manifest, save_manifest
 from horizon.install.supervisors import start_supervisor
 from horizon.providers.claude import TOOL_SEARCH_DEFAULT, TOOL_SEARCH_ENV
 from horizon.providers.claude.runtime import TOOL_SEARCH_FOUNDRY_DEFAULT
-from horizon.providers.codex.install import codex_uses_chatgpt_auth
+from horizon.providers.codex.install import (
+    CodexAuthConfigError,
+    build_codex_auth_config,
+    codex_uses_chatgpt_auth,
+)
 from horizon.providers.codex.threads import retag_to_horizon
 
 from .main import main
@@ -136,7 +154,11 @@ def _copilot_config_path() -> Path:
 
 
 def _codex_hooks_path(global_scope: bool) -> Path:
-    return (Path.home() if global_scope else Path.cwd()) / ".codex" / "hooks.json"
+    # User scope follows Codex's own home resolution (CODEX_HOME, else ~/.codex)
+    # so `init -g codex` writes the hooks file Codex will actually load.
+    if global_scope:
+        return codex_hooks_path()
+    return Path.cwd() / ".codex" / "hooks.json"
 
 
 def _claude_scope_path(global_scope: bool) -> Path:
@@ -148,7 +170,7 @@ def _claude_scope_path(global_scope: bool) -> Path:
 def _codex_scope_path(global_scope: bool) -> Path:
     if global_scope:
         return codex_config_path()
-    return Path.cwd() / ".codex" / "config.toml"
+    return codex_project_config_path()
 
 
 def _json_file(path: Path) -> dict[str, Any]:
@@ -291,9 +313,46 @@ def _remove_marker_block(content: str, marker_start: str, marker_end: str) -> st
     return content[:start].rstrip() + "\n\n" + content[end:].lstrip()
 
 
-def _strip_codex_init_block(content: str) -> str:
+def _strip_codex_root_routing_orphans(content: str) -> str:
+    """Drop Horizon loopback routing keys left at the document root.
+
+    Only the root (everything before the first table header) is Horizon's to
+    clean: the same keys inside ``[profiles.*]`` tables are user-owned
+    per-profile overrides, even when they point at Horizon.
+    """
+    import re
+
+    first_table = re.search(r"(?m)^[ \t]*\[", content)
+    split = first_table.start() if first_table else len(content)
+    root, rest = content[:split], content[split:]
+    root = re.sub(r'(?m)^[ \t]*model_provider[ \t]*=[ \t]*"horizon"[ \t]*\r?\n', "", root)
+    root = re.sub(
+        r'(?m)^[ \t]*openai_base_url[ \t]*=[ \t]*"http://127\.0\.0\.1:\d+/v1"[ \t]*\r?\n',
+        "",
+        root,
+    )
+    return root + rest
+
+
+_CODEX_PROVIDER_SNAPSHOT_PREFIX = "# Horizon init previous provider: "
+
+
+def _codex_init_provider_snapshot(content: str) -> str | None:
+    match = re.search(r"(?m)^" + re.escape(_CODEX_PROVIDER_SNAPSHOT_PREFIX) + r"([^\n]*)", content)
+    if match is None:
+        return None
+    snapshot = json.loads(match.group(1))
+    if not isinstance(snapshot, str):
+        raise ValueError("Invalid Horizon init provider snapshot")
+    tomllib.loads(snapshot)
+    return snapshot
+
+
+def _strip_codex_init_block(content: str, *, restore_provider: bool = True) -> str:
     """Remove all Horizon init-managed blocks and orphan keys from a Codex config.toml string."""
     import re
+
+    provider_snapshot = _codex_init_provider_snapshot(content)
 
     # Remove any provider marker → end marker span, possibly repeated.
     while _CODEX_PROVIDER_MARKER_START in content and _CODEX_PROVIDER_MARKER_END in content:
@@ -324,6 +383,8 @@ def _strip_codex_init_block(content: str) -> str:
         r"(?=^\[|\Z)"
     )
     content = orphan_horizon_table.sub("", content)
+    if restore_provider and provider_snapshot is not None:
+        content = content.rstrip() + "\n\n" + provider_snapshot
 
     return content.lstrip("\n").rstrip() + "\n" if content.strip() else ""
 
@@ -332,26 +393,79 @@ def _ensure_codex_provider(path: Path, port: int) -> None:
     import re
 
     logger.debug("ensure codex provider block: %s (port=%s)", path, port)
+    warn_codex_provider_port_change(path, port)
+    auth_path = codex_home_dir() / "auth.json"
     # Emit requires_openai_auth only for ChatGPT-OAuth users (restores the
     # account menu); omitting it for API-key users avoids forcing an OAuth
     # login (#406).
     requires_openai_auth = (
-        "requires_openai_auth = true\n"
-        if codex_uses_chatgpt_auth(path.parent / "auth.json")
-        else ""
+        "requires_openai_auth = true\n" if codex_uses_chatgpt_auth(auth_path) else ""
     )
+    try:
+        auth_config = build_codex_auth_config(auth_path, config_path=path)
+    except CodexAuthConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
     block = (
         f"{_CODEX_PROVIDER_MARKER_START}\n"
         'model_provider = "horizon"\n'
         f'openai_base_url = "http://127.0.0.1:{port}/v1"\n\n'
         "[model_providers.horizon]\n"
-        'name = "Horizon init proxy"\n'
+        # Codex derives remote-compaction support from the provider display
+        # name. Keep the proxy's provider id as ``horizon`` for routing, but
+        # use the built-in OpenAI name so the capability is preserved.
+        'name = "OpenAI"\n'
         f'base_url = "http://127.0.0.1:{port}/v1"\n'
         "supports_websockets = true\n"
+        f"{auth_config}"
         f"{requires_openai_auth}"
         f"{_CODEX_PROVIDER_MARKER_END}"
     )
     content = path.read_text(encoding="utf-8") if path.exists() else ""
+    # Adopt an existing unmarked provider table instead of declaring it twice.
+    # Keep user options that are not owned by the generated provider block.
+    provider_snapshot = _codex_init_provider_snapshot(content)
+    provider_table = re.search(
+        r"(?m)^[ \t]*\[model_providers\.horizon\][ \t]*(?:#[^\n]*)?\r?\n", content
+    )
+    if provider_table:
+        next_table = re.search(r"(?m)^[ \t]*\[", content[provider_table.end() :])
+        table_end = provider_table.end() + next_table.start() if next_table else len(content)
+        if provider_snapshot is None and _CODEX_PROVIDER_MARKER_START not in content:
+            provider_snapshot = content[provider_table.start() : table_end]
+        existing_options = content[provider_table.end() : table_end]
+        existing_options = re.sub(
+            r"(?m)^" + re.escape(_CODEX_PROVIDER_SNAPSHOT_PREFIX) + r"[^\n]*(?:\n|$)",
+            "",
+            existing_options,
+        )
+        existing_options = existing_options.replace(_CODEX_PROVIDER_MARKER_END, "")
+        generated_keys = set(re.findall(r"(?m)^([A-Za-z_][A-Za-z_0-9]*)[ \t]*=", block))
+        generated_keys.update(
+            {"auth", "env_key", "requires_openai_auth", "experimental_bearer_token"}
+        )
+        for key in generated_keys:
+            existing_options = re.sub(
+                rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*(?:\n|$)",
+                "",
+                existing_options,
+            )
+        block = block.replace(
+            _CODEX_PROVIDER_MARKER_END,
+            existing_options + _CODEX_PROVIDER_MARKER_END,
+        )
+        if _CODEX_PROVIDER_MARKER_START not in content:
+            content = content[: provider_table.start()] + content[table_end:]
+    content = _replace_marker_block(
+        content, _CODEX_PROVIDER_MARKER_START, _CODEX_PROVIDER_MARKER_END, "", at_root=True
+    )
+    if provider_snapshot is not None:
+        block = block.replace(
+            _CODEX_PROVIDER_MARKER_END,
+            _CODEX_PROVIDER_SNAPSHOT_PREFIX
+            + json.dumps(provider_snapshot)
+            + "\n"
+            + _CODEX_PROVIDER_MARKER_END,
+        )
     # init owns the ROOT-level model_provider/openai_base_url: drop any prior
     # root assignment so we replace it instead of emitting a duplicate top-level
     # key (#260). Scope the strip to the document root (everything before the
@@ -370,6 +484,7 @@ def _ensure_codex_provider(path: Path, port: int) -> None:
         content, _CODEX_PROVIDER_MARKER_START, _CODEX_PROVIDER_MARKER_END, block, at_root=True
     )
     path.parent.mkdir(parents=True, exist_ok=True)
+    tomllib.loads(content)
     path.write_text(content, encoding="utf-8")
     # Codex filters its history menu by the active model_provider, so existing
     # native threads vanish once we switch to "horizon". Retag them to match the
@@ -970,14 +1085,33 @@ def _install_horizon_mcp_for_targets(*, targets: list[str], port: int) -> None:
             click.echo(line)
 
 
+def _resolve_init_port(ctx: click.Context, port: int) -> int:
+    """Honor ``--port``; otherwise ``HORIZON_PORT``; otherwise reconcile with a live proxy.
+
+    Skipped for the internal ``init hook`` group: hooks run non-interactively
+    on every session start and must stay silent and fast.
+    """
+    if ctx.invoked_subcommand == "hook":
+        return port
+    if ctx.get_parameter_source("port") is not ParameterSource.DEFAULT:
+        return port
+    configured = env_port()
+    if configured is not None:
+        return configured
+    return reconcile_default_port(port)
+
+
 @main.group(invoke_without_command=True)
 @click.option("-g", "--global", "global_scope", is_flag=True, help="Install for the current user.")
 @click.option(
     "--port",
-    default=8787,
+    default=DEFAULT_PROXY_PORT,
     type=click.IntRange(1, 65535),
     show_default=True,
-    help="Horizon proxy port.",
+    help=(
+        "Horizon proxy port. When omitted, HORIZON_PORT is used if set; otherwise a "
+        "live Horizon proxy on another port is detected and offered."
+    ),
 )
 @click.option("--backend", default="anthropic", show_default=True, help="Proxy backend.")
 @click.option("--anyllm-provider", default=None, help="Provider for any-llm backends.")
@@ -1004,6 +1138,7 @@ def init(
     """Install durable Horizon integrations for supported agents."""
     if verbose:
         _enable_verbose_logging()
+    port = _resolve_init_port(ctx, port)
     logger.debug(
         "init: global_scope=%s port=%s backend=%s anyllm_provider=%s region=%s memory=%s "
         "invoked_subcommand=%s",
@@ -1122,7 +1257,6 @@ def init_hook() -> None:
 @click.option("--marker", default=None, hidden=True)
 def init_hook_ensure(profile: str | None, marker: str | None) -> None:
     """Best-effort ensure used by installed agent hooks."""
-    del marker
 
     def _has_manifest(name: str) -> bool:
         # Best-effort: a corrupt manifest must not crash the session-start hook.
@@ -1142,3 +1276,158 @@ def init_hook_ensure(profile: str | None, marker: str | None) -> None:
             profiles.append(_GLOBAL_PROFILE)
     for name in profiles:
         _ensure_profile_running(name)
+    _emit_alignment_warning(marker, profiles)
+
+
+_HOOK_AGENT_BY_MARKER = {_CLAUDE_HOOK_MARKER: "claude", _CODEX_HOOK_MARKER: "codex"}
+_HOOK_STDIN_WAIT_SECONDS = 0.5
+
+
+def _read_hook_event_name() -> str | None:
+    """``hook_event_name`` from the hook's stdin JSON, read with a hard time bound.
+
+    Claude Code and Codex pipe a JSON object into command hooks. A reader
+    thread keeps a host that never closes stdin from stalling the hook.
+    """
+    import threading
+
+    try:
+        stream = sys.stdin
+        if stream is None or stream.isatty():
+            return None
+    except (AttributeError, ValueError, OSError):
+        return None
+    box: dict[str, str] = {}
+
+    def _read() -> None:
+        try:
+            box["raw"] = stream.read(1 << 20)
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+    reader.join(_HOOK_STDIN_WAIT_SECONDS)
+    raw = box.get("raw")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    event = payload.get("hook_event_name") if isinstance(payload, dict) else None
+    return event if isinstance(event, str) else None
+
+
+def _claude_configured_base_url(cwd: Path) -> str | None:
+    """Effective ``ANTHROPIC_BASE_URL`` from Claude settings (local > project > user)."""
+    for path in (
+        cwd / ".claude" / "settings.local.json",
+        cwd / ".claude" / "settings.json",
+        claude_settings_path(),
+    ):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        except (OSError, ValueError):
+            continue
+        env_block = payload.get("env") if isinstance(payload, dict) else None
+        if isinstance(env_block, dict) and env_block.get("ANTHROPIC_BASE_URL"):
+            return str(env_block["ANTHROPIC_BASE_URL"])
+    return os.environ.get("ANTHROPIC_BASE_URL") or None
+
+
+def _codex_configured_base_url(cwd: Path) -> str | None:
+    """Active Codex provider ``base_url`` (project ``.codex`` first, then ``$CODEX_HOME``)."""
+    from .doctor import codex_active_base_url
+
+    for path in (codex_project_config_path(cwd), codex_config_path()):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        except OSError:
+            continue
+        if not text:
+            continue
+        _provider, base_url = codex_active_base_url(text)
+        if base_url:
+            return base_url
+    return None
+
+
+def alignment_warning(
+    agent: str,
+    profile: str,
+    *,
+    cwd: Path | None = None,
+    probe: Any = None,
+) -> str | None:
+    """Message when ``agent``'s configured proxy port differs from ``profile``'s.
+
+    Returns None when aligned, unconfigured, or anything cannot be read.
+    """
+    from .port_discovery import loopback_port, probe_horizon_proxy
+
+    try:
+        manifest = load_manifest(profile)
+    except ManifestError:
+        return None
+    if manifest is None:
+        return None
+    root = cwd or Path.cwd()
+    if agent == "claude":
+        base_url = _claude_configured_base_url(root)
+    elif agent == "codex":
+        base_url = _codex_configured_base_url(root)
+    else:
+        return None
+    configured = loopback_port(base_url or "")
+    expected = int(manifest.port)
+    if configured is None or configured == expected:
+        return None
+    check = probe or probe_horizon_proxy
+    configured_live = bool(check(configured))
+    scope_flag = " -g" if profile == _GLOBAL_PROFILE else ""
+    label = "Claude Code" if agent == "claude" else "Codex"
+    if configured_live:
+        state = f"a Horizon proxy is running on {configured}, not the managed one"
+        fix_port = configured
+    else:
+        state = f"nothing Horizon answers on {configured}, so requests may fail"
+        fix_port = expected
+    return (
+        f"Horizon: {label} is configured for http://127.0.0.1:{configured} but the Horizon "
+        f"proxy managed by `horizon init` ({profile}) uses port {expected}; {state}. "
+        f"Fix: horizon init{scope_flag} --port {fix_port} {agent}"
+    )
+
+
+def _emit_alignment_warning(marker: str | None, profiles: list[str]) -> None:
+    """Surface a base_url/proxy port mismatch through the SessionStart hook channel.
+
+    Emitted only for Claude/Codex SessionStart hooks, as hook JSON
+    (``systemMessage`` for the user, ``additionalContext`` for the agent).
+    Must never raise or block: any failure silently emits nothing.
+    """
+    try:
+        agent = _HOOK_AGENT_BY_MARKER.get(marker or "")
+        if agent is None or not profiles:
+            return
+        if _read_hook_event_name() != "SessionStart":
+            return
+        message = alignment_warning(agent, profiles[0])
+        if not message:
+            return
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "systemMessage": message,
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": message,
+                    },
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001 - a hook must never break the session
+        return

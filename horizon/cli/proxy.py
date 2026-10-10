@@ -735,9 +735,9 @@ def dashboard(port: int, no_open: bool) -> None:
     envvar="HORIZON_READ_MATURATION",
     help=(
         "EXPERIMENTAL: activity-based read maturation — hold fresh Reads "
-        "out of the provider prefix cache and compress them once their "
-        "file quiesces. Requires HORIZON_ROLLOUT_CHANNEL=beta (or dev); "
-        "env: HORIZON_READ_MATURATION=1."
+        "verbatim and compress them once their file quiesces, unless the "
+        "provider cache already holds them. Requires "
+        "HORIZON_ROLLOUT_CHANNEL=beta (or dev); env: HORIZON_READ_MATURATION=1."
     ),
 )
 @click.option(

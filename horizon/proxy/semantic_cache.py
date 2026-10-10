@@ -35,7 +35,9 @@ class SemanticCache:
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._lock = asyncio.Lock()
 
-    def _compute_key(self, messages: list[dict], model: str, **key_fields: Any) -> str:
+    def _compute_key(
+        self, messages: list[dict], model: str, *, partition: str, **key_fields: Any
+    ) -> str:
         """Compute cache key from messages, model, and response-shaping fields.
 
         ``key_fields`` carries every request field that changes generation,
@@ -49,14 +51,21 @@ class SemanticCache:
         on ``system``/``tools`` does not fragment the key (scalars pass through
         untouched). Absent fields don't contribute, so truly-identical requests
         still hit.
+
+        ``partition`` is the caller's cache partition
+        (:func:`horizon.proxy.semantic_cache_key_policy.compute_request_cache_partition`)
+        and is required: on a shared proxy, a response is only ever replayed to a
+        caller presenting the same provider credentials and principal.
         """
         from horizon.proxy.account_analytics import tenant_key
 
-        return tenant_key(compute_semantic_cache_key(messages, model, **key_fields))
+        return tenant_key(compute_semantic_cache_key(messages, model, partition=partition, **key_fields))
 
-    async def get(self, messages: list[dict], model: str, **key_fields: Any) -> CacheEntry | None:
+    async def get(
+        self, messages: list[dict], model: str, *, partition: str, **key_fields: Any
+    ) -> CacheEntry | None:
         """Get cached response if exists and not expired."""
-        key = self._compute_key(messages, model, **key_fields)
+        key = self._compute_key(messages, model, partition=partition, **key_fields)
         async with self._lock:
             entry = self._cache.get(key)
 
@@ -81,10 +90,12 @@ class SemanticCache:
         response_body: bytes,
         response_headers: dict[str, str],
         tokens_saved: int = 0,
+        *,
+        partition: str,
         **key_fields: Any,
     ):
         """Cache a response."""
-        key = self._compute_key(messages, model, **key_fields)
+        key = self._compute_key(messages, model, partition=partition, **key_fields)
 
         async with self._lock:
             # If key already exists, remove it first to update position

@@ -62,6 +62,7 @@ from horizon._version import normalize_release_version as _normalize_release_ver
 from horizon.agent_savings import (
     apply_agent_savings_env_defaults,
 )
+from horizon.cli.port_discovery import proxy_port_option, warn_codex_provider_port_change
 from horizon.cli.proxy import ensure_proxy_dependencies
 from horizon.copilot_auth import (
     _API_TOKEN_ENV_VARS,
@@ -103,7 +104,14 @@ from horizon.providers.claude import (
 )
 from horizon.providers.claude.runtime import TOOL_SEARCH_FOUNDRY_DEFAULT
 from horizon.providers.codex import build_launch_env as _build_codex_launch_env
-from horizon.providers.codex.install import codex_uses_chatgpt_auth
+from horizon.providers.codex.install import (
+    CodexAuthConfigError,
+    build_codex_auth_config,
+    cleanup_codex_auth_helper,
+    codex_auth_helper_is_referenced,
+    codex_auth_helper_path,
+    codex_uses_chatgpt_auth,
+)
 from horizon.providers.codex.threads import retag_to_horizon, retag_to_native
 from horizon.providers.copilot import (
     build_launch_env as _build_copilot_launch_env,
@@ -190,6 +198,7 @@ from horizon.providers.opencode.config import (
     snapshot_opencode_config_if_unwrapped,
     strip_opencode_horizon_blocks,
 )
+from horizon.providers.opencode.runtime import opencode_major_version, with_opencode_standalone
 from horizon.providers.zcode import (
     detect_upstream as _detect_zcode_upstream,
 )
@@ -1652,14 +1661,40 @@ def _selfheal_dead_wrap_base_url() -> None:
     """
     try:
         settings_path = Path.cwd() / ".claude" / "settings.local.json"
+        marker_before = _read_wrap_marker(settings_path)
         for key in (
             _claude_wrap_base_url_env_key(),
             _claude_wrap_base_url_env_key(foundry_mode=True),
             _claude_wrap_base_url_env_key(vertex_mode=True),
         ):
             _check_and_clear_dead_wrap_marker(settings_path, key=key)
+        # The prior value a clear restores may itself be None, so detect the
+        # clear by the marker changing rather than by the return value.
+        if marker_before is not None and _read_wrap_marker(settings_path) != marker_before:
+            _warn_live_proxy_after_selfheal(marker_before)
     except Exception:  # noqa: BLE001 - hook must never break session startup
         pass
+
+
+def _warn_live_proxy_after_selfheal(dead_marker: dict[str, Any] | None) -> None:
+    """After clearing a dead wrap route, point at a live proxy if one exists.
+
+    Deliberately warn-only: repointing settings at another session's proxy
+    would silently adopt a proxy this project never chose (different backend,
+    mode, or owner). The message names the exact command instead.
+    """
+    from horizon.cli.port_discovery import find_live_proxy_elsewhere
+
+    dead_port = dead_marker.get("port") if isinstance(dead_marker, dict) else None
+    requested = dead_port if isinstance(dead_port, int) else 8787
+    live = find_live_proxy_elsewhere(requested)
+    if live is None:
+        return
+    click.echo(
+        f"horizon: a Horizon proxy is running on port {live}; route this project "
+        f"through it with: horizon wrap claude --port {live}",
+        err=True,
+    )
 
 
 def _wrap_selfheal_hook_command() -> str:
@@ -2618,10 +2653,9 @@ _CODEX_CONFIG_BACKUP_SUFFIX = ".horizon-backup"
 
 def _codex_home_dir() -> Path:
     """Return Codex's config directory, respecting ``CODEX_HOME`` when set."""
-    codex_home = os.environ.get("CODEX_HOME")
-    if codex_home:
-        return Path(codex_home).expanduser()
-    return Path.home() / ".codex"
+    from horizon.install.paths import codex_home_dir
+
+    return codex_home_dir()
 
 
 def _codex_profile_from_args(codex_args: tuple[str, ...]) -> str | None:
@@ -3188,6 +3222,9 @@ def _inject_codex_provider_config(port: int) -> str | None:
     """
     config_file, backup_file = _codex_config_paths()
     config_dir = config_file.parent
+    # Never repoint an existing horizon provider to another port silently: a
+    # different live proxy (or a persistent install) may own the old route.
+    warn_codex_provider_port_change(config_file, port)
 
     # Detect an existing custom OpenAI-compatible provider BEFORE building the
     # injected block below, so it can be preserved as the upstream the proxy
@@ -3218,6 +3255,10 @@ def _inject_codex_provider_config(port: int) -> str | None:
     requires_openai_auth = (
         "requires_openai_auth = true\n" if codex_uses_chatgpt_auth(config_dir / "auth.json") else ""
     )
+    try:
+        auth_config = build_codex_auth_config(config_dir / "auth.json", config_path=config_file)
+    except CodexAuthConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
     # Per-project savings: Codex sends the X-Horizon-Project header only
     # when the mapped env var (HORIZON_PROJECT, set by `horizon wrap
     # codex`) exists at Codex runtime. When a custom upstream was detected,
@@ -3233,6 +3274,7 @@ def _inject_codex_provider_config(port: int) -> str | None:
         'name = "OpenAI via Horizon proxy"\n'
         f'base_url = "http://127.0.0.1:{port}/v1"\n'
         f"supports_websockets = true\n"
+        f"{auth_config}"
         f"{requires_openai_auth}"
         # Inline table keeps the key inside this section so
         # _strip_codex_horizon_blocks removes it with the rest of the block.
@@ -3344,18 +3386,58 @@ def _restore_codex_provider_config() -> tuple[str, Path]:
       content (created by wrap) and has been deleted.
     * ``"noop"``     — nothing to undo; no Horizon marker and no backup.
     """
+    from horizon.cli.init import (
+        _CODEX_PROVIDER_MARKER_START,
+        _codex_init_provider_snapshot,
+        _strip_codex_init_block,
+    )
+
     config_file, backup_file = _codex_config_paths()
+    helper_auth_path = config_file.parent / "auth.json"
+    helper_path = codex_auth_helper_path(helper_auth_path, config_path=config_file)
 
     # Case 1: pre-wrap snapshot exists — restore it exactly.
     if backup_file.exists():
-        shutil.copy2(backup_file, config_file)
+        try:
+            helper_was_preexisting = (
+                codex_auth_helper_is_referenced(_read_text(backup_file), str(helper_path.resolve()))
+                is not False
+            )
+        except OSError:
+            # If the backup cannot be inspected, preserve the helper rather than
+            # risk deleting a file that predates this wrap.
+            helper_was_preexisting = True
+        # A snapshot taken after `horizon init codex` still carries init's
+        # routing block; restoring it verbatim would leave Codex pinned to the
+        # proxy while unwrap reports success (#3749). The snapshot is deleted
+        # only once the config is written, so a failed write can be retried.
+        snapshot = _read_text(backup_file)
+        if _CODEX_PROVIDER_MARKER_START in snapshot:
+            cleaned = _strip_codex_init_block(snapshot)
+            if not cleaned.strip():
+                config_file.unlink(missing_ok=True)
+                backup_file.unlink()
+                cleanup_codex_auth_helper(helper_auth_path, config_path=config_file)
+                return "removed", config_file
+            _write_text(config_file, cleaned)
+            # Init's helper may predate wrap but its only reference was just
+            # removed. Cleanup checks all retained providers before deleting it.
+            cleanup_codex_auth_helper(helper_auth_path, config_path=config_file)
+        else:
+            shutil.copy2(backup_file, config_file)
         backup_file.unlink()
+        if not helper_was_preexisting:
+            cleanup_codex_auth_helper(helper_auth_path, config_path=config_file)
         return "restored", config_file
 
     # Case 2: no backup, but config file exists and has markers — strip them.
     if config_file.exists():
         original = _read_text(config_file)
-        if _codex_config_has_horizon_markers(original):
+        has_init_block = _CODEX_PROVIDER_MARKER_START in original
+        if has_init_block or _codex_config_has_horizon_markers(original):
+            helper_was_referenced = codex_auth_helper_is_referenced(
+                original, str(helper_path.resolve())
+            )
             # Without a backup, only remove named MCP blocks when this file
             # also carries wrap-owned provider markers from a full wrap.
             remove_named_mcp = any(
@@ -3367,17 +3449,31 @@ def _restore_codex_provider_config() -> tuple[str, Path]:
                     _CODEX_MCP_END,
                 )
             )
+            # `horizon init codex` writes its own routing block, and nothing else
+            # removes it (#3749). Strip it first so its markers go with its keys.
+            provider_snapshot = _codex_init_provider_snapshot(original) if has_init_block else None
+            content = (
+                _strip_codex_init_block(original, restore_provider=False)
+                if has_init_block
+                else original
+            )
             cleaned = _strip_codex_horizon_blocks(
-                original,
+                content,
                 remove_mcp=True,
                 remove_named_mcp=remove_named_mcp,
             )
+            if provider_snapshot is not None:
+                cleaned = cleaned.rstrip() + "\n\n" + provider_snapshot
             if not cleaned.strip():
                 # Nothing left but Horizon content — remove the file entirely
                 # so Codex falls back to its default config.
                 config_file.unlink()
+                if helper_was_referenced is True:
+                    cleanup_codex_auth_helper(helper_auth_path, config_path=config_file)
                 return "removed", config_file
             _write_text(config_file, cleaned)
+            if helper_was_referenced is True:
+                cleanup_codex_auth_helper(helper_auth_path, config_path=config_file)
             return "cleaned", config_file
 
     # Nothing to undo.
@@ -5175,13 +5271,8 @@ def wrap_selfheal(marker: str | None) -> None:
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
 @_serena_instructions_option
-@click.option(
-    # no "-p" short alias here: claude's own -p/--print must fall through to CLAUDE_ARGS
-    "--port",
-    default=8787,
-    type=click.IntRange(1, 65535),
-    help="Proxy port (default: 8787)",
-)
+# no "-p" short alias here: claude's own -p/--print must fall through to CLAUDE_ARGS
+@proxy_port_option("--port")
 @click.option(
     "--no-mcp",
     is_flag=True,
@@ -5845,9 +5936,7 @@ def _require_copilot_subscription_resolution() -> CopilotSubscriptionTokenResolu
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option(
     "--backend",
@@ -6185,7 +6274,7 @@ def copilot(
 
 
 @wrap.command("vscode")
-@click.option("--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port")
+@proxy_port_option()
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
 @click.option(
     "--settings-file",
@@ -6268,7 +6357,7 @@ def unwrap_vscode_copilot(settings_file: Path | None) -> None:
 
 
 @wrap.command("vscode-claude")
-@click.option("--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port")
+@proxy_port_option()
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
 @click.option(
     "--settings-file",
@@ -6591,9 +6680,7 @@ def _run_codex_wrap(
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
 @_serena_instructions_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--no-mcp",
     is_flag=True,
@@ -6703,9 +6790,7 @@ def codex(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -6865,9 +6950,7 @@ def openclaude(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -6936,9 +7019,7 @@ def vibe(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -7030,9 +7111,7 @@ def kimi(
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
 @_serena_instructions_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-mcp", is_flag=True, help="Skip horizon MCP server registration")
 @_code_memory_option
 @click.option(
@@ -7161,9 +7240,7 @@ def grok(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option(
     "--learn", is_flag=True, help="Enable live traffic learning (patterns saved to .cursor/rules/)"
@@ -7220,9 +7297,7 @@ def cursor(
 
 @wrap.command("grok-build", context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option("--learn", is_flag=True, help="Enable live traffic learning")
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
@@ -7290,9 +7365,7 @@ def grok_build(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option("--learn", is_flag=True, help="Enable live traffic learning")
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
@@ -7355,9 +7428,7 @@ def cline(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option("--learn", is_flag=True, help="Enable live traffic learning")
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
@@ -7421,9 +7492,7 @@ def zcode(
 
 @wrap.command("continue", context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
 @click.option("--learn", is_flag=True, help="Enable live traffic learning")
 @click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
@@ -7705,8 +7774,8 @@ def openhands(
     is_flag=True,
     help="Install by copying plugin path instead of using --link",
 )
-@click.option(
-    "--proxy-port", default=8787, type=click.IntRange(1, 65535), help="Horizon proxy port"
+@proxy_port_option(
+    "--proxy-port", help_text="Horizon proxy port (default: $HORIZON_PORT, else 8787)"
 )
 @click.option("--startup-timeout-ms", default=20000, type=int, help="Proxy startup timeout")
 @click.option(
@@ -7975,9 +8044,7 @@ def _resolve_opencode_launcher() -> str | None:
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
 @_serena_instructions_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option("--no-mcp", is_flag=True, help="Skip horizon MCP server registration")
 @click.option("--no-serena", is_flag=True, help="Skip Serena MCP server registration")
 @click.option(
@@ -8023,6 +8090,8 @@ def opencode(
     Sets OPENCODE_CONFIG_CONTENT to route all OpenCode API calls through
     Horizon. Configures a horizon provider via @ai-sdk/openai-compatible.
     Also sets OPENAI_BASE_URL and ANTHROPIC_BASE_URL as fallbacks.
+    On OpenCode 2.x, adds --standalone (unless --server is given) so a private
+    server loads that config instead of a running background service.
 
     \b
     Examples:
@@ -8165,11 +8234,17 @@ def opencode(
                 os.environ.get("USER", os.environ.get("USERNAME", "default")),
             )
 
+        # OpenCode 2.x otherwise attaches to an already-running background
+        # service that never sees this launch's OPENCODE_CONFIG_CONTENT.
+        launch_args = with_opencode_standalone(opencode_args, opencode_major_version(opencode_bin))
+        if verbose and launch_args != tuple(opencode_args):
+            click.echo("  OpenCode 2.x: adding --standalone so it loads Horizon's config")
+
         # Proxy already started by _ensure_proxy above; tell _launch_tool to
         # skip duplicate startup.
         _launch_tool(
             binary=opencode_bin,
-            args=opencode_args,
+            args=launch_args,
             env=env,
             port=actual_port,
             no_proxy=True,
@@ -8517,9 +8592,7 @@ def unwrap_codex(port: int, no_stop_proxy: bool) -> None:
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,

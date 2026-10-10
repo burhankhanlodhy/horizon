@@ -135,7 +135,10 @@ function isExcludedHost(hostname, excludeHosts) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return excludeHosts.some((host) => normalized === host || normalized.endsWith(`.${host}`));
 }
-function shouldRoute(url, proxy, excludeHosts) {
+function isLlmEndpointPath(pathname) {
+  return pathname.endsWith("/chat/completions") || pathname.endsWith("/responses") || pathname.endsWith("/messages") || pathname.endsWith(":generateContent") || pathname.endsWith(":streamGenerateContent");
+}
+function isRoutableUpstream(url, proxy, excludeHosts) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return false;
   }
@@ -149,6 +152,9 @@ function shouldRoute(url, proxy, excludeHosts) {
     return false;
   }
   return true;
+}
+function shouldRoute(url, proxy, excludeHosts) {
+  return isRoutableUpstream(url, proxy, excludeHosts) && isLlmEndpointPath(url.pathname);
 }
 function routedUrl(upstream, proxy) {
   return new URL(`${upstream.pathname}${upstream.search}`, proxy.origin);

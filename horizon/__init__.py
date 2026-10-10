@@ -83,7 +83,13 @@ from ._version import __version__  # noqa: F401
 # ~microseconds. See `horizon/_ort.py` for the full story.
 ensure_ort_dylib_pinned()
 
-from .compress import CompressConfig, CompressResult, compress, compress_spreadsheet  # noqa: E402
+from .compress import (  # noqa: E402
+    CompressConfig,
+    CompressResult,
+    compress,
+    compress_spreadsheet,
+    densify,
+)
 
 # Keep a real callable bound for the one-function compression API so
 # `from horizon import compress` is never shadowed by the submodule object.
@@ -174,9 +180,13 @@ __all__ = [
     "EmbedderBackend",
     # One-function compression API
     "compress",
+    "densify",
     "compress_spreadsheet",
     "CompressConfig",
     "CompressResult",
+    # Reverse densified tool output (for consumers of mode="agent" output)
+    "expand_compacted",
+    "is_compacted",
     # Hooks
     "CompressionHooks",
     "CompressContext",
@@ -271,7 +281,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "reset_otel_metrics": ("horizon.observability", "reset_otel_metrics"),
     # One-function API
     "compress": ("horizon.compress", "compress"),
+    "densify": ("horizon.compress", "densify"),
     "compress_spreadsheet": ("horizon.compress", "compress_spreadsheet"),
+    "expand_compacted": ("horizon.transforms.compaction_codec", "expand_compacted"),
+    "is_compacted": ("horizon.transforms.compaction_codec", "is_compacted"),
     # Hooks
     "CompressionHooks": ("horizon.hooks", "CompressionHooks"),
     "CompressContext": ("horizon.hooks", "CompressContext"),

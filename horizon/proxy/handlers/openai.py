@@ -41,6 +41,8 @@ from horizon.proxy.helpers import (
 from horizon.proxy.identity import resolve_memory_identity
 from horizon.proxy.loopback_guard import is_loopback_host
 from horizon.proxy.modes import is_cache_mode
+from horizon.proxy.provider_usage import billed_input_for_provider, billed_input_from_usage
+from horizon.proxy.semantic_cache_key_policy import compute_request_cache_partition
 from horizon.proxy.stage_timer import StageTimer, emit_stage_timings_log
 from horizon.proxy.upstream_guard import is_safe_upstream_url
 from horizon.proxy.ws_headers import WS_HOP_BY_HOP_HEADERS
@@ -104,6 +106,7 @@ from horizon.proxy.project_context import (
     get_current_project,
     set_current_project,
 )
+from horizon.proxy.tenant_key import resolve_tenant_key, set_request_tenant_key
 from horizon.proxy.thinking_tokens import ThinkingTokens, extract_from_usage
 from horizon.proxy.token_counting import gemini_output_tokens
 
@@ -524,7 +527,7 @@ def _usage_int(value: Any) -> int:
         return 0
 
 
-def _passthrough_usage_from_json(payload: Any) -> dict[str, int]:
+def _passthrough_usage_from_json(payload: Any, provider: str | None = None) -> dict[str, int]:
     """Normalize usage from pass-through provider response shapes."""
     if not isinstance(payload, dict):
         return {}
@@ -548,7 +551,11 @@ def _passthrough_usage_from_json(payload: Any) -> dict[str, int]:
         details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
         cache_read = details.get("cached_tokens") if isinstance(details, dict) else None
         return {
-            "input_tokens": _usage_int(input_tokens),
+            # The billed total. Anthropic-shape usage reports input_tokens as
+            # the uncached tail only (cache buckets are disjoint); OpenAI's
+            # headline figure is already inclusive. Callers derive uncached as
+            # total - read - write, which is only right on the total.
+            "input_tokens": billed_input_from_usage(usage, provider) or _usage_int(input_tokens),
             "output_tokens": _usage_int(output_tokens),
             "cache_read_input_tokens": _usage_int(usage.get("cache_read_input_tokens", cache_read)),
             "cache_creation_input_tokens": _usage_int(usage.get("cache_creation_input_tokens")),
@@ -3634,6 +3641,16 @@ class OpenAIHandlerMixin:
         request.state.auth_mode = auth_mode
         logger.debug(f"[{request_id}] auth_mode_classified mode={auth_mode.value}")
 
+        # Phase F PR-F3: resolve per-tenant TOIN key (header / hash /
+        # global) and populate the request-scoped ContextVar that
+        # SmartCrusher's deep-stack `record_compression` reads. See
+        # `horizon/proxy/tenant_key.py` for the threat model and the
+        # resolution rules.
+        tenant_key, tenant_key_source = resolve_tenant_key(request)
+        request.state.tenant_key = tenant_key
+        request.state.tenant_key_source = tenant_key_source
+        set_request_tenant_key(tenant_key)
+
         # Check request body size
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_REQUEST_BODY_SIZE:
@@ -3931,9 +3948,20 @@ class OpenAIHandlerMixin:
         # captured — keep this snapshot after image compression, or a reorder
         # silently reintroduces the drift.
         cache_lookup_messages = messages
+        # Response-cache partition: a cached response is only ever replayed to a
+        # caller presenting the same provider credentials and principal (01-F15).
+        # Snapshotted with the key fields so lookup and store agree. None means
+        # the principal could not be established: skip the cache entirely.
+        # Only resolved when the cache can be used, so streaming and
+        # cache-disabled requests never pay for identity resolution.
+        cache_partition = (
+            compute_request_cache_partition(request) if self.cache and not stream else None
+        )
         # Check cache
-        if self.cache and not stream:
-            cached = await self.cache.get(messages, model, **cache_key_fields)
+        if self.cache and not stream and cache_partition is not None:
+            cached = await self.cache.get(
+                messages, model, partition=cache_partition, **cache_key_fields
+            )
             if cached:
                 self.pipeline_extensions.emit(
                     PipelineStage.INPUT_CACHED,
@@ -5731,13 +5759,19 @@ class OpenAIHandlerMixin:
                 # site, which let a response built for a stream:true request
                 # answer a later non-streaming caller (#3019). Stating the
                 # invariant keeps that from being reintroduced silently.
-                if self.cache and not stream and response.status_code == 200:
+                if (
+                    self.cache
+                    and not stream
+                    and cache_partition is not None
+                    and response.status_code == 200
+                ):
                     await self.cache.set(
                         cache_lookup_messages,
                         model,
                         response.content,
                         dict(response.headers),
                         tokens_saved,
+                        partition=cache_partition,
                         **cache_key_fields,
                     )
 
@@ -5892,6 +5926,16 @@ class OpenAIHandlerMixin:
         auth_mode = classify_auth_mode(request.headers)
         request.state.auth_mode = auth_mode
         logger.debug(f"[{request_id}] auth_mode_classified mode={auth_mode.value}")
+
+        # Phase F PR-F3: resolve per-tenant TOIN key (header / hash /
+        # global) and populate the request-scoped ContextVar that
+        # SmartCrusher's deep-stack `record_compression` reads. See
+        # `horizon/proxy/tenant_key.py` for the threat model and the
+        # resolution rules.
+        tenant_key, tenant_key_source = resolve_tenant_key(request)
+        request.state.tenant_key = tenant_key
+        request.state.tenant_key_source = tenant_key_source
+        set_request_tenant_key(tenant_key)
 
         # Check request body size
         content_length = request.headers.get("content-length")
@@ -9226,6 +9270,8 @@ class OpenAIHandlerMixin:
                                     model=model_for_metrics,
                                     original_tokens=max(0, input_delta) + max(0, saved_delta),
                                     optimized_tokens=max(0, input_delta),
+                                    # Summed from OpenAI's own response.completed usage frames.
+                                    provider_input_tokens=max(0, input_delta),
                                     output_tokens=max(0, output_delta),
                                     tokens_saved=max(0, saved_delta),
                                     attempted_input_tokens=max(0, attempted_delta),
@@ -9858,6 +9904,8 @@ class OpenAIHandlerMixin:
                         model=model_name,
                         original_tokens=residual_input_tokens + residual_tokens_saved,
                         optimized_tokens=residual_input_tokens,
+                        # Summed from OpenAI's own response.completed usage frames.
+                        provider_input_tokens=residual_input_tokens,
                         output_tokens=residual_output_tokens,
                         tokens_saved=residual_tokens_saved,
                         attempted_input_tokens=residual_attempted_input_tokens,
@@ -11483,7 +11531,7 @@ class OpenAIHandlerMixin:
             usage: dict[str, int] = {}
             if response.headers.get("content-type", "").lower().startswith("application/json"):
                 try:
-                    usage = _passthrough_usage_from_json(response.json())
+                    usage = _passthrough_usage_from_json(response.json(), provider)
                 except (json.JSONDecodeError, ValueError, TypeError):
                     usage = {}
             input_tokens = usage.get("input_tokens", 0)
@@ -11499,6 +11547,7 @@ class OpenAIHandlerMixin:
                     status_code=response.status_code,
                     original_tokens=input_tokens,
                     optimized_tokens=input_tokens,
+                    provider_input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     tokens_saved=0,
                     attempted_input_tokens=input_tokens,
@@ -11662,10 +11711,18 @@ class OpenAIHandlerMixin:
                     buf.extend(b"\n\n")
                     _absorb_usage(self._parse_sse_usage_from_buffer(stream_state, stream_provider))
 
-                input_tokens = stream_state["input_tokens"] or 0
                 output_tokens = stream_state["output_tokens"] or 0
                 cache_read_tokens = stream_state["cache_read_input_tokens"] or 0
                 cache_write_tokens = stream_state["cache_creation_input_tokens"] or 0
+                # Anthropic-shape SSE usage reports only the uncached tail as
+                # input_tokens; the billed total adds the disjoint cache buckets.
+                # Gemini's promptTokenCount is already inclusive.
+                input_tokens = billed_input_for_provider(
+                    stream_provider,
+                    stream_state["input_tokens"],
+                    cache_read=cache_read_tokens,
+                    cache_write=cache_write_tokens,
+                )
                 uncached_input_tokens = max(
                     0,
                     input_tokens - cache_read_tokens - cache_write_tokens,
@@ -11677,6 +11734,7 @@ class OpenAIHandlerMixin:
                         model=_passthrough_model_from_path(path, endpoint_name),
                         original_tokens=input_tokens,
                         optimized_tokens=input_tokens,
+                        provider_input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         tokens_saved=0,
                         attempted_input_tokens=input_tokens,
