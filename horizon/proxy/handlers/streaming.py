@@ -268,6 +268,12 @@ class StreamingMixin:
                         # OpenAI has cached tokens in prompt_tokens_details
                         details = chunk_usage.get("prompt_tokens_details") or {}
                         usage["cache_read_input_tokens"] = details.get("cached_tokens", 0)
+                        # GPT-5.6+ also reports its billed cache writes.
+                        from horizon.proxy import openai_cache_usage
+
+                        _writes = openai_cache_usage.reported_writes(chunk_usage)
+                        if _writes is not None:
+                            usage["cache_creation_input_tokens"] = _writes
 
                 elif provider == "gemini":
                     # Gemini sends usageMetadata in each streaming chunk
@@ -388,6 +394,12 @@ class StreamingMixin:
                         usage_found["cache_read_input_tokens"] = _usage_int(
                             details.get("cached_tokens")
                         )
+                    # GPT-5.6+ also reports its billed cache writes.
+                    from horizon.proxy import openai_cache_usage
+
+                    _writes = openai_cache_usage.reported_writes(chunk_usage)
+                    if _writes is not None:
+                        usage_found["cache_creation_input_tokens"] = _writes
 
             elif provider == "gemini":
                 usage_meta = data.get("usageMetadata")

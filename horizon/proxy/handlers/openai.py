@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlparse
 
+from horizon.proxy import openai_cache_usage
 from horizon.proxy.conversation_savings import (
     get_response_chain_savings,
     savings_conversation_key,
@@ -1774,8 +1775,12 @@ def _extract_responses_usage(event: dict[str, Any]) -> tuple[int, int, int, int,
     output_tokens = _int(usage.get("output_tokens"))
     details = usage.get("input_tokens_details")
     cached_tokens = _int(details.get("cached_tokens")) if isinstance(details, dict) else 0
-    cache_write_tokens = _infer_openai_cache_write_tokens(input_tokens, cached_tokens)
-    uncached_tokens = max(input_tokens - cached_tokens, 0)
+    # GPT-5.6+ reports real (billed) writes; earlier models' are inferred.
+    from horizon.proxy import openai_cache_usage
+
+    cache_write_tokens, uncached_tokens, _ = openai_cache_usage.split(
+        input_tokens, cached_tokens, openai_cache_usage.reported_writes(usage)
+    )
     return input_tokens, output_tokens, cached_tokens, cache_write_tokens, uncached_tokens
 
 
@@ -4807,6 +4812,18 @@ class OpenAIHandlerMixin:
             body["tools"] = tools
         if presend_event.headers is not None:
             headers = presend_event.headers
+        # Cache routing (HORIZON_CACHE_ROUTING): a Grok request without a
+        # conversation id lands on a server with no cache for it; name one.
+        if not _bypass:
+            from horizon.proxy import cache_routing
+
+            if cache_routing.apply_chat(
+                headers,
+                model=str(body.get("model") or ""),
+                url=upstream_base_url or self.OPENAI_API_URL,
+                messages=original_client_messages,
+            ):
+                transforms_applied.append("cache_routing:grok")
         # Consistency: recount BOTH endpoints with the provider tokenizer. An upstream
         # branch may have left original_tokens in the pipeline's char-estimator scale
         # (result.tokens_before), which mismatches optimized_tokens (provider tokenizer)
@@ -5234,8 +5251,12 @@ class OpenAIHandlerMixin:
                     # Bedrock reports cache creation directly. Only infer
                     # when no explicit count is available. Skip inference
                     # entirely when upstream omitted prompt_tokens.
+                    _reported_writes = openai_cache_usage.reported_writes(usage)
                     if cache_creation_input_tokens > 0:
                         cache_write_tokens = cache_creation_input_tokens
+                    elif _reported_writes is not None:
+                        # GPT-5.6+: real, billed writes.
+                        cache_write_tokens = _reported_writes
                     elif "prompt_tokens" in usage:
                         cache_write_tokens = _infer_openai_cache_write_tokens(
                             total_input_tokens,
@@ -5599,6 +5620,7 @@ class OpenAIHandlerMixin:
                 total_input_tokens = optimized_tokens  # fallback
                 output_tokens = 0
                 cache_read_tokens = 0
+                _chat_reported_writes = None
                 resp_json = None
                 try:
                     resp_json = response.json()
@@ -5615,6 +5637,7 @@ class OpenAIHandlerMixin:
                     # These are charged at 50% of the input price
                     prompt_details = usage.get("prompt_tokens_details") or {}
                     cache_read_tokens = _usage_int(prompt_details.get("cached_tokens"))
+                    _chat_reported_writes = openai_cache_usage.reported_writes(usage)
                 except (KeyError, TypeError, AttributeError) as e:
                     logger.debug(
                         f"[{request_id}] Failed to extract cached tokens from OpenAI response: {e}"
@@ -5634,10 +5657,10 @@ class OpenAIHandlerMixin:
                         f"+{_hook_usage.output_tokens} out"
                     )
 
-                # Update prefix cache tracker for next turn
-                cache_write_tokens = _infer_openai_cache_write_tokens(
-                    total_input_tokens,
-                    cache_read_tokens,
+                # Update prefix cache tracker for next turn. GPT-5.6+ reports
+                # real (billed) writes; earlier models' are inferred.
+                cache_write_tokens, _chat_uncached, _chat_inferred = openai_cache_usage.split(
+                    total_input_tokens, cache_read_tokens, _chat_reported_writes
                 )
                 # Cache-TTL learning seam (see the /v1/chat path above): record the
                 # cache-outcome attribution before update_from_response. Best-effort.
@@ -5670,7 +5693,7 @@ class OpenAIHandlerMixin:
                 )
 
                 # OpenAI has no write penalty — uncached = total - cached
-                uncached_input_tokens = max(0, total_input_tokens - cache_read_tokens)
+                uncached_input_tokens = _chat_uncached
 
                 # Cost is recorded exactly once by the outcome funnel below
                 # (_record_request_outcome -> emit_request_outcome -> cost_tracker.
@@ -5781,7 +5804,7 @@ class OpenAIHandlerMixin:
                         cache_read_tokens=cache_read_tokens,
                         cache_write_tokens=cache_write_tokens,
                         uncached_input_tokens=uncached_input_tokens,
-                        cache_inferred=True,
+                        cache_inferred=_chat_inferred,
                         total_latency_ms=total_latency,
                         overhead_ms=optimization_latency,
                         pipeline_timing=pipeline_timing,
@@ -6577,6 +6600,16 @@ class OpenAIHandlerMixin:
                 transforms_applied.append("service_tier:flex")
                 logger.info(f"[{request_id}] OpenAI Flex tier applied")
 
+            # Cache routing (HORIZON_CACHE_ROUTING): a Grok request without a
+            # prompt_cache_key lands on a server with no cache for it; name one.
+            from horizon.proxy import cache_routing
+
+            if cache_routing.apply_responses(
+                body, model=str(body.get("model") or ""), url=url, headers=request.headers
+            ):
+                body_mutation_tracker.mark_mutated("cache_routing")
+                transforms_applied.append("cache_routing:grok")
+
         # CCR: a stream:true request whose tool list carries horizon_retrieve
         # can't be intercepted mid-SSE-stream without full event-level
         # splicing (#1877 proposals B/C, out of scope here). Instead, force
@@ -6822,6 +6855,7 @@ class OpenAIHandlerMixin:
                     total_input_tokens = original_tokens  # fallback
                     output_tokens = 0
                     cache_read_tokens = 0
+                    _resp_reported_writes = None
                     resp_json = None
                     try:
                         resp_json = response.json()
@@ -6842,6 +6876,7 @@ class OpenAIHandlerMixin:
                         details = usage.get("input_tokens_details")
                         if isinstance(details, dict):
                             cache_read_tokens = _usage_int(details.get("cached_tokens"))
+                        _resp_reported_writes = openai_cache_usage.reported_writes(usage)
                     except (
                         json.JSONDecodeError,
                         ValueError,
@@ -7047,11 +7082,12 @@ class OpenAIHandlerMixin:
                     # Cost is recorded once by the outcome funnel below; here we only
                     # compute the cache-write / uncached split the funnel needs.
                     # (Recording here too double-counted spend + budget on this path.)
-                    cache_write_tokens = _infer_openai_cache_write_tokens(
-                        total_input_tokens,
-                        cache_read_tokens,
+                    # GPT-5.6+ reports real (billed) writes; earlier models' are inferred.
+                    cache_write_tokens, uncached_input_tokens, _resp_inferred = (
+                        openai_cache_usage.split(
+                            total_input_tokens, cache_read_tokens, _resp_reported_writes
+                        )
                     )
-                    uncached_input_tokens = max(0, total_input_tokens - cache_read_tokens)
 
                     # Was: optimized := provider count, then original := max(original,
                     # optimized + saved) to stop `attempted` exceeding `original`.
@@ -7093,7 +7129,7 @@ class OpenAIHandlerMixin:
                             cache_read_tokens=cache_read_tokens,
                             cache_write_tokens=cache_write_tokens,
                             uncached_input_tokens=uncached_input_tokens,
-                            cache_inferred=True,
+                            cache_inferred=_resp_inferred,
                             total_latency_ms=total_latency,
                             overhead_ms=optimization_latency,
                             transforms_applied=tuple(transforms_applied),

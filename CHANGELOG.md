@@ -5,6 +5,11 @@ All notable changes to Horizon are documented here.
 ## [Unreleased]
 
 ### Fixed
+- OpenAI cache writes are read from the usage report. GPT-5.6 and later report
+  `cache_write_tokens` and bill them at 1.25x input; Horizon inferred writes
+  from the uncached tokens and priced them as plain input, so the cost of a
+  cache write (and of a missed cache) read 25% low on those models. Earlier
+  models, which report no writes, keep the inferred split.
 - Flash credit is measured in the provider's own tokens and priced at the
   model's measured cache behaviour. Tokens: the request-body bytes a stub
   removes, times the provider's billed tokens per byte for the model, learned
@@ -54,6 +59,11 @@ All notable changes to Horizon are documented here.
   and a $3/M fallback cost.
 
 ### Added
+- Cache routing for Grok (`HORIZON_CACHE_ROUTING=1`, set by
+  `HORIZON_SAVINGS=auto`): when a client sends no conversation id, Horizon adds
+  a stable per-conversation, per-account `x-grok-conv-id` (Chat Completions) or
+  `prompt_cache_key` (Responses), so xAI routes each turn to the server that
+  holds its prompt cache. A client's own id always wins; content is unchanged.
 - Price-cliff guard on the OpenAI-format paths: Chat Completions (any model
   served there: GPT, Gemini, Grok, ...) and Responses (HTTP and WebSocket).
   Near a whole-request price tier the catalog lists (GPT-5.4 / 6.x at 272k,
