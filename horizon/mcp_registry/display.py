@@ -56,7 +56,7 @@ def format_result(
         suffix = f" To update: {overwrite_hint}" if overwrite_hint else ""
         return f"  {label}: existing config differs ({result.detail}).{suffix}"
     if status == RegisterStatus.NO_SDK:
-        return f"  {label}: MCP SDK missing — install with `pip install 'horizon-ai[mcp]'`"
+        return f"  {label}: MCP SDK missing — install with `pip install 'contextshrink[mcp]'`"
     # FAILED or any future unhandled status
     return f"  {label}: install failed ({status.value}): {result.detail}"
 

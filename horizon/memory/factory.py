@@ -262,7 +262,7 @@ def _create_vector_index(config: MemoryConfig) -> VectorIndex:
                 "No vector index backend available for memory. Install one:\n"
                 "  pip install sqlite-vec   (recommended, lightweight)\n"
                 "  pip install hnswlib      (alternative)\n"
-                "Or install the full proxy bundle: pip install horizon-ai[proxy]"
+                "Or install the full proxy bundle: pip install contextshrink[proxy]"
             )
 
     if backend == VectorBackend.SQLITE_VEC:

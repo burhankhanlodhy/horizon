@@ -131,7 +131,7 @@ def _resolve_and_pin() -> str | None:
         if spec is None or not spec.origin:
             logger.debug(
                 "onnxruntime package not found; %s left unset. Rust ML detection "
-                "needs a pip-installed onnxruntime (install horizon-ai[proxy] "
+                "needs a pip-installed onnxruntime (install contextshrink[proxy] "
                 "or set %s explicitly).",
                 _ENV_VAR,
                 _ENV_VAR,

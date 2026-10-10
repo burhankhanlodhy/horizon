@@ -154,7 +154,7 @@ def configure_langfuse_tracing(
     except ImportError:
         logger.warning(
             "OpenTelemetry SDK/exporter packages are not installed. "
-            "Install horizon-ai[otel] to enable Langfuse OTLP tracing."
+            "Install contextshrink[otel] to enable Langfuse OTLP tracing."
         )
         return get_horizon_tracer()
 

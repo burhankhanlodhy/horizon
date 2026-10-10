@@ -153,7 +153,7 @@ def mcp_install(proxy_url: str, agents: tuple[str, ...], force: bool) -> None:
         import mcp  # noqa: F401
     except ImportError:
         click.echo("Error: MCP SDK not installed.", err=True)
-        click.echo("Install with: pip install 'horizon-ai[mcp]'", err=True)
+        click.echo("Install with: pip install 'contextshrink[mcp]'", err=True)
         raise SystemExit(1) from None
 
     from horizon.mcp_registry import any_succeeded, format_results, install_everywhere
@@ -312,7 +312,7 @@ def mcp_status() -> None:
         click.echo("MCP SDK:        ✓ Installed")
     except ImportError:
         click.echo("MCP SDK:        ✗ Not installed")
-        click.echo("                pip install 'horizon-ai[mcp]'")
+        click.echo("                pip install 'contextshrink[mcp]'")
 
     from horizon.mcp_registry import get_all_registrars
 
@@ -430,7 +430,7 @@ def mcp_serve(
         from horizon.ccr.mcp_server import create_ccr_mcp_server
     except ImportError as e:
         click.echo(f"Error: MCP dependencies not installed: {e}", err=True)
-        click.echo("Install with: pip install 'horizon-ai[mcp]'", err=True)
+        click.echo("Install with: pip install 'contextshrink[mcp]'", err=True)
         raise SystemExit(1) from None
 
     if debug:

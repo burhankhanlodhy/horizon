@@ -29,7 +29,7 @@ def test_bedrock_session_token_without_botocore_raises_actionable(
             LiteLLMBackend(provider="bedrock", region="us-west-2")
 
     # The message must point at the fix, not just name the missing module.
-    assert "horizon-ai[bedrock]" in str(exc.value)
+    assert "contextshrink[bedrock]" in str(exc.value)
 
 
 def test_bedrock_without_session_token_does_not_trip_botocore_guard(

@@ -709,7 +709,7 @@ def configure_otel_metrics(config: OTelMetricsConfig | None = None) -> HorizonOt
     except ImportError:
         logger.warning(
             "OpenTelemetry SDK/exporter packages are not installed. "
-            "Install horizon-ai[otel] to enable managed OTEL metric export."
+            "Install contextshrink[otel] to enable managed OTEL metric export."
         )
         return get_otel_metrics()
 

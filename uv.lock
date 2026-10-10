@@ -1846,7 +1846,7 @@ wheels = [
 ]
 
 [[package]]
-name = "horizon-ai"
+name = "contextshrink"
 version = "0.38.0"
 source = { editable = "." }
 dependencies = [
@@ -2122,10 +2122,10 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.100.0" },
     { name = "fastembed", marker = "extra == 'relevance'", specifier = ">=0.4.0" },
     { name = "gunicorn", marker = "sys_platform != 'win32' and extra == 'proxy-prod'", specifier = ">=21.0.0" },
-    { name = "horizon-ai", extras = ["proxy"], marker = "extra == 'proxy-prod'" },
-    { name = "horizon-ai", extras = ["proxy", "code", "ml", "memory", "relevance", "image", "reports", "otel", "evals", "voice", "html", "mcp", "spreadsheet"], marker = "extra == 'all'" },
-    { name = "horizon-ai", extras = ["proxy", "code", "relevance", "reports", "otel", "html", "mcp", "spreadsheet"], marker = "extra == 'sandbox'" },
-    { name = "horizon-ai", extras = ["voice"], marker = "extra == 'voice-train'" },
+    { name = "contextshrink", extras = ["proxy"], marker = "extra == 'proxy-prod'" },
+    { name = "contextshrink", extras = ["proxy", "code", "ml", "memory", "relevance", "image", "reports", "otel", "evals", "voice", "html", "mcp", "spreadsheet"], marker = "extra == 'all'" },
+    { name = "contextshrink", extras = ["proxy", "code", "relevance", "reports", "otel", "html", "mcp", "spreadsheet"], marker = "extra == 'sandbox'" },
+    { name = "contextshrink", extras = ["voice"], marker = "extra == 'voice-train'" },
     { name = "hnswlib", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "hnswlib", marker = "extra == 'vector'", specifier = ">=0.8.0" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.24.0" },

@@ -321,7 +321,7 @@ class TestMissingProxyDepsError:
         monkeypatch.setattr(builtins, "__import__", fake_import)
         result = runner.invoke(main, ["proxy"])
         assert result.exit_code == 1, result.output
-        assert "pip install horizon-ai[proxy]" in result.output
+        assert "pip install contextshrink[proxy]" in result.output
         assert "No module named 'mcp'" in result.output
 
     @pytest.mark.proxy_dependency_gate

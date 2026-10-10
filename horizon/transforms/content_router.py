@@ -4593,7 +4593,7 @@ class ContentRouter(Transform):
                         logger.warning(
                             "Kompress model not ready; requests will not be "
                             "compressed. Check HuggingFace connectivity or "
-                            "pre-download: horizon-ai[ml] + first-run warmup."
+                            "pre-download: contextshrink[ml] + first-run warmup."
                         )
                         self._kompress_warned = True
                 else:

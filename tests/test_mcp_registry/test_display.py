@@ -84,7 +84,7 @@ def test_no_sdk_points_at_pip_extras() -> None:
     )
     assert line is not None
     assert "MCP SDK" in line
-    assert "horizon-ai[mcp]" in line
+    assert "contextshrink[mcp]" in line
 
 
 def test_failed_includes_detail() -> None:

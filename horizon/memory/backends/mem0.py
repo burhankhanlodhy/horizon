@@ -125,7 +125,7 @@ class Mem0Backend:
                 from mem0 import Memory as Mem0Memory
             except ImportError:
                 raise ImportError(
-                    "mem0 package not installed. Install with: pip install 'horizon-ai[memory-stack]'"
+                    "mem0 package not installed. Install with: pip install 'contextshrink[memory-stack]'"
                 ) from None
 
             if self._config.mode == "cloud":

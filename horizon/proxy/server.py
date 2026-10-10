@@ -1856,7 +1856,7 @@ class HorizonProxy(
             else:
                 logger.warning(
                     "Code-aware compression requested but tree-sitter not installed. "
-                    "Install with: pip install horizon-ai[code]"
+                    "Install with: pip install contextshrink[code]"
                 )
                 return "unavailable"
         else:
@@ -2192,7 +2192,7 @@ class HorizonProxy(
             else:
                 logger.info("Kompress: DEFERRED (model loads on first request)")
         elif self.config.optimize:
-            logger.info("Kompress: not installed (pip install horizon-ai[ml] for ML compression)")
+            logger.info("Kompress: not installed (pip install contextshrink[ml] for ML compression)")
 
         if self._code_aware_status == "enabled":
             logger.info("Code-Aware: ENABLED (AST-based compression)")
@@ -2203,7 +2203,7 @@ class HorizonProxy(
         elif self._code_aware_status == "available":
             logger.info("Code-Aware: available but disabled (use --code-aware)")
         elif self._code_aware_status == "unavailable":
-            logger.info("Code-Aware: not installed (pip install horizon-ai[code])")
+            logger.info("Code-Aware: not installed (pip install contextshrink[code])")
         elif self._code_aware_status == "disabled":
             logger.info("Code-Aware: DISABLED")
 
@@ -6087,11 +6087,11 @@ def _get_code_aware_banner_status(config: ProxyConfig) -> str:
         if is_tree_sitter_available():
             return "ENABLED  (AST-based)"
         else:
-            return "NOT INSTALLED (pip install horizon-ai[code])"
+            return "NOT INSTALLED (pip install contextshrink[code])"
     else:
         if is_tree_sitter_available():
             return "DISABLED (--code-aware or HORIZON_CODE_AWARE_ENABLED=1 to enable)"
-        return "DISABLED  (install horizon-ai[code] to enable)"
+        return "DISABLED  (install contextshrink[code] to enable)"
 
 
 def _configure_windows_uvicorn_loop(uvicorn_kwargs: dict[str, Any]) -> None:
@@ -6699,7 +6699,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--code-aware",
         action="store_true",
-        help="Enable AST-based code compression (requires: pip install horizon-ai[code])",
+        help="Enable AST-based code compression (requires: pip install contextshrink[code])",
     )
     parser.add_argument(
         "--no-code-aware",

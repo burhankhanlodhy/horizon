@@ -13,7 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_EXTRA = "all"
-HORIZON_PACKAGE_NAME = "horizon-ai"
+HORIZON_PACKAGE_NAME = "contextshrink"
 MACOS_X86_64_TORCH_GUARD = "sys_platform != 'darwin' or platform_machine != 'x86_64'"
 MACOS_X86_64_SYS_PLATFORM = "darwin"
 MACOS_X86_64_PLATFORM_MACHINE = "x86_64"

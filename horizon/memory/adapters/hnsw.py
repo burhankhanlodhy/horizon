@@ -8,7 +8,7 @@ Note: hnswlib is an optional dependency. Install with:
     pip install hnswlib
 
 Or via horizon extras:
-    pip install "horizon-ai[memory]"
+    pip install "contextshrink[memory]"
 """
 
 from __future__ import annotations

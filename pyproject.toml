@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "horizon-ai"
+name = "contextshrink"
 version = "0.42.0"
 description = "The Context Optimization Layer for LLM Applications - Cut costs by 50-90%"
 readme = "README.md"
@@ -68,7 +68,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Proxy server (most common install: pip install horizon-ai[proxy])
+# Proxy server (most common install: pip install contextshrink[proxy])
 proxy = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0,<1.0",
@@ -100,15 +100,24 @@ proxy = [
 # horizon forward). Stores the remote per-user hz_ key in the OS credential
 # store (Windows Credential Manager / macOS Keychain) instead of a plaintext
 # config file. Optional so server installs never pull it.
+# Signed-in CLI use of the hosted proxy (horizon login): the loopback relay and
+# the OS credential store, without the local proxy's compression stack.
+hosted = [
+    "keyring>=24.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0,<1.0",
+    "httpx[http2]>=0.24.0",
+    "websockets>=13.0",
+]
 vault = [
     "keyring>=24.0",
 ]
 # Production ASGI/WSGI server — Unix-only (gunicorn does not support Windows).
 # Kept separate from [proxy] so that dev, CI, and Windows users are not forced
 # to install a non-functional package.  Production deployments should use:
-#   pip install horizon-ai[proxy,proxy-prod]
+#   pip install contextshrink[proxy,proxy-prod]
 proxy-prod = [
-    "horizon-ai[proxy]",
+    "contextshrink[proxy]",
     "gunicorn>=21.0.0; sys_platform != 'win32'",
 ]
 # AST-based code compression (tree-sitter)
@@ -126,7 +135,7 @@ code = [
 # Use [ml] for the supported ML compression dependencies.)
 ml = [
     # PyTorch does not publish wheels for macOS 15 x86_64 at this floor, which
-    # makes `horizon-ai[all]` unsatisfiable on Intel Macs (#1931).
+    # makes `contextshrink[all]` unsatisfiable on Intel Macs (#1931).
     "torch>=2.12.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "transformers>=5.5.0,<6.0",
     # transformers >= 5.x requires huggingface-hub >= 1.5.0,<2.0; pinning
@@ -145,7 +154,7 @@ memory = [
     "sentence-transformers>=2.2.0,<7.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 # Optional HNSW vector backend. Needs a C++ toolchain to build hnswlib, so it is
-# kept out of [memory] and [all]; opt in with `pip install horizon-ai[vector]`
+# kept out of [memory] and [all]; opt in with `pip install contextshrink[vector]`
 # and select it via MemoryConfig(vector_backend=VectorBackend.HNSW). The default
 # sqlite-vec backend needs no compiler.
 vector = [
@@ -263,7 +272,7 @@ voice = [
 ]
 # Voice training (includes voice deps + training extras)
 voice-train = [
-    "horizon-ai[voice]",
+    "contextshrink[voice]",
     "datasets>=5.0.1",
     "accelerate>=0.20.0",
 ]
@@ -337,7 +346,7 @@ dev = [
 # who need standard accuracy benchmarks can install `lm-eval[api]` in their
 # benchmark environment separately.
 all = [
-    "horizon-ai[proxy,code,ml,memory,relevance,image,reports,otel,evals,voice,html,mcp,spreadsheet]",
+    "contextshrink[proxy,code,ml,memory,relevance,image,reports,otel,evals,voice,html,mcp,spreadsheet]",
 ]
 # Sandbox: a lean proxy with ALL torch-free capability — for running Horizon in
 # a locked-down/low-resource sandbox and offloading heavy ML elsewhere.
@@ -351,16 +360,17 @@ all = [
 #   - memory + evals  (both pull sentence-transformers -> torch, i.e. the very
 #             ML weight a sandbox avoids; evals is a dev/test harness, not a
 #             runtime feature). Opt back in explicitly if you accept torch:
-#             pip install horizon-ai[sandbox,memory]
+#             pip install contextshrink[sandbox,memory]
 #
 # Everything kept here is torch-free: code-aware compression (tree-sitter),
 # embedding relevance (fastembed), HTML/spreadsheet ingestion, reports, OTel.
 sandbox = [
-    "horizon-ai[proxy,code,relevance,reports,otel,html,mcp,spreadsheet]",
+    "contextshrink[proxy,code,relevance,reports,otel,html,mcp,spreadsheet]",
 ]
 
 [project.scripts]
 horizon = "horizon.cli:main"
+contextshrink = "horizon.cli:main"
 horizon-cache-ttl = "horizon.cache.ttl_estimator:main"
 
 [project.urls]
@@ -376,7 +386,7 @@ Changelog = "https://github.com/your-org/horizon/blob/main/CHANGELOG.md"
 
 # Maturin builds a single wheel containing both the Python source under
 # `horizon/` AND the compiled Rust extension `horizon/_core.so` (cdylib
-# from `crates/horizon-py`). One `pip install horizon-ai` ships everything
+# from `crates/horizon-py`). One `pip install contextshrink` ships everything
 # atomically — no separate `horizon-core-py` package, no chicken-and-egg,
 # no PIP_FIND_LINKS plumbing. Phase A0's runtime fail-loud check still
 # exists but only fires if someone forces an sdist install on a platform

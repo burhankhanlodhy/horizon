@@ -157,7 +157,7 @@ def test_pypi_only_tool_raises_with_helpful_message(monkeypatch):
     _set_platform(monkeypatch, sys_plat="darwin", machine="arm64")
     with pytest.raises(binaries.PlatformNotSupported) as exc:
         binaries._asset_for_platform("ast-grep", binaries.detect_platform())
-    assert "pip install horizon-ai" in str(exc.value)
+    assert "pip install contextshrink" in str(exc.value)
 
 
 def test_unknown_tool_raises_key_error():

@@ -4,7 +4,7 @@ The compression pipeline is text-only, so binary spreadsheets enter through this
 adapter at the SDK boundary. Each sheet is rendered to CSV text, which then flows
 through the normal tabular detection → SmartCrusher path like any other table.
 
-Parsers are optional dependencies (``pip install horizon-ai[spreadsheet]``) and
+Parsers are optional dependencies (``pip install contextshrink[spreadsheet]``) and
 are imported lazily; a missing dependency fails loudly with an actionable
 message rather than silently degrading.
 """
@@ -53,7 +53,7 @@ def _load_xlsx(path: Path) -> dict[str, str]:
     except ImportError as e:  # pragma: no cover - openpyxl ships in [dev]; defensive guard
         raise ImportError(
             "Reading .xlsx files requires openpyxl. "
-            "Install it with: pip install horizon-ai[spreadsheet]"
+            "Install it with: pip install contextshrink[spreadsheet]"
         ) from e
 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -120,7 +120,7 @@ def _load_xls(path: Path) -> dict[str, str]:
     except ImportError as e:
         raise ImportError(
             "Reading legacy .xls files requires xlrd. "
-            "Install it with: pip install horizon-ai[spreadsheet]"
+            "Install it with: pip install contextshrink[spreadsheet]"
         ) from e
 
     book = xlrd.open_workbook(str(path))

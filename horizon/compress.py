@@ -379,7 +379,7 @@ def compress_spreadsheet(
     Each sheet is rendered to CSV text and submitted as its own user message so
     the tabular compressor (CSV → SmartCrusher, lossless-first + lossy CCR
     fallback) is applied per sheet. Requires the ``spreadsheet`` extra
-    (``pip install horizon-ai[spreadsheet]``).
+    (``pip install contextshrink[spreadsheet]``).
 
     Args:
         path: Path to a ``.xlsx`` or ``.xls`` file.

@@ -457,7 +457,7 @@ class MemoryHandler:
             except ImportError as e:
                 logger.error(
                     f"Memory: Failed to import qdrant-neo4j dependencies: {e}. "
-                    "Install with: pip install 'horizon-ai[memory-stack]'"
+                    "Install with: pip install 'contextshrink[memory-stack]'"
                 )
                 raise
         else:

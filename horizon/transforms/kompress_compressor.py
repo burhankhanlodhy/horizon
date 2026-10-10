@@ -3,7 +3,7 @@
 Auto-downloads the model from HuggingFace (chopratejas/kompress-v2-base)
 on first use.
 
-Requires the [ml] extra: pip install horizon-ai[ml]
+Requires the [ml] extra: pip install contextshrink[ml]
 
 Usage:
     >>> from horizon.transforms.kompress_compressor import KompressCompressor
@@ -1125,7 +1125,7 @@ def _load_kompress(
         return _load_kompress_pytorch(model_id, device, allow_download=allow_download)
 
     raise ImportError(
-        "Kompress requires onnxruntime or torch. Install with: pip install horizon-ai[proxy]"
+        "Kompress requires onnxruntime or torch. Install with: pip install contextshrink[proxy]"
     )
 
 

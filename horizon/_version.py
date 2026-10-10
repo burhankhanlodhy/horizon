@@ -117,7 +117,10 @@ def get_version() -> str:
         return build_version
 
     try:
-        return version("horizon-ai")
+        try:
+            return version("contextshrink")
+        except PackageNotFoundError:
+            return version("horizon-ai")  # installs from before the rename
     except PackageNotFoundError:
         return UNKNOWN_VERSION
 
