@@ -523,7 +523,8 @@ def test_cold_remote_call_is_bounded_as_a_whole_by_the_ml_budget(charged, monkey
         remote.close()
 
     assert timeouts, "the first block must reach the endpoint"
-    assert all(0.0 < t <= budget for t in timeouts[0].values()), (
+    # 1e-9: the cap is a clock difference, which can land a hair above the budget.
+    assert all(0.0 < t <= budget + 1e-9 for t in timeouts[0].values()), (
         f"per-phase timeouts were not lowered to the budget: {timeouts[0]}"
     )
     assert sum(charged) <= budget + 0.1, (
