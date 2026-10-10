@@ -20,9 +20,11 @@ from contextvars import ContextVar
 from typing import Any
 
 from horizon.proxy.project_policy import (
+    KEEPALIVE_HEADER,
     PROJECT_HEADER,
     PROJECT_PATH_PREFIX,
     classify_project,
+    split_keepalive_path,
     split_project_path,
     with_project_prefix,
 )
@@ -45,12 +47,23 @@ def get_current_project() -> str | None:
 def strip_project_path_prefix(scope: MutableMapping[str, Any]) -> str | None:
     """Strip a ``/p/<name>`` prefix from an ASGI scope, returning the name.
 
+    A ``/k/<id>`` keep-alive segment after it is stripped too and becomes the
+    ``X-Horizon-Keepalive-Id`` header (unless the client sent one).
+
     Mutates ``scope["path"]`` (and ``raw_path``) so routing sees the
     canonical path. Must run before anything caches the request URL.
     """
-    project, stripped = split_project_path(scope.get("path", ""))
-    if project is not None:
-        normalize_scope_path(scope, stripped)
+    path = scope.get("path", "")
+    project, path = split_project_path(path)
+    keepalive_id, path = split_keepalive_path(path)
+    if project is not None or keepalive_id is not None:
+        normalize_scope_path(scope, path)
+    if keepalive_id is not None:
+        headers = list(scope.get("headers") or [])
+        name = KEEPALIVE_HEADER.encode("latin-1")
+        if not any(key.lower() == name for key, _ in headers):
+            headers.append((name, keepalive_id.encode("latin-1")))
+            scope["headers"] = headers
     return project
 
 

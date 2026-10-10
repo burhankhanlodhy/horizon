@@ -7,7 +7,7 @@ Prove that compression doesn't impact LLM accuracy through:
 4. Statistical significance testing
 5. Batch API compression accuracy testing
 
-Install with: pip install horizon-ai[evals]
+Install with: pip install contextshrink[evals]
 
 Quick start:
     from horizon.evals import run_quick_eval

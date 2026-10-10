@@ -22,6 +22,14 @@ from click.testing import CliRunner
 from horizon.install.paths import _PROFILE_RE as PROFILE_RE
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "user-home")
+    # With home isolated, MCP registration would shell out to the real
+    # `claude mcp add` on the developer's machine; keep init tests offline.
+    monkeypatch.setattr("horizon.mcp_registry.install_everywhere", lambda **kwargs: {})
+
+
 def _load_init_module(monkeypatch):
     monkeypatch.delitem(sys.modules, "horizon.cli.init", raising=False)
     monkeypatch.delitem(sys.modules, "horizon.cli.main", raising=False)
@@ -572,7 +580,7 @@ def test_ensure_codex_provider_replaces_existing_marker(monkeypatch, tmp_path: P
     init_cli, _ = _load_init_module(monkeypatch)
     path = tmp_path / "config.toml"
     path.write_text(
-        f"prefix\n{init_cli._CODEX_PROVIDER_MARKER_START}\nold = true\n{init_cli._CODEX_PROVIDER_MARKER_END}\n",
+        f"# prefix\n{init_cli._CODEX_PROVIDER_MARKER_START}\nold = true\n{init_cli._CODEX_PROVIDER_MARKER_END}\n",
         encoding="utf-8",
     )
 
@@ -659,6 +667,7 @@ def test_ensure_codex_provider_emits_requires_openai_auth_for_chatgpt(
     monkeypatch, tmp_path: Path
 ) -> None:
     init_cli, _ = _load_init_module(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     path = tmp_path / "config.toml"
     (tmp_path / "auth.json").write_text('{"auth_mode": "chatgpt"}', encoding="utf-8")
 
@@ -671,12 +680,17 @@ def test_ensure_codex_provider_omits_requires_openai_auth_for_api_key(
     monkeypatch, tmp_path: Path
 ) -> None:
     init_cli, _ = _load_init_module(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     path = tmp_path / "config.toml"
-    (tmp_path / "auth.json").write_text('{"auth_mode": "apikey"}', encoding="utf-8")
+    (tmp_path / "auth.json").write_text(
+        '{"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test-only"}', encoding="utf-8"
+    )
 
     init_cli._ensure_codex_provider(path, 8787)
 
     assert "requires_openai_auth" not in path.read_text(encoding="utf-8")
+    assert "auth = { command =" in path.read_text(encoding="utf-8")
+    assert "sk-test-only" not in path.read_text(encoding="utf-8")
 
 
 def test_ensure_codex_feature_flag_replaces_existing_marker(monkeypatch, tmp_path: Path) -> None:
@@ -693,6 +707,59 @@ def test_ensure_codex_feature_flag_replaces_existing_marker(monkeypatch, tmp_pat
     assert content.count(init_cli._CODEX_FEATURE_MARKER_START) == 1
     assert "hooks = true" in content
     assert "codex_hooks" not in content
+
+
+@pytest.mark.parametrize("custom_home", [False, True])
+@pytest.mark.parametrize("auth_mode", ["apikey", "chatgpt"])
+def test_local_codex_provider_reads_credentials_from_user_home(
+    monkeypatch, tmp_path: Path, custom_home: bool, auth_mode: str
+) -> None:
+    init_cli, _ = _load_init_module(monkeypatch)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    codex_home = tmp_path / "custom" if custom_home else tmp_path / "home" / ".codex"
+    if custom_home:
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    codex_home.mkdir(parents=True)
+    (codex_home / "auth.json").write_text(
+        json.dumps({"auth_mode": auth_mode, "OPENAI_API_KEY": "sk-test-only"}),
+        encoding="utf-8",
+    )
+    project_config = tmp_path / "project" / ".codex" / "config.toml"
+
+    init_cli._ensure_codex_provider(project_config, 8787)
+
+    provider = tomllib.loads(project_config.read_text(encoding="utf-8"))["model_providers"][
+        "horizon"
+    ]
+    if auth_mode == "chatgpt":
+        assert provider["requires_openai_auth"] is True
+        assert "auth" not in provider
+    else:
+        assert "requires_openai_auth" not in provider
+        assert Path(provider["auth"]["args"][0]).parent == codex_home.resolve()
+    assert "sk-test-only" not in project_config.read_text(encoding="utf-8")
+
+
+def test_init_codex_helper_collision_leaves_provider_config_unchanged(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from horizon.providers.codex.install import codex_auth_helper_path
+
+    init_cli, _ = _load_init_module(monkeypatch)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"OPENAI_API_KEY": "sk-test-only"}', encoding="utf-8")
+    config = tmp_path / "config.toml"
+    original = 'model_provider = "openai"\n'
+    config.write_text(original, encoding="utf-8")
+    helper = codex_auth_helper_path(auth, config_path=config)
+    helper.write_text("user content", encoding="utf-8")
+
+    with pytest.raises(click.ClickException, match="Codex provider configuration was not updated"):
+        init_cli._ensure_codex_provider(config, 8787)
+
+    assert config.read_text(encoding="utf-8") == original
+    assert helper.read_text(encoding="utf-8") == "user content"
 
 
 def test_ensure_codex_feature_flag_replaces_marker_inside_features_scope(

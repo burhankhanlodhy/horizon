@@ -227,6 +227,45 @@ def build_app(
             headers=resp_headers,
         )
 
+    async def send_filtered(request: Request, url: str, headers: dict, path: str) -> Response:
+        """Direct call whose JSON reply must be edited before the tool sees it.
+
+        IBM Bob 2.0.1-2.0.5 moves its gateway to ``api.<region>:<relay port>``
+        when its profile carries ``region_domain``, so the key is removed (the
+        hosted proxy does the same for local wraps; see horizon.providers.bob).
+        Small, buffered replies only.
+        """
+        from horizon.providers.bob import strip_origin_passthrough_response_keys
+
+        try:
+            upstream_resp = await direct.request(
+                request.method,
+                url,
+                headers=headers,
+                content=await request.body() if request.method not in ("GET", "HEAD") else None,
+                params=request.query_params,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("forwarder upstream error path=%s: %s", path, exc)
+            return Response(
+                content=f"upstream error: {exc}\n", status_code=502, media_type="text/plain"
+            )
+        content = upstream_resp.content
+        drop = set(_HOP_BY_HOP) | {"content-encoding", "content-length"}
+        filtered = None
+        if upstream_resp.status_code == 200:
+            filtered = strip_origin_passthrough_response_keys(url, urlparse(url).path, content)
+        if filtered is not None:
+            content = filtered
+            # They describe the unfiltered bytes.
+            drop |= {"etag", "last-modified", "cache-control", "content-digest", "digest"}
+        resp_headers = {
+            name: value for name, value in upstream_resp.headers.items() if name.lower() not in drop
+        }
+        return Response(
+            content=content, status_code=upstream_resp.status_code, headers=resp_headers
+        )
+
     @app.websocket("/{path:path}")
     async def relay_ws(websocket: WebSocket, path: str) -> None:
         from websockets.exceptions import ConnectionClosed
@@ -316,6 +355,10 @@ def build_app(
                     and name.lower() != "host"
                     and not name.lower().startswith("x-horizon-")
                 }
+                from horizon.providers.bob import filters_response
+
+                if filters_response(origin, upstream_path):
+                    return await send_filtered(request, f"{origin}{upstream_path}", headers, path)
                 return await send(direct, request, f"{origin}{upstream_path}", headers, path)
             tags = {BASE_URL_HEADER: origin, ORIGINAL_PATH_HEADER: upstream_path}
 

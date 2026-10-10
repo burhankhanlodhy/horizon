@@ -2043,3 +2043,47 @@ class TestCodexLaunchExportsCustomUpstream:
     ) -> None:
         env = self._launch_env(monkeypatch, tmp_path, custom_upstream=None)
         assert wrap_mod._UPSTREAM_BASE_URL_ENV_VAR not in env
+
+
+def test_wrap_codex_carries_a_keepalive_id_in_the_url_and_ends_it_on_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Codex's built-in provider cannot add headers: the id rides in the path."""
+    captured: dict = {}
+    ended: list[tuple] = []
+    monkeypatch.delenv("HORIZON_KEEPALIVE_ID", raising=False)
+    monkeypatch.setattr(wrap_mod.shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(wrap_mod, "_codex_home_dir", lambda: tmp_path)
+    monkeypatch.setattr(wrap_mod, "_offer_dangling_codex_recovery", lambda active_home: None)
+    monkeypatch.setattr(wrap_mod, "_prepare_codex_wrap_state", lambda **kwargs: None)
+    monkeypatch.setattr(wrap_mod, "_project_name_from_cwd", lambda: "demo")
+    monkeypatch.setattr(wrap_mod, "_end_keepalive", lambda *a: ended.append(a))
+
+    def _fake_launch(*, env, port, configure_launch, args=(), env_vars_display=(), **kwargs):
+        captured["args"], captured["env"], _ = configure_launch(
+            9123, args, env, list(env_vars_display)
+        )
+
+    monkeypatch.setattr(wrap_mod, "_launch_tool", _fake_launch)
+    wrap_mod._run_codex_wrap(
+        port=8787,
+        no_mcp=True,
+        no_tokensave=True,
+        serena=False,
+        no_serena=True,
+        code_graph=False,
+        no_proxy=True,
+        learn=False,
+        memory=False,
+        backend=None,
+        anyllm_provider=None,
+        region=None,
+        verbose=False,
+        prepare_only=False,
+        codex_args=(),
+    )
+    keepalive_id = captured["env"]["HORIZON_KEEPALIVE_ID"]
+    base = f"http://127.0.0.1:9123/p/demo/k/{keepalive_id}/v1"
+    assert captured["env"]["OPENAI_BASE_URL"] == base
+    assert f'openai_base_url="{base}"' in captured["args"]
+    assert ended == [("http://127.0.0.1:9123", keepalive_id)]

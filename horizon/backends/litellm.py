@@ -798,7 +798,7 @@ class LiteLLMBackend(Backend):
                 raise ImportError(
                     "Bedrock with temporary credentials (AWS_SESSION_TOKEN) requires "
                     "botocore, which is not installed. Install the bedrock extra: "
-                    "pip install 'horizon-ai[bedrock]' (or pip install botocore)."
+                    "pip install 'contextshrink[bedrock]' (or pip install botocore)."
                 )
             self._model_map = _fetch_bedrock_inference_profiles(region, profile_name=profile_name)
             litellm.set_verbose = False  # Reduce noise

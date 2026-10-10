@@ -41,7 +41,7 @@ def _check_datasets_installed() -> None:
     except ImportError as e:
         raise ImportError(
             "HuggingFace datasets required for this loader. "
-            "Install with: pip install horizon-ai[evals]"
+            "Install with: pip install contextshrink[evals]"
         ) from e
 
 

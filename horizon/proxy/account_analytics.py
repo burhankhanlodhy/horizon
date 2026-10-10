@@ -61,13 +61,14 @@ def tenant_key(key: str | None) -> str | None:
 
 
 # Deliberately exclude admin, telemetry, global stats and response lookup URLs.
+# /inference/v1/chat/completions is IBM Bob's chat path (horizon.providers.bob).
 # Provider response IDs are credentials owned by the upstream account, so shared
 # proxy users must not enumerate/retrieve responses through passthrough routes.
 INFERENCE = re.compile(
-    r"^(?:/p/[^/]+)?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent))/?$"
+    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent)|/inference/v1/chat/completions)/?$"
 )
 AUXILIARY = re.compile(
-    r"^(?:/p/[^/]+)?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"
+    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"
 )
 # Session lifecycle: ``wrap`` reports its tool exited (cache keep-alive). The
 # route ends only sessions owned by the verified account.
@@ -316,7 +317,7 @@ async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
         "runtime_id": context.service.runtime_id,
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
-        "provider": "anthropic",
+        "provider": str(record.get("provider") or "anthropic")[:100],
         "model": str(record.get("model") or "unknown")[:200],
         "project": str(meta["project"])[:100] if meta.get("project") else None,
         "agent": str(meta["agent"])[:100] if meta.get("agent") else None,

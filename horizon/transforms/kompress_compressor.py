@@ -3,7 +3,7 @@
 Auto-downloads the model from HuggingFace (chopratejas/kompress-v2-base)
 on first use.
 
-Requires the [ml] extra: pip install horizon-ai[ml]
+Requires the [ml] extra: pip install contextshrink[ml]
 
 Usage:
     >>> from horizon.transforms.kompress_compressor import KompressCompressor
@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import hashlib
+import itertools
 import logging
 import os
 import re
@@ -28,6 +29,7 @@ from typing import Any, Literal
 from ..config import TransformResult
 from ..onnx_runtime import (
     ONNX_CPU_ARENA_ENV,
+    _resolve_revision,
     create_cpu_session_options,
     hf_entry_known_absent,
     hf_hub_download_local_first,
@@ -95,6 +97,56 @@ def _add_kompress_must_keep_words(
     for word_idx, word in enumerate(chunk_words):
         if _KOMPRESS_MUST_KEEP_RE.search(word):
             kept_ids.add(word_idx + chunk_start)
+
+
+_TABULAR_ROW_SPLIT_RE = re.compile(r"\s{2,}")
+
+
+def _words_by_line(content: str) -> tuple[list[str], list[int]]:
+    """Split into words like content.split(), plus each word's source line index.
+
+    Reconstruction must never join words that came from different source lines
+    onto one line -- doing so can glue unrelated facts together (#3099).
+    """
+    words: list[str] = []
+    line_ids: list[int] = []
+    for line_idx, line in enumerate(content.split("\n")):
+        for word in line.split():
+            words.append(word)
+            line_ids.append(line_idx)
+    return words, line_ids
+
+
+def _join_kept_words_by_line(words: list[str], line_ids: list[int], kept_ids: set[int]) -> str:
+    """Rejoin kept words, starting a new line wherever they crossed a line boundary."""
+    parts: list[str] = []
+    prev_line: int | None = None
+    for i in sorted(kept_ids):
+        if prev_line is not None:
+            parts.append("\n" if line_ids[i] != prev_line else " ")
+        parts.append(words[i])
+        prev_line = line_ids[i]
+    return "".join(parts)
+
+
+def _tabular_protected_line_ids(content: str) -> set[int]:
+    """Flag lines in a run of >=3 consecutive lines with a consistent fixed-width
+    column count (ls -l, ps, etc.), so compression keeps each such row whole
+    instead of dropping individual fields inconsistently row to row (#3099).
+    Shares the must-keep toggle: HORIZON_KOMPRESS_MUST_KEEP=0 disables this too.
+    """
+    if os.environ.get(_KOMPRESS_MUST_KEEP_ENV, "1") == "0":
+        return set()
+    cols_per_line = [
+        len(_TABULAR_ROW_SPLIT_RE.split(line.strip())) if line.strip() else 0
+        for line in content.split("\n")
+    ]
+    protected: set[int] = set()
+    for cols, group in itertools.groupby(enumerate(cols_per_line), key=lambda p: p[1]):
+        indices = [idx for idx, _ in group]
+        if cols >= 3 and len(indices) >= 3:
+            protected.update(indices)
+    return protected
 
 
 # ONNX artifacts are resolved against the model repo in this order, falling
@@ -322,6 +374,21 @@ def _time_budget_seconds() -> float | None:
     return raw if raw > 0 else None
 
 
+def _capped_time_budget(cap: float | None) -> float | None:
+    """The per-call budget, lowered to *cap* when the caller has less to give.
+
+    The router passes what is left of its request-scoped ML budget, so a call
+    -- including the first one of a request, which has no measured cost to be
+    refused on -- stops at a chunk boundary when that budget runs out instead
+    of running to its own, larger, per-call budget.
+    """
+    budget = _time_budget_seconds()
+    if cap is None:
+        return budget
+    cap = max(0.0, cap)
+    return cap if budget is None else min(budget, cap)
+
+
 def _canary_threshold_seconds() -> float | None:
     """Startup canary threshold; inference slower than this disables Kompress.
 
@@ -537,9 +604,22 @@ def _get_model_class() -> type:
     class HorizonCompressorModel(nn.Module):
         """Dual-head ModernBERT: token classification + span importance CNN."""
 
-        def __init__(self, model_name: str = "answerdotai/ModernBERT-base"):
+        def __init__(
+            self,
+            model_name: str = "answerdotai/ModernBERT-base",
+            *,
+            revision: str | None = None,
+            allow_download: bool = True,
+        ):
             super().__init__()
-            self.encoder = AutoModel.from_pretrained(model_name, attn_implementation="eager")
+            # Same pin as the tokenizer: the fine-tuned heads were trained on
+            # this encoder snapshot. Unknown repos resolve to None (floating).
+            self.encoder = AutoModel.from_pretrained(
+                model_name,
+                attn_implementation="eager",
+                revision=_resolve_revision(model_name, revision),
+                local_files_only=not allow_download,
+            )
             hidden_size = self.encoder.config.hidden_size  # 768
 
             # Head 1: Token keep/discard
@@ -768,6 +848,9 @@ def _load_kompress_onnx(
         return model, tokenizer, backend
 
 
+_MODERNBERT_TOKENIZER_REPO = "answerdotai/ModernBERT-base"
+
+
 def _load_modernbert_tokenizer(auto_tokenizer: Any, *, allow_download: bool) -> Any:
     """Load the ModernBERT tokenizer, cache-only when ``allow_download`` is False.
 
@@ -782,14 +865,25 @@ def _load_modernbert_tokenizer(auto_tokenizer: Any, *, allow_download: bool) -> 
     changes whether the Hub is consulted to confirm what is already on disk.
     Mirrors ``onnx_runtime.hf_hub_download_local_first``, which the ONNX half of
     this loader already uses.
+
+    The load is pinned to the same immutable revision as the model artifacts
+    (``onnx_runtime._PINNED_REVISIONS``): the ONNX export was produced against
+    that tokenizer snapshot, so a floating ``main`` could shift token ids under
+    the shipped weights without any code change. ``HORIZON_HF_PIN=off`` floats
+    it, exactly as for the weights.
     """
+    revision = _resolve_revision(_MODERNBERT_TOKENIZER_REPO, None)
     try:
-        return auto_tokenizer.from_pretrained("answerdotai/ModernBERT-base", local_files_only=True)
+        return auto_tokenizer.from_pretrained(
+            _MODERNBERT_TOKENIZER_REPO, revision=revision, local_files_only=True
+        )
     except _NOT_CACHED_ERRORS as exc:
         if not allow_download:
-            raise KompressModelNotCached("answerdotai/ModernBERT-base") from exc
-    # Genuine cache miss and downloading is permitted: fetch it.
-    return auto_tokenizer.from_pretrained("answerdotai/ModernBERT-base", local_files_only=False)
+            raise KompressModelNotCached(_MODERNBERT_TOKENIZER_REPO) from exc
+    # Genuine cache miss and downloading is permitted: fetch it at the pin.
+    return auto_tokenizer.from_pretrained(
+        _MODERNBERT_TOKENIZER_REPO, revision=revision, local_files_only=False
+    )
 
 
 # Sub-state-dict keys inside a merged v2-style checkpoint (see
@@ -908,7 +1002,12 @@ def _load_kompress_pytorch(
         logger.info("Downloading Kompress PyTorch model from %s ...", model_id)
 
         HorizonCompressorModel = _get_model_class()
-        model = HorizonCompressorModel()
+        try:
+            model = HorizonCompressorModel(allow_download=allow_download)
+        except _NOT_CACHED_ERRORS as exc:
+            if allow_download:
+                raise
+            raise KompressModelNotCached(_MODERNBERT_TOKENIZER_REPO) from exc
 
         _load_pytorch_weights(model, model_id, allow_download=allow_download)
 
@@ -1026,7 +1125,7 @@ def _load_kompress(
         return _load_kompress_pytorch(model_id, device, allow_download=allow_download)
 
     raise ImportError(
-        "Kompress requires onnxruntime or torch. Install with: pip install horizon-ai[proxy]"
+        "Kompress requires onnxruntime or torch. Install with: pip install contextshrink[proxy]"
     )
 
 
@@ -1418,11 +1517,15 @@ class KompressCompressor(Transform):
 
     # ``compress()`` accepts ``_deadline_started_at``, so a caller that
     # compresses many blocks for ONE request can hand every call the same
-    # origin and have the deadline bound the request. Duck-typed rather than
+    # origin and have the deadline bound the request. It also accepts
+    # ``_time_budget_cap_seconds``, which lowers this call's time budget to
+    # what the caller's request-scoped ML budget has left. Duck-typed rather than
     # isinstance-checked at the call site because ``RemoteKompressCompressor``
-    # is the other compressor the router may get back and its ``compress()``
-    # does not take the argument.
+    # is the other compressor the router may get back: its ``compress()`` takes
+    # the cap (flagged by ``accepts_time_budget_cap``) but not the deadline
+    # origin.
     shares_request_deadline: bool = True
+    accepts_time_budget_cap: bool = True
 
     def __init__(self, config: KompressConfig | None = None):
         self.config = config or KompressConfig()
@@ -1564,6 +1667,7 @@ class KompressCompressor(Transform):
         allow_download: bool = True,
         ccr_original: str | None = None,
         _deadline_started_at: float | None = None,
+        _time_budget_cap_seconds: float | None = None,
     ) -> KompressResult:
         """Compress content using Kompress model.
 
@@ -1589,11 +1693,13 @@ class KompressCompressor(Transform):
             KompressResult with compressed text.
         """
         t_deadline = time.perf_counter() if _deadline_started_at is None else _deadline_started_at
-        words = content.split()
+        words, line_ids = _words_by_line(content)
         n_words = len(words)
 
         if n_words < max(10, self.config.min_input_words) or self._degraded_reason is not None:
             return self._passthrough(content, n_words)
+
+        protected_line_ids = _tabular_protected_line_ids(content)
 
         # Cooperative wall-clock budget (#1171): kompress ONNX inference is
         # O(tokens) and non-preemptible once the request's asyncio timeout fires,
@@ -1624,6 +1730,7 @@ class KompressCompressor(Transform):
                     batch_size=_batch_size(),
                     ccr_originals=[ccr_original],
                     _deadline_started_at=t_deadline,
+                    _time_budget_cap_seconds=_time_budget_cap_seconds,
                 )
                 if batch_result:
                     return batch_result[0]
@@ -1634,7 +1741,7 @@ class KompressCompressor(Transform):
             chunk_count = 0
 
             acquire_timeout = _acquire_timeout_seconds()
-            budget = _time_budget_seconds()
+            budget = _capped_time_budget(_time_budget_cap_seconds)
             deadline = time.monotonic() + budget if budget is not None else None
 
             for chunk_start in range(0, n_words, max_chunk_words):
@@ -1775,6 +1882,10 @@ class KompressCompressor(Transform):
                 # reconstruct from context. Disable via HORIZON_KOMPRESS_MUST_KEEP=0.
                 _add_kompress_must_keep_words(kept_ids, chunk_words, chunk_start)
 
+            for i, line_id in enumerate(line_ids):
+                if line_id in protected_line_ids:
+                    kept_ids.add(i)
+
             if not kept_ids:
                 if inference_ms >= 1000.0:
                     logger.info(
@@ -1789,7 +1900,7 @@ class KompressCompressor(Transform):
                 return self._passthrough(content, n_words)
 
             compressed_words = [words[w] for w in sorted(kept_ids) if w < n_words]
-            compressed = " ".join(compressed_words)
+            compressed = _join_kept_words_by_line(words, line_ids, kept_ids)
             compressed_count = len(compressed_words)
             cache_key: str | None = None
             original_tokens = n_words
@@ -1900,6 +2011,7 @@ class KompressCompressor(Transform):
         *,
         ccr_originals: list[str | None] | None = None,
         _deadline_started_at: float | None = None,
+        _time_budget_cap_seconds: float | None = None,
     ) -> list[KompressResult]:
         """Compress multiple texts. Uses batched inference on GPU, sequential on CPU.
 
@@ -1994,6 +2106,12 @@ class KompressCompressor(Transform):
         # per-item slowdown measured on ONNX CPU (~0.7-0.9x vs sequential).
         # GPU users still benefit from the batched forward pass below.
         if self._should_use_sequential_fallback():
+            # The cap is for the whole batch, so each item gets what is left.
+            cap_ends_at = (
+                None
+                if _time_budget_cap_seconds is None
+                else time.monotonic() + _time_budget_cap_seconds
+            )
             return [
                 self.compress(
                     content,
@@ -2003,12 +2121,22 @@ class KompressCompressor(Transform):
                     target_ratio=r,
                     ccr_original=ccr_source,
                     _deadline_started_at=t_deadline,
+                    _time_budget_cap_seconds=(
+                        None if cap_ends_at is None else cap_ends_at - time.monotonic()
+                    ),
                 )
                 for content, r, ccr_source in zip(contents, ratios, ccr_sources, strict=True)
             ]
 
         results: list[KompressResult | None] = [None] * n
-        word_lists: list[list[str]] = [c.split() for c in contents]
+        word_lists: list[list[str]] = []
+        line_id_lists: list[list[int]] = []
+        protected_line_ids_list: list[set[int]] = []
+        for c in contents:
+            words, line_ids = _words_by_line(c)
+            word_lists.append(words)
+            line_id_lists.append(line_ids)
+            protected_line_ids_list.append(_tabular_protected_line_ids(c))
 
         # Short texts short-circuit to passthrough — no model call needed.
         max_chunk_words = self.config.chunk_words
@@ -2046,7 +2174,7 @@ class KompressCompressor(Transform):
             self._deadline_s = deadline_s
 
         acquire_timeout = _acquire_timeout_seconds()
-        budget = _time_budget_seconds()
+        budget = _capped_time_budget(_time_budget_cap_seconds)
         deadline = time.monotonic() + budget if budget is not None else None
 
         def _bail_remaining(reason: str, batch_start: int) -> None:
@@ -2190,14 +2318,19 @@ class KompressCompressor(Transform):
                 continue
             content = contents[text_idx]
             words = word_lists[text_idx]
+            line_ids = line_id_lists[text_idx]
             n_words = len(words)
+
+            for i, line_id in enumerate(line_ids):
+                if line_id in protected_line_ids_list[text_idx]:
+                    kept_ids.add(i)
 
             if not kept_ids:
                 results[text_idx] = self._passthrough(content, n_words)
                 continue
 
             compressed_words = [words[w] for w in sorted(kept_ids) if w < n_words]
-            compressed = " ".join(compressed_words)
+            compressed = _join_kept_words_by_line(words, line_ids, kept_ids)
             compressed_count = len(compressed_words)
             cache_key: str | None = None
             original_tokens = n_words

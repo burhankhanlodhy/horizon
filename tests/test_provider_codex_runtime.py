@@ -324,6 +324,8 @@ def test_init_codex_config_routes_messages_through_horizon(
     codex_proxy_stack: _CodexProxyStack,
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    # Credentials come from CODEX_HOME; keep the developer's real auth.json out.
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
     init_cli._init_codex(
         global_scope=False,

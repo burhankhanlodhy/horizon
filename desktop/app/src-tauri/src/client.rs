@@ -229,6 +229,24 @@ pub const TOOLS: &[Tool] = &[
         settings: &[],
     },
     Tool {
+        id: "bob",
+        name: "IBM Bob",
+        description: "IBM's coding agent for the terminal",
+        commands: &["bob"],
+        install_url: "https://www.npmjs.com/package/bobshell",
+        // BOB_GATEWAY_URL only; ~/.bob/settings is never written. Bob builds
+        // its own paths on the bare gateway origin, so its forwarder is pinned
+        // to IBM's origin: chat goes to the proxy tagged for IBM, everything
+        // else (profile, model info, docs search, telemetry) straight to IBM.
+        wrap: &["wrap", "bob", "--no-proxy"],
+        unwrap: &[],
+        port: 18792,
+        upstream: Some("https://api.us-east.bob.ibm.com"),
+        kind: Kind::Terminal,
+        steps: "",
+        settings: &[],
+    },
+    Tool {
         id: "omp",
         name: "Oh My Pi",
         description: "Pi coding agent with batteries included",
@@ -321,6 +339,22 @@ pub const TOOLS: &[Tool] = &[
         // /v1/ is required for both providers.
         steps: "In Continue's config, add an apiBase line to each Anthropic or OpenAI model. Keep your own API key.",
         settings: &[Setting { label: "apiBase (Anthropic and OpenAI models)", value: "http://127.0.0.1:{port}/v1/" }],
+    },
+    Tool {
+        id: "antigravity",
+        name: "Antigravity",
+        description: "Google's agentic IDE",
+        commands: &[],
+        install_url: "https://antigravity.google/",
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Settings,
+        // Antigravity reads model endpoints from its own model-provider
+        // settings and lists models from GET /v1/models.
+        steps: "In Antigravity's model settings, add a custom OpenAI-compatible provider with this base URL. Keep your own API key.",
+        settings: &[Setting { label: "Base URL", value: "http://127.0.0.1:{port}/v1" }],
     },
     Tool {
         id: "zcode",

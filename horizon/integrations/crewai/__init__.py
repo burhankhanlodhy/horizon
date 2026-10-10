@@ -23,7 +23,7 @@ Example:
     wrapped = wrap_tools_with_horizon([search_db])
     agent = Agent(role="Researcher", tools=wrapped, ...)
 
-Install: pip install horizon-ai crewai
+Install: pip install contextshrink crewai
 """
 
 from .agents import (

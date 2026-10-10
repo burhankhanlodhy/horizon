@@ -4,12 +4,45 @@ All notable changes to Horizon are documented here.
 
 ## [Unreleased]
 
+### Added
+- Signed-in CLI use of the hosted ContextShrink proxy, like the desktop app:
+  - `horizon login` (email and password; the password is never stored)
+    creates a per-device key (`CLI: <hostname>`) in the OS credential store,
+    in its own entry, so it never touches the desktop app's key;
+  - every `horizon wrap <tool>` then runs through a loopback relay to the
+    hosted proxy, so usage and savings show on the account dashboard. Each
+    tool gets its relay port (18688; Kimi, Mistral Vibe, Grok and IBM Bob get
+    their own relays pinned to their provider, 18689-18692), with MCP and code
+    memory off as in the desktop app. `horizon wrap --local` or
+    `HORIZON_HOSTED=0` uses a local proxy instead;
+  - `horizon account` shows the plan, this cycle's estimated savings and fee
+    (or the Free cap), the device key's status and the last 30 days;
+  - `horizon logout` revokes the device key and ends the session;
+  - without an OS credential store (headless Linux) the key goes to an
+    owner-only file; `CONTEXTSHRINK_API_KEY` supplies a key directly (CI).
+- `contextshrink[hosted]` extra: the relay and credential store without the
+  local proxy's compression stack.
+
+### Changed
+- The Python distribution is named `contextshrink` (`horizon-ai` on PyPI
+  belongs to another project); the `horizon` command stays, and a
+  `contextshrink` command is an alias.
+
+## [0.42.0] — Keep-alive for every client, new integrations, Kompress fixes
+
+Desktop app 0.5.1 and 0.5.2 bundle this client.
+
 ### Fixed
 - Managed compact-edit cohorts now support durable operator admission stop,
   conservative candidate retirement after native mutations, non-secret drain
   inventory and consistent SQLite backup. Native-client/script validation is
   documented; the tested cohort remains unqualified because complete-workflow
   costs do not meet its savings gate. Stock traffic remains native.
+- OpenAI cache writes are read from the usage report. GPT-5.6 and later report
+  `cache_write_tokens` and bill them at 1.25x input; Horizon inferred writes
+  from the uncached tokens and priced them as plain input, so the cost of a
+  cache write (and of a missed cache) read 25% low on those models. Earlier
+  models, which report no writes, keep the inferred split.
 - Flash credit is measured in the provider's own tokens and priced at the
   model's measured cache behaviour. Tokens: the request-body bytes a stub
   removes, times the provider's billed tokens per byte for the model, learned
@@ -61,6 +94,49 @@ All notable changes to Horizon are documented here.
   and a $3/M fallback cost.
 
 ### Added
+- Cache keep-alive for OpenAI GPT-5.6 and later (`HORIZON_CACHE_KEEPALIVE=1`).
+  Their cache lives 30 minutes after its last use and a rewrite costs 1.25x
+  input; an idle session is pinged two minutes before expiry. Responses: the
+  exact last request with `prompt_cache_options.prewarm` (reads only, no
+  output; also stored `previous_response_id` chains). Chat Completions, which
+  rejects `prewarm`: the same request with a 16-token output limit. Measured
+  on gpt-6.1-sol: warmed sessions still hit at 52 minutes, an untouched one
+  was rewritten. Ping rows carry their provider.
+- Codex WebSocket sessions are kept warm on their own connection. Their
+  `store: false` chain lives only on the open upstream connection, so the
+  pre-warm is sent there (chained to the last response, empty input,
+  `prewarm`), its events never reach Codex, and Codex's next turn is chained to
+  the pre-warm's response. Measured over 33 idle minutes on gpt-6.1-sol: one
+  pre-warm ($0.0011) kept the cache, and the resumed turn read it all. Not for
+  ChatGPT sign-in, or when proxy memory tools run on the connection.
+- `wrap opencode` and `wrap codex` send a per-launch keep-alive id and end the
+  session on exit, so a hosted proxy keeps their sessions warm only while the
+  tool runs. OpenCode sends it as a provider header and through its transport
+  plugin; Codex, whose built-in provider cannot add headers, in its base URL
+  path (`/p/<project>/k/<id>/v1`, read by the proxy as the header).
+- `horizon wrap bob` for the IBM Bob CLI (`BOB_GATEWAY_URL`; Bob keeps its own
+  credential and settings). Bob's chat is compressed on a real
+  `/inference/v1/chat/completions` route; its other gateway paths go to IBM's
+  origin unchanged; `region_domain` is removed from its profile so Bob keeps
+  using the proxy. Token mode by default; the wrap refuses to launch when Bob's
+  saved gateway would bypass the proxy. Every wrap now warns when it reuses a
+  proxy running a different mode, and `/health` reports the mode.
+- `horizon wrap antigravity` prints the custom OpenAI-compatible provider
+  settings for Google's Antigravity IDE, and `horizon mcp install --agent
+  antigravity` registers Horizon in its `mcp_config.json`.
+- `horizon learn` can analyse with `agy` (Antigravity CLI) when
+  `HORIZON_LEARN_ALLOW_UNSAFE_AGY=1` is set (agy has no tool-free mode).
+- Context guard (`HORIZON_CONTEXT_GUARD=0` turns it off): a streamed Claude
+  request near the model's real window reports usage at 95% of the window the
+  client believes in, so Claude Code compacts before a `prompt is too long`
+  error instead of compacting every turn. The real limit is learned from the
+  first such error, and a `context-1m` session is no longer compressed as if it
+  were five times over budget.
+- Cache routing for Grok (`HORIZON_CACHE_ROUTING=1`, set by
+  `HORIZON_SAVINGS=auto`): when a client sends no conversation id, Horizon adds
+  a stable per-conversation, per-account `x-grok-conv-id` (Chat Completions) or
+  `prompt_cache_key` (Responses), so xAI routes each turn to the server that
+  holds its prompt cache. A client's own id always wins; content is unchanged.
 - Price-cliff guard on the OpenAI-format paths: Chat Completions (any model
   served there: GPT, Gemini, Grok, ...) and Responses (HTTP and WebSocket).
   Near a whole-request price tier the catalog lists (GPT-5.4 / 6.x at 272k,
@@ -74,6 +150,20 @@ All notable changes to Horizon are documented here.
   the same safety nets and ledger credit as the OpenAI form.
 - Usage and Advanced Analytics show the savings beyond compression per
   feature.
+
+### Fixed (Kompress)
+- Kompress keeps each word on its source line and keeps runs of fixed-width
+  table rows whole. It used to join words from unrelated lines (a `git log
+  --stat` window became one line mixing commits) and crush `ls -l` rows
+  unevenly. Measured on 125 public tool outputs: fact pairs intact 3,065 ->
+  3,486 of 3,486; savings 14.5% -> 11.4% of offered tokens, most of it four
+  READMEs whose badge HTML is no longer glued and elided
+  (`experiments/kompress-line-integrity`).
+- ML compression is bounded per request, not only per block: a tool result of
+  many prose blocks could spend over a minute in Kompress. Blocks over the
+  budget pass through unchanged (cache-safe).
+- The Kompress tokenizer and encoder load at the snapshot the weights were
+  exported against, not a floating ref.
 
 ## [0.41.0] — Savings profile and Flash safety nets
 

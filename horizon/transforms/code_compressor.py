@@ -27,7 +27,7 @@ Compression Strategy:
 5. Reassemble into valid code
 
 Installation:
-    pip install horizon-ai[code]
+    pip install contextshrink[code]
 
 Usage:
     >>> from horizon.transforms import CodeAwareCompressor
@@ -247,7 +247,7 @@ def _get_parser(language: str) -> Any:
     # _get_parser; guarding on it here would recurse.
     if not _tree_sitter_importable():
         raise ImportError(
-            "tree-sitter is not installed. Install with: pip install horizon-ai[code]\n"
+            "tree-sitter is not installed. Install with: pip install contextshrink[code]\n"
             "This adds ~50MB for tree-sitter grammars."
         )
 
@@ -1390,7 +1390,7 @@ class CodeAwareCompressor(Transform):
 
         # Check if tree-sitter is available
         if not _check_tree_sitter_available():
-            logger.warning("tree-sitter not available. Install with: pip install horizon-ai[code]")
+            logger.warning("tree-sitter not available. Install with: pip install contextshrink[code]")
             if self.config.fallback_to_kompress:
                 return self._fallback_compress(code, original_tokens)
             return CodeCompressionResult(
@@ -2416,7 +2416,7 @@ class CodeAwareCompressor(Transform):
 
         if not _check_tree_sitter_available():
             warnings.append(
-                "tree-sitter not installed. Install with: pip install horizon-ai[code]"
+                "tree-sitter not installed. Install with: pip install contextshrink[code]"
             )
 
         return TransformResult(

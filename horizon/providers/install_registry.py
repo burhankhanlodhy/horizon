@@ -6,6 +6,9 @@ from collections.abc import Callable
 
 from horizon.install.models import DeploymentManifest, ManagedMutation
 from horizon.providers.aider.install import build_install_env as _build_aider_install_env
+from horizon.providers.antigravity.install import (
+    build_install_env as _build_antigravity_install_env,
+)
 from horizon.providers.claude.install import (
     apply_provider_scope as _apply_claude_provider_scope,
 )
@@ -50,6 +53,7 @@ _ProviderScopeApplier = Callable[[DeploymentManifest], ManagedMutation | None]
 _ProviderScopeReverter = Callable[[ManagedMutation, DeploymentManifest], None]
 
 _ENV_BUILDERS: dict[str, _InstallEnvBuilder] = {
+    "antigravity": _build_antigravity_install_env,
     "claude": _build_claude_install_env,
     "copilot": _build_copilot_install_env,
     "codex": _build_codex_install_env,

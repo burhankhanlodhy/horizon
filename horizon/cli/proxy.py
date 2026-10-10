@@ -43,7 +43,7 @@ def ensure_proxy_dependencies() -> None:
             import_module(module)
     except ImportError as e:
         click.secho(
-            "Error: Proxy dependencies not installed. Run: pip install horizon-ai[proxy]",
+            "Error: Proxy dependencies not installed. Run: pip install contextshrink[proxy]",
             fg="red",
             err=True,
         )
@@ -656,7 +656,7 @@ def dashboard(port: int, no_open: bool) -> None:
         "Env: HORIZON_BUDGET_ESTIMATED_BASIS."
     ),
 )
-# Code-aware compression (AST-based, requires `pip install horizon-ai[code]`).
+# Code-aware compression (AST-based, requires `pip install contextshrink[code]`).
 # Pair of flags so users can override the env-var default in either direction.
 # We resolve HORIZON_CODE_AWARE_ENABLED in the body (not via Click's envvar=),
 # because Click's envvar handling for paired bool flags is brittle in older
@@ -667,7 +667,7 @@ def dashboard(port: int, no_open: bool) -> None:
     default=None,
     help=(
         "Enable/disable AST-based code compression. Requires the optional "
-        "tree-sitter dependency: pip install horizon-ai[code]. "
+        "tree-sitter dependency: pip install contextshrink[code]. "
         "Default: disabled. Env: HORIZON_CODE_AWARE_ENABLED=1 to enable."
     ),
 )

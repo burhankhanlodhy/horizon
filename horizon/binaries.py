@@ -1,6 +1,6 @@
 """Fetcher for bundled CLI tool binaries.
 
-`pip install horizon-ai` pulls `ast-grep-cli` as a proper PyPI binary wheel
+`pip install contextshrink` pulls `ast-grep-cli` as a proper PyPI binary wheel
 (core dependency), so ast-grep is always on PATH. The other two high-value
 tools — `difft` (difftastic) and `scc` — are fetched from pinned upstream
 GitHub releases at proxy startup, verified, cached per-user, and exec'd.
@@ -234,7 +234,7 @@ def _asset_for_platform(tool: str, plat: PlatformKey) -> dict[str, Any]:
     entry = _tool_entry(tool)
     if _is_pypi_tool(tool):
         raise PlatformNotSupported(
-            f"{tool}: distributed via PyPI only; `pip install horizon-ai` "
+            f"{tool}: distributed via PyPI only; `pip install contextshrink` "
             f"should have placed `{entry.get('binary', tool)}` on PATH."
         )
     assets: dict[str, Any] = entry.get("assets", {})

@@ -139,9 +139,9 @@ def mcp_install(proxy_url: str, agents: tuple[str, ...], force: bool) -> None:
 
     \b
     By default this installs into every agent that has a registrar and is
-    detected on this system (Claude Code today; Cursor / Codex / Continue /
-    others added in subsequent releases). Pass ``--agent NAME`` one or more
-    times to restrict the installation.
+    detected on this system (Antigravity IDE, Claude Code, Codex, Grok CLI,
+    OpenCode today; Cursor / Continue / others added in subsequent releases).
+    Pass ``--agent NAME`` one or more times to restrict the installation.
 
     \b
     Examples:
@@ -153,7 +153,7 @@ def mcp_install(proxy_url: str, agents: tuple[str, ...], force: bool) -> None:
         import mcp  # noqa: F401
     except ImportError:
         click.echo("Error: MCP SDK not installed.", err=True)
-        click.echo("Install with: pip install 'horizon-ai[mcp]'", err=True)
+        click.echo("Install with: pip install 'contextshrink[mcp]'", err=True)
         raise SystemExit(1) from None
 
     from horizon.mcp_registry import any_succeeded, format_results, install_everywhere
@@ -188,18 +188,38 @@ def mcp_install(proxy_url: str, agents: tuple[str, ...], force: bool) -> None:
 
 
 @mcp.command("uninstall")
-def mcp_uninstall() -> None:
+@click.option(
+    "--agent",
+    "agents",
+    multiple=True,
+    help="Restrict uninstallation to specific agents (default: every detected agent).",
+)
+def mcp_uninstall(agents: tuple[str, ...]) -> None:
     """Remove Horizon MCP server from detected agent configs.
 
     \b
     Removes horizon from every agent registrar known to Horizon. Other MCP
-    servers are preserved.
+    servers are preserved. Pass ``--agent NAME`` one or more times to restrict
+    the uninstallation.
+
+    \b
+    Examples:
+        horizon mcp uninstall                       # every detected agent
+        horizon mcp uninstall --agent antigravity   # Antigravity IDE only
     """
     from horizon.mcp_registry import get_all_registrars
 
+    registrars = get_all_registrars()
+    if agents:
+        wanted = {agent.strip().lower() for agent in agents if agent.strip()}
+        registrars = [registrar for registrar in registrars if registrar.name in wanted]
+        if not registrars:
+            click.echo("No agents matched the requested filter.")
+            raise SystemExit(1)
+
     removed = False
 
-    for registrar in get_all_registrars():
+    for registrar in registrars:
         if not registrar.detect():
             continue
         removed_names: list[str] = []
@@ -292,7 +312,7 @@ def mcp_status() -> None:
         click.echo("MCP SDK:        ✓ Installed")
     except ImportError:
         click.echo("MCP SDK:        ✗ Not installed")
-        click.echo("                pip install 'horizon-ai[mcp]'")
+        click.echo("                pip install 'contextshrink[mcp]'")
 
     from horizon.mcp_registry import get_all_registrars
 
@@ -410,7 +430,7 @@ def mcp_serve(
         from horizon.ccr.mcp_server import create_ccr_mcp_server
     except ImportError as e:
         click.echo(f"Error: MCP dependencies not installed: {e}", err=True)
-        click.echo("Install with: pip install 'horizon-ai[mcp]'", err=True)
+        click.echo("Install with: pip install 'contextshrink[mcp]'", err=True)
         raise SystemExit(1) from None
 
     if debug:

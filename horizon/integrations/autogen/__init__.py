@@ -23,7 +23,7 @@ Example:
 
     agent = AssistantAgent(name="researcher", tools=wrapped, ...)
 
-Install: pip install horizon-ai autogen-agentchat
+Install: pip install contextshrink autogen-agentchat
 """
 
 from .agents import (

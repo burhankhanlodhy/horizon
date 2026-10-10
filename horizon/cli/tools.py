@@ -211,7 +211,7 @@ def tools_install_cmd(tools: tuple[str, ...], force: bool) -> None:
                 click.echo(f"{name}: on PATH at {on_path} (pypi wheel)")
             else:
                 click.secho(
-                    f"{name}: not on PATH — `pip install horizon-ai` should provide it",
+                    f"{name}: not on PATH — `pip install contextshrink` should provide it",
                     fg="yellow",
                 )
                 exit_code = 1

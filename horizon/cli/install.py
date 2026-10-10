@@ -637,7 +637,7 @@ def _echo_installed(manifest: DeploymentManifest, *, prefix: str = "Installed pe
     default=None,
     help=(
         "Enable/disable AST-based code compression in the persistent runtime. "
-        "Requires the optional tree-sitter dependency: pip install horizon-ai[code]. "
+        "Requires the optional tree-sitter dependency: pip install contextshrink[code]. "
         "Default: disabled, matching `horizon proxy`."
     ),
 )

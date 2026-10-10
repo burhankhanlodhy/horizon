@@ -73,7 +73,7 @@ def test_missing_keyring_module_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _no_keyring)
-    with pytest.raises(VaultError, match=r"horizon-ai\[vault\]"):
+    with pytest.raises(VaultError, match=r"contextshrink\[hosted\]"):
         vault.get_credential()
 
 

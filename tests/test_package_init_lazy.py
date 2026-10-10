@@ -54,7 +54,7 @@ def test_version_prefers_installed_distribution_metadata() -> None:
     ):
         assert version_module.get_version() == "9.8.7"
 
-    package_version.assert_called_once_with("horizon-ai")
+    package_version.assert_called_once_with("contextshrink")
 
 
 def test_version_reports_unknown_when_distribution_metadata_is_missing() -> None:

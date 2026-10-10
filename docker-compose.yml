@@ -53,6 +53,8 @@ services:
       - HORIZON_FLASH_OBSERVATIONS=${HORIZON_FLASH_OBSERVATIONS:-}
       - HORIZON_FLASH_OPENAI=${HORIZON_FLASH_OPENAI:-}
       - HORIZON_FLASH_GEMINI=${HORIZON_FLASH_GEMINI:-}
+      # Stable cache-routing id for Grok when the client sends none.
+      - HORIZON_CACHE_ROUTING=${HORIZON_CACHE_ROUTING:-}
       - HORIZON_FLASH_OPENAI_UPSTREAMS=${HORIZON_FLASH_OPENAI_UPSTREAMS:-}
       # Skip models whose cache reads cost under this fraction of input (no saving there).
       - HORIZON_FLASH_MIN_READ_RATIO=${HORIZON_FLASH_MIN_READ_RATIO:-0.04}

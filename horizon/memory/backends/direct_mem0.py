@@ -254,7 +254,7 @@ class DirectMem0Adapter:
             self._mem0_client = await asyncio.to_thread(Mem0Memory.from_config, mem0_config)
         except ImportError:
             raise ImportError(
-                "mem0 package not installed. Install with: pip install 'horizon-ai[memory-stack]'"
+                "mem0 package not installed. Install with: pip install 'contextshrink[memory-stack]'"
             ) from None
 
         self._initialized = True

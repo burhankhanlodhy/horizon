@@ -11,6 +11,8 @@ Usage:
     horizon wrap vibe                      # Start proxy + Mistral Vibe
     horizon wrap grok                      # Start proxy + Grok CLI
     horizon wrap cursor                    # Start proxy + print Cursor config instructions
+    horizon wrap bob                       # Start proxy + IBM Bob CLI
+    horizon wrap antigravity               # Start proxy + print Antigravity config instructions
     horizon wrap grok-build                # Start proxy + configure Grok Build
     horizon wrap openclaw                  # Install + configure OpenClaw plugin
     horizon wrap claude --port 9999        # Custom proxy port
@@ -77,6 +79,13 @@ from horizon.copilot_auth import (
     resolve_subscription_bearer_token_details,
 )
 from horizon.providers.aider import build_launch_env as _build_aider_launch_env
+from horizon.providers.antigravity import (
+    render_setup_lines as _render_antigravity_setup_lines,
+)
+from horizon.providers.bob import DEFAULT_API_URL as _BOB_DEFAULT_API_URL
+from horizon.providers.bob import DEFAULT_MODE as _BOB_DEFAULT_MODE
+from horizon.providers.bob import build_launch_env as _build_bob_launch_env
+from horizon.providers.bob import preflight as _bob_preflight
 from horizon.providers.claude import (
     CONTEXT_1M_SUFFIX,
     DEFAULT_1M_MODEL,
@@ -198,7 +207,11 @@ from horizon.providers.opencode.config import (
     snapshot_opencode_config_if_unwrapped,
     strip_opencode_horizon_blocks,
 )
-from horizon.providers.opencode.runtime import opencode_major_version, with_opencode_standalone
+from horizon.providers.opencode.runtime import (
+    KEEPALIVE_ENV,
+    opencode_major_version,
+    with_opencode_standalone,
+)
 from horizon.providers.zcode import (
     detect_upstream as _detect_zcode_upstream,
 )
@@ -209,6 +222,7 @@ from horizon.providers.zcode import (
     upstream_to_proxy_urls as _zcode_upstream_to_urls,
 )
 from horizon.proxy.project_context import with_project_prefix as _with_project_prefix
+from horizon.proxy.project_policy import with_keepalive_prefix as _with_keepalive_prefix
 
 from .main import main
 
@@ -316,7 +330,15 @@ def _append_text(path: Path, content: str) -> None:
     fsutil.append_text(path, content)
 
 
-_AGENT_SAVINGS_TARGET_AGENTS = {"claude", "codex", "cursor", "grok", "grok_build", "opencode"}
+_AGENT_SAVINGS_TARGET_AGENTS = {
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "grok_build",
+    "opencode",
+}
 _WRAP_PROXY_TIMEOUT_ENV = "HORIZON_WRAP_PROXY_TIMEOUT"
 _WRAP_PROXY_TIMEOUT_DEFAULT_SECONDS = 45
 _WRAP_PROXY_TIMEOUT_ML_DEFAULT_SECONDS = 90
@@ -332,7 +354,14 @@ _WRAP_PROXY_TIMEOUT_ML_MODULES = ("torch", "sentence_transformers", "spacy")
 _TOOL_SEARCH_ENV = TOOL_SEARCH_ENV
 _TOOL_SEARCH_DEFAULT = TOOL_SEARCH_DEFAULT
 _TOOL_SEARCH_FOUNDRY_DEFAULT = TOOL_SEARCH_FOUNDRY_DEFAULT
-_AGENT_SAVINGS_WRAP_AGENTS = {"claude", "codex", "cursor", "grok", "grok_build"}
+_AGENT_SAVINGS_WRAP_AGENTS = {
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor",
+    "grok",
+    "grok_build",
+}
 
 # 1M context window for `wrap claude` (#1158). Claude Code only sends the
 # `context-1m` beta header — unlocking the 1M window for entitled subscription
@@ -2736,7 +2765,12 @@ def _codex_session_launch_settings(
     provider = str(provider)
 
     project = _project_name_from_cwd()
-    proxy_url = _with_project_prefix(f"http://127.0.0.1:{port}/v1", project)
+    # Codex's built-in provider cannot add headers, so the per-launch cache
+    # keep-alive id rides in the base URL path (``/k/<id>``) like the project.
+    proxy_url = _with_project_prefix(
+        _with_keepalive_prefix(f"http://127.0.0.1:{port}/v1", environ.get(KEEPALIVE_ENV)),
+        project,
+    )
     overrides: list[str] = []
     env = dict(environ)
     display = [f"OPENAI_BASE_URL={proxy_url}"]
@@ -3076,6 +3110,20 @@ def _apply_interactive_header_env(env: dict[str, str], claude_args: tuple | list
     headless = any(arg in ("-p", "--print") for arg in claude_args or ())
     header_line = f"{_INTERACTIVE_HEADER_NAME}: {0 if headless else 1}"
     env["ANTHROPIC_CUSTOM_HEADERS"] = f"{existing}\n{header_line}" if existing else header_line
+
+
+def _apply_keepalive_env(env: dict[str, str]) -> str | None:
+    """Set a per-launch keep-alive id in ``HORIZON_KEEPALIVE_ID``; returns it.
+
+    OpenCode sends it as ``X-Horizon-Keepalive-Id``; Codex in its base URL path
+    (``/k/<id>``). A user-set value wins, and
+    then wrap does not end that session on exit either (returns None).
+    """
+    if env.get(KEEPALIVE_ENV):
+        return None
+    keepalive_id = uuid.uuid4().hex
+    env[KEEPALIVE_ENV] = keepalive_id
+    return keepalive_id
 
 
 def _end_keepalive(proxy_url: str | None, keepalive_id: str | None) -> None:
@@ -4694,12 +4742,51 @@ def _ensure_proxy(
     **kwargs: Any,
 ) -> tuple[subprocess.Popen | None, int]:
     """Start or reuse a proxy without racing another wrap on the same port."""
+    from horizon import hosted as _hosted
+
+    if not no_proxy and _hosted.hosted_active():
+        # Signed in (horizon login): a relay to the hosted proxy on this port
+        # stands in for a local proxy; the caller stops it like one.
+        try:
+            relay = _hosted.ensure_relay(port)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"  ContextShrink: 127.0.0.1:{port} -> {_hosted.proxy_url()}")
+        return relay, port
     if no_proxy:
-        return _ensure_proxy_unlocked(port, no_proxy, **kwargs)
-    with _proxy_start_lock(port):
-        # Re-checking is part of the lock boundary: a concurrent wrapper may
-        # have finished startup while this caller was waiting for the lock.
-        return _ensure_proxy_unlocked(port, no_proxy, **kwargs)
+        result = _ensure_proxy_unlocked(port, no_proxy, **kwargs)
+    else:
+        with _proxy_start_lock(port):
+            # Re-checking is part of the lock boundary: a concurrent wrapper may
+            # have finished startup while this caller was waiting for the lock.
+            result = _ensure_proxy_unlocked(port, no_proxy, **kwargs)
+    if result[0] is None and os.environ.get("HORIZON_MODE"):
+        # Nothing started: an existing proxy is serving this session.
+        _warn_proxy_mode_mismatch(result[1])
+    return result
+
+
+def _warn_proxy_mode_mismatch(port: int) -> None:
+    """Warn when a reused proxy runs a different mode than this session asked for.
+
+    Mode is fixed at proxy startup, so a requested HORIZON_MODE (explicit, or a
+    wrap's default such as Bob's token mode) is silently ignored on reuse.
+    Warning-only: other clients may be attached to the running proxy.
+    """
+    requested = os.environ.get("HORIZON_MODE")
+    running_config = _proxy_health_config(_query_proxy_health(port)) or _query_proxy_config(port)
+    running = (running_config or {}).get("mode")
+    if not requested or not isinstance(running, str):
+        return
+    from horizon.proxy.proxy_mode_policy import normalize_proxy_mode_decision
+
+    decision = normalize_proxy_mode_decision(requested, default=running)
+    if not decision.unknown and decision.normalized != running:
+        click.echo(
+            f"  Warning: this session requested {decision.normalized!r} mode but the "
+            f"running proxy is in {running!r} mode (mode is fixed at proxy startup). "
+            "Restart the proxy, or use --port for a separate one."
+        )
 
 
 def _client_marker_path(port: int) -> Path:
@@ -5197,9 +5284,19 @@ def _copy_openclaw_plugin_into_extensions(
 
 
 @main.group()
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Use a local Horizon proxy even when signed in to ContextShrink (horizon login).",
+)
 @click.pass_context
-def wrap(ctx: click.Context) -> None:
+def wrap(ctx: click.Context, local: bool) -> None:
     """Wrap CLI tools to run through Horizon.
+
+    \b
+    Signed in with `horizon login`, every tool runs through the hosted
+    ContextShrink proxy (usage and savings on your dashboard); --local
+    (or HORIZON_HOSTED=0) uses a local proxy instead.
 
     \b
     Starts a Horizon proxy, configures the environment, and launches
@@ -5217,6 +5314,8 @@ def wrap(ctx: click.Context) -> None:
         horizon wrap vibe                # Mistral Vibe
         horizon wrap grok                # Grok CLI (xAI)
         horizon wrap cursor              # Cursor (prints config instructions)
+        horizon wrap bob                 # IBM Bob CLI
+        horizon wrap antigravity         # Antigravity IDE (prints config instructions)
         horizon wrap grok-build          # Grok Build (updates ~/.grok/config.toml)
         horizon wrap cline               # Cline (VS Code; prints config instructions)
         horizon wrap continue            # Continue (VS Code/JetBrains; injects systemMessage)
@@ -5238,6 +5337,19 @@ def wrap(ctx: click.Context) -> None:
     \b
     `openclaw` is a separate tool — different from opencode.
     """
+    from horizon import hosted as _hosted
+
+    if local:
+        os.environ[_hosted.HOSTED_ENV] = "0"
+    elif _hosted.hosted_active() and ctx.invoked_subcommand:
+        # Each tool's relay port, and the local-only extras off (no MCP,
+        # no code memory), as the desktop app runs them; flags still win.
+        sub = wrap.commands.get(ctx.invoked_subcommand)
+        if sub is not None:
+            ctx.default_map = {
+                **(ctx.default_map or {}),
+                ctx.invoked_subcommand: _hosted.wrap_defaults(sub),
+            }
     if _should_purge_context_tools(ctx):
         _report_context_tool_purge()
 
@@ -6644,6 +6756,9 @@ def _run_codex_wrap(
 
     env, env_vars_display = _build_codex_launch_env(port, os.environ)
     env["CODEX_HOME"] = str(active_codex_home)
+    # Cache keep-alive liveness: kept warm only while Codex runs (ended below).
+    keepalive_id = _apply_keepalive_env(env)
+    launched_port = [port]
 
     def configure_codex_launch(
         actual_port: int,
@@ -6652,29 +6767,33 @@ def _run_codex_wrap(
         current_display: list[str],
     ) -> tuple[tuple, dict[str, str], list[str]]:
         del current_display
+        launched_port[0] = actual_port
         return _codex_session_launch_settings(
             port=actual_port,
             codex_args=current_args,
             environ=current_env,
         )
 
-    _launch_tool(
-        binary=codex_bin,
-        args=codex_args,
-        env=env,
-        port=port,
-        no_proxy=no_proxy,
-        tool_label="CODEX",
-        env_vars_display=env_vars_display,
-        learn=learn,
-        memory=memory,
-        agent_type="codex",
-        code_graph=code_graph,
-        backend=backend,
-        anyllm_provider=anyllm_provider,
-        region=region,
-        configure_launch=configure_codex_launch,
-    )
+    try:
+        _launch_tool(
+            binary=codex_bin,
+            args=codex_args,
+            env=env,
+            port=port,
+            no_proxy=no_proxy,
+            tool_label="CODEX",
+            env_vars_display=env_vars_display,
+            learn=learn,
+            memory=memory,
+            agent_type="codex",
+            code_graph=code_graph,
+            backend=backend,
+            anyllm_provider=anyllm_provider,
+            region=region,
+            configure_launch=configure_codex_launch,
+        )
+    finally:
+        _end_keepalive(f"http://127.0.0.1:{launched_port[0]}", keepalive_id)
 
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
@@ -6870,7 +6989,7 @@ def aider(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option("--port", "-p", default=8787, type=int, help="Proxy port (default: 8787)")
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -7291,6 +7410,62 @@ def cursor(
 
 
 # =============================================================================
+# Antigravity IDE
+# =============================================================================
+
+
+@wrap.command(context_settings={"ignore_unknown_options": True})
+@_retired_context_tool_option
+@proxy_port_option()
+@click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
+@click.option("--learn", is_flag=True, help="Enable live traffic learning")
+@click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.option("--prepare-only", is_flag=True, hidden=True)
+def antigravity(
+    port: int,
+    no_proxy: bool,
+    learn: bool,
+    memory: bool,
+    verbose: bool,
+    prepare_only: bool,
+) -> None:
+    """Start Horizon proxy for use with Antigravity IDE.
+
+    \b
+    Antigravity reads its model endpoints from its model-provider settings,
+    not from environment variables. This command starts the proxy and prints
+    the settings to add as a custom OpenAI-compatible model provider.
+
+    \b
+    After running this command, open Antigravity and add a custom model
+    provider with the printed base URL. Antigravity fetches the model list
+    from GET /v1/models automatically.
+
+    \b
+    Example:
+        horizon wrap antigravity                # Start proxy + Antigravity settings
+        horizon wrap antigravity --port 9999    # Custom proxy port
+    """
+    if prepare_only:
+        return
+
+    def _print_antigravity_setup(actual_port: int) -> None:
+        for line in _render_antigravity_setup_lines(actual_port, project=_project_name_from_cwd()):
+            click.echo(line)
+
+    _run_proxy_only_watcher(
+        agent_label="antigravity",
+        port=port,
+        no_proxy=no_proxy,
+        learn=learn,
+        memory=memory,
+        agent_type="antigravity",
+        print_setup_lines=_print_antigravity_setup,
+    )
+
+
+# =============================================================================
 # Grok Build
 # =============================================================================
 
@@ -7568,9 +7743,7 @@ def continue_dev(
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -7656,15 +7829,120 @@ def goose(
 
 
 # =============================================================================
+# IBM Bob
+# =============================================================================
+
+
+@wrap.command(context_settings={"ignore_unknown_options": True})
+@_retired_context_tool_option
+@proxy_port_option()
+@click.option(
+    "--code-graph",
+    is_flag=True,
+    help="Enable code graph indexing via codebase-memory-mcp (optional)",
+)
+@click.option("--no-proxy", is_flag=True, help="Skip proxy startup (use existing proxy)")
+@click.option("--learn", is_flag=True, help="Enable live traffic learning")
+@click.option("--memory", is_flag=True, help="Enable persistent cross-session memory")
+@click.option(
+    "--backend", default=None, help="API backend: 'anthropic', 'anyllm', 'litellm-vertex', etc."
+)
+@click.option("--anyllm-provider", default=None, help="Provider for any-llm backend")
+@click.option("--region", default=None, help="Cloud region for Bedrock/Vertex")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.option("--prepare-only", is_flag=True, hidden=True)
+@click.argument("bob_args", nargs=-1, type=click.UNPROCESSED)
+def bob(
+    port: int,
+    code_graph: bool,
+    no_proxy: bool,
+    learn: bool,
+    memory: bool,
+    backend: str | None,
+    anyllm_provider: str | None,
+    region: str | None,
+    verbose: bool,
+    prepare_only: bool,
+    bob_args: tuple,
+) -> None:
+    """Launch IBM Bob CLI through Horizon proxy.
+
+    \b
+    Sets ``BOB_GATEWAY_URL`` so Bob routes inference traffic through Horizon
+    while keeping its own ``Authorization: apikey ...`` credential and its
+    ~/.bob/settings files untouched.
+
+    \b
+    Bob bills flat per token, so token mode converts compression 1:1 into
+    dollars. Token mode is the default for bob; set HORIZON_MODE to override:
+        HORIZON_MODE=cache horizon wrap bob
+
+    \b
+    Examples:
+        horizon wrap bob                          # Start proxy + bob
+        horizon wrap bob -- run "fix the bug"     # Pass args to bob
+        horizon wrap bob --port 9999              # Custom proxy port
+    """
+    if prepare_only:
+        return
+
+    bob_bin = _resolve_windows_launcher("bob")
+    if not bob_bin:
+        click.echo("Error: 'bob' not found in PATH.")
+        click.echo("Install IBM Bob CLI: npm install -g bobshell")
+        raise SystemExit(1)
+
+    # Exported before proxy startup so it is started in this mode; an explicit
+    # HORIZON_MODE always wins.
+    if not os.environ.get("HORIZON_MODE"):
+        os.environ["HORIZON_MODE"] = _BOB_DEFAULT_MODE
+
+    env, env_vars_display = _build_bob_launch_env(
+        port, os.environ, project=_project_name_from_cwd()
+    )
+
+    def configure_bob_launch(
+        actual_port: int, args: tuple, current_env: dict[str, str], display: list[str]
+    ) -> tuple[tuple, dict[str, str], list[str]]:
+        # The proxy may have moved to another port: point Bob at the one in use,
+        # then check Bob's saved gateway against that final URL. Raising here
+        # still tears the proxy down via _launch_tool's cleanup.
+        if actual_port != port:
+            current_env, display = _build_bob_launch_env(
+                actual_port, current_env, project=_project_name_from_cwd()
+            )
+        if problem := _bob_preflight(current_env):
+            raise click.ClickException(problem)
+        return args, current_env, display
+
+    _launch_tool(
+        binary=bob_bin,
+        args=bob_args,
+        env=env,
+        port=port,
+        no_proxy=no_proxy,
+        tool_label="BOB",
+        env_vars_display=env_vars_display,
+        learn=learn,
+        memory=memory,
+        agent_type="bob",
+        code_graph=code_graph,
+        backend=backend,
+        anyllm_provider=anyllm_provider,
+        region=region,
+        openai_api_url=_BOB_DEFAULT_API_URL,
+        configure_launch=configure_bob_launch,
+    )
+
+
+# =============================================================================
 # OpenHands
 # =============================================================================
 
 
 @wrap.command(context_settings={"ignore_unknown_options": True})
 @_retired_context_tool_option
-@click.option(
-    "--port", "-p", default=8787, type=click.IntRange(1, 65535), help="Proxy port (default: 8787)"
-)
+@proxy_port_option()
 @click.option(
     "--code-graph",
     is_flag=True,
@@ -8208,6 +8486,7 @@ def opencode(
         ),
     )
 
+    _opencode_keepalive_id: str | None = None
     try:
         # If the proxy fell back to a different port, move our marker so
         # cleanup tracking stays accurate and update MCP config.
@@ -8222,6 +8501,9 @@ def opencode(
         launch_environ = os.environ.copy()
         if subscription_resolution is not None:
             _scrub_copilot_subscription_launch_env(launch_environ)
+        # Cache keep-alive liveness: the proxy keeps this session's prompt cache
+        # warm only while OpenCode runs, and stops when it exits (finally below).
+        _opencode_keepalive_id = _apply_keepalive_env(launch_environ)
         env, env_vars_display = _build_opencode_launch_env(
             actual_port, launch_environ, project=_project_name_from_cwd(), include_mcp=not no_mcp
         )
@@ -8259,6 +8541,7 @@ def opencode(
             region=region,
         )
     finally:
+        _end_keepalive(f"http://127.0.0.1:{actual_port}", _opencode_keepalive_id)
         if _opencode_proxy and _opencode_proxy.poll() is None:
             _other = _live_proxy_clients(actual_port, exclude_self=True)
             if not _other:

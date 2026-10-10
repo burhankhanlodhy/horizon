@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlparse
 
+from horizon.proxy import openai_cache_usage
 from horizon.proxy.conversation_savings import (
     get_response_chain_savings,
     savings_conversation_key,
@@ -386,6 +387,26 @@ def _sanitize_forwarded_response_headers(
     # (and the list of framing headers) lives in one place so the Anthropic
     # handler strips exactly the same set — see #3019.
     return sanitize_forwarded_response_headers(headers, *extra_names)
+
+
+def _replaced_json_body(response: httpx.Response, body: bytes) -> tuple[bytes, dict[str, str]]:
+    """Headers for replaying ``response`` with ``body`` in place of its content.
+
+    The upstream's validators and digests describe the original bytes;
+    forwarding them would let a cache or integrity check pair them with the
+    rewritten body.
+    """
+    headers = _sanitize_forwarded_response_headers(
+        response.headers,
+        "etag",
+        "last-modified",
+        "cache-control",
+        "content-digest",
+        "digest",
+        "content-type",
+    )
+    headers["content-type"] = "application/json"
+    return body, headers
 
 
 def _resolve_openai_handler_path(
@@ -1781,8 +1802,12 @@ def _extract_responses_usage(event: dict[str, Any]) -> tuple[int, int, int, int,
     output_tokens = _int(usage.get("output_tokens"))
     details = usage.get("input_tokens_details")
     cached_tokens = _int(details.get("cached_tokens")) if isinstance(details, dict) else 0
-    cache_write_tokens = _infer_openai_cache_write_tokens(input_tokens, cached_tokens)
-    uncached_tokens = max(input_tokens - cached_tokens, 0)
+    # GPT-5.6+ reports real (billed) writes; earlier models' are inferred.
+    from horizon.proxy import openai_cache_usage
+
+    cache_write_tokens, uncached_tokens, _ = openai_cache_usage.split(
+        input_tokens, cached_tokens, openai_cache_usage.reported_writes(usage)
+    )
     return input_tokens, output_tokens, cached_tokens, cache_write_tokens, uncached_tokens
 
 
@@ -1996,6 +2021,79 @@ class OpenAIHandlerMixin:
         back to the configured ``OPENAI_API_URL`` (``OPENAI_TARGET_API_URL``).
         """
         return _resolve_openai_upstream_base(request.headers) or self.OPENAI_API_URL
+
+    def _keepalive_record(
+        self,
+        request: Any,
+        request_id: str,
+        url: str,
+        headers: Any,
+        body: dict[str, Any],
+        client: str | None,
+        flavor: str,
+        channel: Any = None,
+    ) -> None:
+        """The request about to be sent: what the cache keeper re-sends as a
+        pre-warm if this session then goes idle (GPT-5.6+; horizon.proxy.cache_keeper)."""
+        keeper = getattr(self, "cache_keeper", None)
+        if keeper is None:
+            return
+        try:
+            from horizon.proxy.account_analytics import _account
+            from horizon.proxy.cache_keeper import LIVENESS_HEADER
+            from horizon.proxy.project_context import get_current_project
+
+            keeper.record_request(
+                request_id,
+                url=url,
+                headers=dict(headers),
+                body=body,
+                liveness_id=request.headers.get(LIVENESS_HEADER),
+                owner=_account.get(),
+                meta={"project": get_current_project(), "agent": client},
+                flavor=flavor,
+                channel=channel,
+            )
+        except Exception:  # pragma: no cover - keep-alive must never fail a request
+            logger.debug("cache keeper record skipped", exc_info=True)
+
+    def _ws_prewarm_channel(
+        self, upstream: Any, *, is_chatgpt_auth: bool, memory_enabled: bool
+    ) -> Any:
+        """In-connection cache keep-alive for one Codex WebSocket (horizon.proxy.ws_prewarm).
+
+        Not for ChatGPT sign-in (a subscription bills no cache writes) or when
+        the proxy runs memory tools on the connection (its own continuations
+        would interleave with a pre-warm).
+        """
+        if getattr(self, "cache_keeper", None) is None or is_chatgpt_auth or memory_enabled:
+            return None
+        from horizon.proxy.ws_prewarm import WsPrewarmChannel
+
+        return WsPrewarmChannel(upstream.send)
+
+    def _ws_keepalive_record(
+        self,
+        websocket: Any,
+        channel: Any,
+        key: str,
+        url: str,
+        headers: Any,
+        frame: Any,
+        client: str | None,
+    ) -> None:
+        """One Codex turn as sent upstream: the keeper's template for its pre-warm."""
+        inner = frame.get("response", frame) if isinstance(frame, dict) else None
+        if not isinstance(inner, dict):
+            return
+        from horizon.proxy.cache_keeper import OPENAI_RESPONSES_WS
+
+        # The pre-warm sends no input (it chains to the last response), so the
+        # turn's input is not held.
+        template = {k: v for k, v in inner.items() if k != "input"}
+        self._keepalive_record(
+            websocket, key, url, headers, template, client, OPENAI_RESPONSES_WS, channel=channel
+        )
 
     def _maybe_flash_openai(
         self,
@@ -4835,6 +4933,18 @@ class OpenAIHandlerMixin:
             body["tools"] = tools
         if presend_event.headers is not None:
             headers = presend_event.headers
+        # Cache routing (HORIZON_CACHE_ROUTING): a Grok request without a
+        # conversation id lands on a server with no cache for it; name one.
+        if not _bypass:
+            from horizon.proxy import cache_routing
+
+            if cache_routing.apply_chat(
+                headers,
+                model=str(body.get("model") or ""),
+                url=upstream_base_url or self.OPENAI_API_URL,
+                messages=original_client_messages,
+            ):
+                transforms_applied.append("cache_routing:grok")
         # Consistency: recount BOTH endpoints with the provider tokenizer. An upstream
         # branch may have left original_tokens in the pipeline's char-estimator scale
         # (result.tokens_before), which mismatches optimized_tokens (provider tokenizer)
@@ -5262,8 +5372,12 @@ class OpenAIHandlerMixin:
                     # Bedrock reports cache creation directly. Only infer
                     # when no explicit count is available. Skip inference
                     # entirely when upstream omitted prompt_tokens.
+                    _reported_writes = openai_cache_usage.reported_writes(usage)
                     if cache_creation_input_tokens > 0:
                         cache_write_tokens = cache_creation_input_tokens
+                    elif _reported_writes is not None:
+                        # GPT-5.6+: real, billed writes.
+                        cache_write_tokens = _reported_writes
                     elif "prompt_tokens" in usage:
                         cache_write_tokens = _infer_openai_cache_write_tokens(
                             total_input_tokens,
@@ -5377,6 +5491,7 @@ class OpenAIHandlerMixin:
             handler_path,
         )
         url = _append_request_query(url, request.url.query)
+        self._keepalive_record(request, request_id, url, headers, body, client, "openai_chat")
 
         try:
             if stream:
@@ -5627,6 +5742,7 @@ class OpenAIHandlerMixin:
                 total_input_tokens = optimized_tokens  # fallback
                 output_tokens = 0
                 cache_read_tokens = 0
+                _chat_reported_writes = None
                 resp_json = None
                 try:
                     resp_json = response.json()
@@ -5643,6 +5759,7 @@ class OpenAIHandlerMixin:
                     # These are charged at 50% of the input price
                     prompt_details = usage.get("prompt_tokens_details") or {}
                     cache_read_tokens = _usage_int(prompt_details.get("cached_tokens"))
+                    _chat_reported_writes = openai_cache_usage.reported_writes(usage)
                 except (KeyError, TypeError, AttributeError) as e:
                     logger.debug(
                         f"[{request_id}] Failed to extract cached tokens from OpenAI response: {e}"
@@ -5662,10 +5779,10 @@ class OpenAIHandlerMixin:
                         f"+{_hook_usage.output_tokens} out"
                     )
 
-                # Update prefix cache tracker for next turn
-                cache_write_tokens = _infer_openai_cache_write_tokens(
-                    total_input_tokens,
-                    cache_read_tokens,
+                # Update prefix cache tracker for next turn. GPT-5.6+ reports
+                # real (billed) writes; earlier models' are inferred.
+                cache_write_tokens, _chat_uncached, _chat_inferred = openai_cache_usage.split(
+                    total_input_tokens, cache_read_tokens, _chat_reported_writes
                 )
                 # Cache-TTL learning seam (see the /v1/chat path above): record the
                 # cache-outcome attribution before update_from_response. Best-effort.
@@ -5698,7 +5815,7 @@ class OpenAIHandlerMixin:
                 )
 
                 # OpenAI has no write penalty — uncached = total - cached
-                uncached_input_tokens = max(0, total_input_tokens - cache_read_tokens)
+                uncached_input_tokens = _chat_uncached
 
                 # Cost is recorded exactly once by the outcome funnel below
                 # (_record_request_outcome -> emit_request_outcome -> cost_tracker.
@@ -5815,7 +5932,7 @@ class OpenAIHandlerMixin:
                         cache_read_tokens=cache_read_tokens,
                         cache_write_tokens=cache_write_tokens,
                         uncached_input_tokens=uncached_input_tokens,
-                        cache_inferred=True,
+                        cache_inferred=_chat_inferred,
                         total_latency_ms=total_latency,
                         overhead_ms=optimization_latency,
                         pipeline_timing=pipeline_timing,
@@ -6621,6 +6738,16 @@ class OpenAIHandlerMixin:
                 transforms_applied.append("service_tier:flex")
                 logger.info(f"[{request_id}] OpenAI Flex tier applied")
 
+            # Cache routing (HORIZON_CACHE_ROUTING): a Grok request without a
+            # prompt_cache_key lands on a server with no cache for it; name one.
+            from horizon.proxy import cache_routing
+
+            if cache_routing.apply_responses(
+                body, model=str(body.get("model") or ""), url=url, headers=request.headers
+            ):
+                body_mutation_tracker.mark_mutated("cache_routing")
+                transforms_applied.append("cache_routing:grok")
+
         # CCR: a stream:true request whose tool list carries horizon_retrieve
         # can't be intercepted mid-SSE-stream without full event-level
         # splicing (#1877 proposals B/C, out of scope here). Instead, force
@@ -6655,6 +6782,7 @@ class OpenAIHandlerMixin:
                 "upstream request for server-side retrieval handling"
             )
 
+        self._keepalive_record(request, request_id, url, headers, body, client, "openai_responses")
         try:
             if stream and not buffered_stream_ccr:
                 # Streaming for Responses API uses semantic events
@@ -6866,6 +6994,7 @@ class OpenAIHandlerMixin:
                     total_input_tokens = original_tokens  # fallback
                     output_tokens = 0
                     cache_read_tokens = 0
+                    _resp_reported_writes = None
                     resp_json = None
                     try:
                         resp_json = response.json()
@@ -6886,6 +7015,7 @@ class OpenAIHandlerMixin:
                         details = usage.get("input_tokens_details")
                         if isinstance(details, dict):
                             cache_read_tokens = _usage_int(details.get("cached_tokens"))
+                        _resp_reported_writes = openai_cache_usage.reported_writes(usage)
                     except (
                         json.JSONDecodeError,
                         ValueError,
@@ -7091,11 +7221,12 @@ class OpenAIHandlerMixin:
                     # Cost is recorded once by the outcome funnel below; here we only
                     # compute the cache-write / uncached split the funnel needs.
                     # (Recording here too double-counted spend + budget on this path.)
-                    cache_write_tokens = _infer_openai_cache_write_tokens(
-                        total_input_tokens,
-                        cache_read_tokens,
+                    # GPT-5.6+ reports real (billed) writes; earlier models' are inferred.
+                    cache_write_tokens, uncached_input_tokens, _resp_inferred = (
+                        openai_cache_usage.split(
+                            total_input_tokens, cache_read_tokens, _resp_reported_writes
+                        )
                     )
-                    uncached_input_tokens = max(0, total_input_tokens - cache_read_tokens)
 
                     # Was: optimized := provider count, then original := max(original,
                     # optimized + saved) to stop `attempted` exceeding `original`.
@@ -7137,7 +7268,7 @@ class OpenAIHandlerMixin:
                             cache_read_tokens=cache_read_tokens,
                             cache_write_tokens=cache_write_tokens,
                             uncached_input_tokens=uncached_input_tokens,
-                            cache_inferred=True,
+                            cache_inferred=_resp_inferred,
                             total_latency_ms=total_latency,
                             overhead_ms=optimization_latency,
                             transforms_applied=tuple(transforms_applied),
@@ -8579,6 +8710,29 @@ class OpenAIHandlerMixin:
                 async with upstream:
                     await upstream.send(_strip_codex_lite_metadata(first_msg_raw))
 
+                    # Cache keep-alive on this connection (GPT-5.6+): the keeper
+                    # pre-warms the chain here while Codex is idle.
+                    ws_prewarm = self._ws_prewarm_channel(
+                        upstream,
+                        is_chatgpt_auth=is_chatgpt_auth,
+                        # Memory may switch on with a later frame: off whenever it could.
+                        memory_enabled=bool(self.memory_handler and ws_memory_tools_allowed),
+                    )
+                    ws_keepalive_turn = 0
+                    ws_keepalive_key: str | None = None
+                    if ws_prewarm is not None:
+                        ws_prewarm.client_turn_started()
+                        ws_keepalive_key = f"{request_id}:ws:0"
+                        self._ws_keepalive_record(
+                            websocket,
+                            ws_prewarm,
+                            ws_keepalive_key,
+                            upstream_url,
+                            upstream_headers,
+                            final_first_body,
+                            client,
+                        )
+
                     # Unit 3: flag the upstream side flips on seeing
                     # ``response.completed`` so the outer cause
                     # classifier can prefer it over the raw
@@ -8907,6 +9061,7 @@ class OpenAIHandlerMixin:
                         nonlocal current_response_input
                         nonlocal current_response_template
                         nonlocal termination_cause
+                        nonlocal ws_keepalive_turn, ws_keepalive_key
                         client_frame_index = 1
                         try:
                             while True:
@@ -8978,6 +9133,8 @@ class OpenAIHandlerMixin:
                                                 )
                                             return
                                     ws_response_create_frames += 1
+                                    if ws_prewarm is not None:
+                                        ws_prewarm.client_turn_started()
                                     inbound_response = _inbound_frame_body.get(
                                         "response", _inbound_frame_body
                                     )
@@ -9079,6 +9236,24 @@ class OpenAIHandlerMixin:
                                         "transforms_applied": transforms_applied,
                                     },
                                 )
+                                if (
+                                    ws_prewarm is not None
+                                    and ws_last_client_frame_type == "response.create"
+                                ):
+                                    # Waits out an in-flight pre-warm, then chains
+                                    # to the id upstream now holds.
+                                    msg = await ws_prewarm.prepare_client_frame(msg)
+                                    ws_keepalive_turn += 1
+                                    ws_keepalive_key = f"{request_id}:ws:{ws_keepalive_turn}"
+                                    self._ws_keepalive_record(
+                                        websocket,
+                                        ws_prewarm,
+                                        ws_keepalive_key,
+                                        upstream_url,
+                                        upstream_headers,
+                                        _outbound_frame_body,
+                                        client,
+                                    )
                                 await upstream.send(_strip_codex_lite_metadata(msg))
                         except asyncio.CancelledError:
                             # Explicit cancel from the outer
@@ -9259,10 +9434,14 @@ class OpenAIHandlerMixin:
                             # at the WS upgrade) so dashboards can
                             # slice WS turns by tag — same surface
                             # as HTTP turns.
+                            emission_id = await self._next_request_id()
+                            keeper = getattr(self, "cache_keeper", None)
+                            if keeper is not None and ws_prewarm is not None and ws_keepalive_key:
+                                keeper.rekey(ws_keepalive_key, emission_id)
                             await self._record_request_outcome(
                                 RequestOutcome(
                                     # Per-emission ids keep dashboard request-log keys unique.
-                                    request_id=await self._next_request_id(),
+                                    request_id=emission_id,
                                     # PERF remains grouped under the stable WS
                                     # session id even though feed rows are unique.
                                     perf_request_id=request_id,
@@ -9387,6 +9566,12 @@ class OpenAIHandlerMixin:
                                     await websocket.send_text(msg_str)
                                     continue
 
+                                if (
+                                    ws_prewarm is not None
+                                    and isinstance(event, dict)
+                                    and ws_prewarm.observe_upstream_event(event)
+                                ):
+                                    continue
                                 event_type = event.get("type", "")
                                 ws_last_upstream_frame_type = str(event_type or "unknown")
                                 logger.debug(
@@ -9727,6 +9912,11 @@ class OpenAIHandlerMixin:
                                 t.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await asyncio.gather(*relay_tasks, return_exceptions=True)
+                        if ws_prewarm is not None:
+                            ws_prewarm.close()
+                            keeper = getattr(self, "cache_keeper", None)
+                            if keeper is not None:
+                                keeper.release_channel(ws_prewarm)
 
                     logger.info(
                         "[%s] WS /v1/responses completed "
@@ -11351,7 +11541,14 @@ class OpenAIHandlerMixin:
             clean_model_id = sanitize_anthropic_model_id(unquote(raw_model_id))
             if clean_model_id != unquote(raw_model_id):
                 path = "/v1/models/" + quote(clean_model_id, safe="")
-        url = build_copilot_upstream_url(base_url, path)
+        from horizon.providers.bob import resolve_origin_passthrough_url
+
+        # Tools that build full gateway paths themselves (IBM Bob's
+        # /inference/v1/model/info, /admin/v1/profile) declare origin
+        # passthrough prefixes; joining those paths onto the base URL's own
+        # path would double or misroot the upstream URL.
+        origin_passthrough_url = resolve_origin_passthrough_url(base_url, path)
+        url = origin_passthrough_url or build_copilot_upstream_url(base_url, path)
 
         # Preserve query string parameters
         if request.url.query:
@@ -11498,6 +11695,17 @@ class OpenAIHandlerMixin:
         response_headers = _sanitize_forwarded_response_headers(response.headers)
         response_content = response.content
 
+        if origin_passthrough_url is not None and response.status_code == 200:
+            from horizon.providers.bob import strip_origin_passthrough_response_keys
+
+            # Bob's /admin/v1/profile carries region_domain, which bob
+            # 2.0.1 uses to rewrite its gateway host away from the proxy while
+            # keeping the proxied port — strip declared keys so the tool keeps
+            # routing through the configured gateway URL.
+            filtered = strip_origin_passthrough_response_keys(base_url, path, response_content)
+            if filtered is not None:
+                response_content, response_headers = _replaced_json_body(response, filtered)
+
         if provider == "anthropic" and endpoint_name == "models":
             from horizon.providers.anthropic import sanitize_anthropic_model_metadata
 
@@ -11507,18 +11715,12 @@ class OpenAIHandlerMixin:
             except (TypeError, ValueError):
                 sanitized_payload = None
             if sanitized_payload is not None and sanitized_payload != payload:
-                response_content = json.dumps(
-                    sanitized_payload,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                response_headers = _sanitize_forwarded_response_headers(
-                    response.headers,
-                    "etag",
-                    "last-modified",
-                    "cache-control",
+                response_content, response_headers = _replaced_json_body(
+                    response,
+                    json.dumps(sanitized_payload, separators=(",", ":"), ensure_ascii=False).encode(
+                        "utf-8"
+                    ),
                 )
-                response_headers["content-type"] = "application/json"
 
         # Passthrough request: forwarded upstream with no transforms.
         # Still recorded so dashboards see traffic on the passthrough
