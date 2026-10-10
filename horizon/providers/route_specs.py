@@ -108,6 +108,9 @@ OPENAI_HANDLER_ROUTES: tuple[ProviderHandlerRoute, ...] = (
     # Copilot Chat derives this unprefixed path from overrideCapiUrl. Route it
     # through the real handler; the generic catch-all would bypass compression.
     ProviderHandlerRoute("POST", "/chat/completions", "handle_openai_chat"),
+    # IBM Bob posts chat here (horizon.providers.bob); without a real route it
+    # would only match the catch-all and go out uncompressed.
+    ProviderHandlerRoute("POST", "/inference/v1/chat/completions", "handle_openai_chat"),
 )
 
 
