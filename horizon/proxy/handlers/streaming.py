@@ -822,6 +822,7 @@ class StreamingMixin:
         session_key: str | None = None,
         conversation_key: str | None = None,
         conversation_tokens_saved: int | None = None,
+        client_beta: str | None = None,
     ) -> Response | StreamingResponse:
         """Stream response with metrics tracking and memory tool handling.
 
@@ -868,6 +869,7 @@ class StreamingMixin:
                 session_key=session_key,
                 conversation_key=conversation_key,
                 conversation_tokens_saved=conversation_tokens_saved,
+                client_beta=client_beta,
             )
         except (Exception, asyncio.CancelledError):
             self._cleanup_mid_turn_stream(session_key)
@@ -900,6 +902,7 @@ class StreamingMixin:
         session_key: str,
         conversation_key: str | None = None,
         conversation_tokens_saved: int | None = None,
+        client_beta: str | None = None,
     ) -> Response | StreamingResponse:
         """Actual streaming implementation, guarded by _stream_response's cleanup wrapper."""
         from fastapi.responses import Response, StreamingResponse
@@ -920,7 +923,63 @@ class StreamingMixin:
         # of being swallowed. (#1608)
         if supports_mid_turn_coalescing(client):
             self._active_streams.add(session_key)
+
+        # Before the guard: its learned-limit lookup is keyed on the credential
+        # actually sent, the same one the 400 learning below keys on.
         headers = await apply_copilot_api_auth(headers, url=url)
+
+        # Context-limit guard (see horizon/proxy/context_guard.py): rewrites
+        # only the client-bound message_start bytes when the forwarded request
+        # is near the model's real window, so clients whose auto-compaction
+        # keys off reported usage compact gracefully instead of looping on
+        # prompt-too-long 400s. Metrics below parse the original upstream
+        # bytes and are unaffected.
+        context_guard = None
+        if provider == "anthropic":
+            from horizon.proxy.context_guard import (
+                StreamUsageGuard,
+                believed_context_limit,
+                context_guard_enabled,
+                credential_scope_from_headers,
+                effective_context_limit,
+            )
+
+            try:
+                if context_guard_enabled():
+                    _guard_model_limit = self.anthropic_provider.get_context_limit(model)
+                    _guard_beta = headers.get("anthropic-beta")
+                    _guard_scope = credential_scope_from_headers(headers)
+                    context_guard = StreamUsageGuard(
+                        # The client's gauge follows the beta the client
+                        # sent; session-sticky merging can add context-1m to
+                        # the outbound header after the client dropped it.
+                        # None: the caller did not say, use the outbound one.
+                        believed_limit=believed_context_limit(
+                            _guard_model_limit,
+                            _guard_beta if client_beta is None else client_beta,
+                        ),
+                        effective_limit=effective_context_limit(
+                            model, _guard_model_limit, _guard_beta, scope=_guard_scope
+                        ),
+                        request_id=request_id,
+                    )
+            except Exception:
+                logger.debug("context_guard setup skipped", exc_info=True)
+
+        def _guard_client_bytes(data: bytes) -> bytes:
+            """Client-bound bytes through the context guard, when there is one."""
+            return context_guard.feed(data) if context_guard is not None else data
+
+        def _drain_context_guard() -> bytes:
+            """Held-back guard bytes, once. Safe to call on any exit path."""
+            if context_guard is None:
+                return b""
+            try:
+                return context_guard.flush()
+            except Exception:
+                logger.debug("context_guard flush skipped", exc_info=True)
+                return b""
+
         start_time = time.time()
 
         # Byte-faithful forwarding (PR-A3, fixes P0-2). Resolve outbound
@@ -1224,6 +1283,24 @@ class StreamingMixin:
             finally:
                 await upstream_response.aclose()
 
+            if provider == "anthropic" and upstream_response.status_code == 400:
+                # Diagnostic only: whatever it makes of the body, the client
+                # still gets the upstream error below.
+                try:
+                    from horizon.proxy.context_guard import (
+                        credential_scope_from_headers,
+                        note_prompt_too_long,
+                    )
+
+                    note_prompt_too_long(
+                        model,
+                        headers.get("anthropic-beta"),
+                        error_content,
+                        scope=credential_scope_from_headers(headers),
+                    )
+                except Exception:
+                    logger.debug("context_guard: limit learning skipped", exc_info=True)
+
             # Say *why* the upstream refused (e.g. a Cloudflare block page vs a
             # JSON auth error) without logging request content or secrets.
             logger.warning(
@@ -1366,8 +1443,12 @@ class StreamingMixin:
                             stream_state["sse_buffer"] = bytearray(tail)
 
                         # Always stream immediately — buffering breaks
-                        # real-time clients (LangGraph, LangChain, etc.)
-                        yield chunk
+                        # real-time clients (LangGraph, LangChain, etc.).
+                        # The context guard may hold bytes back only until
+                        # the first complete event.
+                        guarded_chunk = _guard_client_bytes(chunk)
+                        if guarded_chunk:
+                            yield guarded_chunk
 
                         if _codex_wire_debug:
                             capture_codex_wire_debug(
@@ -1444,6 +1525,9 @@ class StreamingMixin:
                             "do not support custom tool injection. Set ANTHROPIC_API_KEY "
                             "environment variable or use --no-memory-tools flag."
                         )
+                        guarded_tail = _drain_context_guard()
+                        if guarded_tail:
+                            yield guarded_tail
                         return
 
                     # Parse SSE to get response JSON
@@ -1472,6 +1556,13 @@ class StreamingMixin:
                                 f"({len(tool_results)} results saved, SSE streaming — "
                                 "continuation handled by client)"
                             )
+
+                # A stream that ended before its first complete event may leave
+                # held-back bytes in the context guard; release them. Every exit
+                # does this: dropping them would truncate the client's stream.
+                guarded_tail = _drain_context_guard()
+                if guarded_tail:
+                    yield guarded_tail
 
                 # CCR Feedback: Record horizon_retrieve tool calls for TOIN learning.
                 # In streaming mode, the client handles actual retrieval, but we
@@ -1509,6 +1600,9 @@ class StreamingMixin:
 
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
                 logger.error(f"[{request_id}] Connection error to upstream API: {e}")
+                guarded_tail = _drain_context_guard()
+                if guarded_tail:
+                    yield guarded_tail
                 error_event = {
                     "type": "error",
                     "error": {
@@ -1519,10 +1613,16 @@ class StreamingMixin:
                 yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
             except httpx.HTTPStatusError as e:
                 logger.error(f"[{request_id}] HTTP error from upstream API: {e}")
+                guarded_tail = _drain_context_guard()
+                if guarded_tail:
+                    yield guarded_tail
                 # Forward the upstream error response
                 yield e.response.content
             except Exception as e:
                 logger.error(f"[{request_id}] Unexpected streaming error: {e}")
+                guarded_tail = _drain_context_guard()
+                if guarded_tail:
+                    yield guarded_tail
                 error_event = {
                     "type": "error",
                     "error": {"type": "api_error", "message": str(e)},

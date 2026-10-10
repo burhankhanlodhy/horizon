@@ -1925,6 +1925,24 @@ class AnthropicHandlerMixin:
                     from horizon.proxy.helpers import COMPRESSION_TIMEOUT_SECONDS
 
                     context_limit = self.anthropic_provider.get_context_limit(model)
+                    # Context pressure must be computed against the window the
+                    # request is really subject to: raised to 1M when the
+                    # client sent a context-1m beta (a 1M session is NOT 5x
+                    # over budget), capped by a limit learned from an actual
+                    # prompt-too-long error. See horizon/proxy/context_guard.py.
+                    from horizon.proxy.context_guard import (
+                        context_guard_enabled,
+                        credential_scope_from_headers,
+                        effective_context_limit,
+                    )
+
+                    if context_guard_enabled():
+                        context_limit = effective_context_limit(
+                            model,
+                            context_limit,
+                            headers.get("anthropic-beta"),
+                            scope=credential_scope_from_headers(headers),
+                        )
                     # Price-cliff guard (opt-in, HORIZON_PRICE_CLIFF_GUARD): near a
                     # model's whole-request price tier (Haiku 5.5 at 100k), run
                     # this request's compression with tighter knobs.
@@ -4275,6 +4293,7 @@ class AnthropicHandlerMixin:
                         session_key=session_key,
                         conversation_key=_savings_key,
                         conversation_tokens_saved=tokens_saved if _savings_key else None,
+                        client_beta=client_anthropic_beta or "",
                     )
                 else:
                     # Whatever set it — the client's own ``stream: false`` or
@@ -4403,6 +4422,30 @@ class AnthropicHandlerMixin:
                                     else str(response.text[:500])
                                 )
                                 err_type = "parse_error"
+
+                            if response.status_code == 400:
+                                # Diagnostic only, and outside the parse above:
+                                # `err_msg` is whatever upstream put in that slot
+                                # (null, an object, a list have all been seen), and
+                                # the client is still waiting for the real error
+                                # body below.
+                                try:
+                                    from horizon.proxy.context_guard import (
+                                        credential_scope_from_headers,
+                                        note_prompt_too_long,
+                                    )
+
+                                    note_prompt_too_long(
+                                        model,
+                                        headers.get("anthropic-beta"),
+                                        err_msg,
+                                        scope=credential_scope_from_headers(headers),
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        f"[{request_id}] context_guard: limit learning skipped",
+                                        exc_info=True,
+                                    )
 
                             logger.warning(
                                 f"[{request_id}] UPSTREAM_ERROR "
@@ -5142,7 +5185,14 @@ class AnthropicHandlerMixin:
                                 )
                                 if not buffered_stream_ccr:
                                     return Response(
-                                        content=response.content,
+                                        content=self._context_guard_nudge_body(
+                                            response.content,
+                                            status_code=response.status_code,
+                                            model=model,
+                                            headers=headers,
+                                            request_id=request_id,
+                                            client_beta=client_anthropic_beta or "",
+                                        ),
                                         status_code=response.status_code,
                                         headers=response_headers,
                                     )
@@ -5264,6 +5314,15 @@ class AnthropicHandlerMixin:
                                     status_code=502,
                                 )
 
+                            # This stream is resynthesized from the parsed message,
+                            # so the streaming guard never sees it: nudge here.
+                            self._context_guard_nudge_message(
+                                resp_json,
+                                model=model,
+                                headers=headers,
+                                request_id=request_id,
+                                client_beta=client_anthropic_beta or "",
+                            )
                             try:
                                 sse_events = self._response_to_sse(resp_json, "anthropic")
                             except ValueError as sse_err:
@@ -5295,7 +5354,14 @@ class AnthropicHandlerMixin:
                             )
 
                         return Response(
-                            content=response.content,
+                            content=self._context_guard_nudge_body(
+                                response.content,
+                                status_code=response.status_code,
+                                model=model,
+                                headers=headers,
+                                request_id=request_id,
+                                client_beta=client_anthropic_beta or "",
+                            ),
                             status_code=response.status_code,
                             headers=response_headers,
                         )
@@ -5411,6 +5477,96 @@ class AnthropicHandlerMixin:
             # deep-copy) would otherwise leak the pre-upstream semaphore
             # permanently. The emit function is idempotent.
             await _finalize_pre_upstream()
+
+    def _context_guard_nudge_body(
+        self,
+        content: bytes,
+        *,
+        status_code: int,
+        model: str,
+        headers: dict[str, str],
+        request_id: str,
+        client_beta: str | None = None,
+    ) -> bytes:
+        """Apply the context guard to a buffered (non-streaming) message body.
+
+        The buffered path raises the compression budget through
+        ``effective_context_limit`` exactly like the streaming path, so it has
+        to move the client's gauge exactly like the streaming path too. Without
+        this, a non-streaming client got the larger forwarded request and none
+        of the warning, and walked into the prompt-too-long wall the guard
+        exists to keep it away from.
+
+        Returns ``content`` unchanged unless the usage genuinely needed
+        nudging, so byte-faithful forwarding still holds for every response
+        that is not near the wall.
+        """
+        if status_code != 200 or not content:
+            return content
+        try:
+            payload = json.loads(content)
+        except Exception:
+            return content
+        if not self._context_guard_nudge_message(
+            payload,
+            model=model,
+            headers=headers,
+            request_id=request_id,
+            client_beta=client_beta,
+        ):
+            return content
+        return json.dumps(payload).encode()
+
+    def _context_guard_nudge_message(
+        self,
+        payload: Any,
+        *,
+        model: str,
+        headers: dict[str, str],
+        request_id: str,
+        client_beta: str | None = None,
+    ) -> bool:
+        """Nudge a parsed message's usage in place; True when it changed.
+
+        Shared by the buffered body above and the buffered-CCR stream, which
+        resynthesizes SSE from the parsed message and so never passes through
+        the streaming guard. ``client_beta`` is the beta the client itself
+        sent (its gauge follows it; session-sticky merging can add context-1m
+        to the outbound header); None falls back to the outbound header.
+        """
+        try:
+            from horizon.proxy.context_guard import (
+                believed_context_limit,
+                context_guard_enabled,
+                credential_scope_from_headers,
+                effective_context_limit,
+                nudge_response_usage,
+            )
+
+            if not context_guard_enabled():
+                return False
+            if not isinstance(payload, dict) or payload.get("type") != "message":
+                return False
+            model_limit = self.anthropic_provider.get_context_limit(model)
+            beta_header = headers.get("anthropic-beta")
+            return bool(
+                nudge_response_usage(
+                    payload,
+                    believed_limit=believed_context_limit(
+                        model_limit, beta_header if client_beta is None else client_beta
+                    ),
+                    effective_limit=effective_context_limit(
+                        model,
+                        model_limit,
+                        beta_header,
+                        scope=credential_scope_from_headers(headers),
+                    ),
+                    request_id=request_id,
+                )
+            )
+        except Exception:
+            logger.debug(f"[{request_id}] context_guard: buffered nudge skipped", exc_info=True)
+            return False
 
     def _anthropic_batch_capability_error(self) -> Response | None:
         """Return the stable client error for a Copilot batch target."""
@@ -5579,6 +5735,23 @@ class AnthropicHandlerMixin:
             original_tokens = 0  # Initialize before try to prevent UnboundLocalError
             try:
                 context_limit = self.anthropic_provider.get_context_limit(model)
+                # Same window the streaming path computes: a batch item for a
+                # 1M-beta model was otherwise compressed against the registry
+                # limit, so identical requests got two different budgets
+                # depending on which endpoint they arrived through.
+                from horizon.proxy.context_guard import (
+                    context_guard_enabled,
+                    credential_scope_from_headers,
+                    effective_context_limit,
+                )
+
+                if context_guard_enabled():
+                    context_limit = effective_context_limit(
+                        model,
+                        context_limit,
+                        headers.get("anthropic-beta"),
+                        scope=credential_scope_from_headers(headers),
+                    )
                 frozen_message_count = (
                     self._strict_previous_turn_frozen_count(original_messages, 0)
                     if is_cache_mode(self.config.mode)
