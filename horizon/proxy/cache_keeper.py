@@ -28,6 +28,18 @@ because each ping costs half as much. A ping that misses (had to
 write, or read nothing) stops the group: the cache was already gone. So does a
 window the scheduler missed: a late ping would only pay to rebuild it.
 
+OpenAI (GPT-5.6 and later) keeps a cached prefix for 30 minutes after its
+last write or reuse, bills writes at 1.25x input and reads at 0.1x (0.05x on
+GPT-6.1 Sol), and reuse refreshes the 30 minutes. Measured 2026-10-10 on
+gpt-6.1-sol: an exact copy of the last request with
+``prompt_cache_options.prewarm: true`` bills only cache reads, no writes and no
+output; the cache is keyed by request parameters (reasoning effort included),
+so the copy must be exact. Chat Completions rejects ``prewarm``, but the same
+request with ``max_completion_tokens: 16`` still reads the whole cached prefix
+(the output limit is not part of the key), so a Chat session is pinged that
+way for a few output tokens. A Responses request chained to an UNSTORED
+response (``store: false``) cannot be warmed over HTTP and is skipped.
+
 Measurement: every ping is billed to its owner as it happens (``reporter``),
 whether or not the user ever returns, so abandoned sessions count against the
 feature. A request that resumes a group after a gap longer than the entry's
@@ -51,15 +63,22 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-TTL_5M, TTL_1H = 300, 3600
+TTL_5M, TTL_30M, TTL_1H = 300, 1800, 3600
 # Ping this long before the entry would expire: early enough to absorb a slow
 # ping, late enough not to spend pings an active session makes unnecessary.
-MARGINS = {TTL_5M: 45, TTL_1H: 300}
+MARGINS = {TTL_5M: 45, TTL_30M: 120, TTL_1H: 300}
 # Too close to expiry to be sure the ping lands first: treat the window as missed.
 LATE = 5
-WRITE_MULTIPLIER = {TTL_5M: 1.25, TTL_1H: 2.0}
+WRITE_MULTIPLIER = {TTL_5M: 1.25, TTL_30M: 1.25, TTL_1H: 2.0}
 READ_MULTIPLIER = 0.1
 LIVENESS_HEADER = "x-horizon-keepalive-id"
+
+#: Request shapes the keeper can pre-warm.
+ANTHROPIC = "anthropic"
+OPENAI_RESPONSES = "openai_responses"
+OPENAI_CHAT = "openai_chat"
+#: Output limit of a Chat Completions ping (Chat has no output-free pre-warm).
+CHAT_PING_MAX_TOKENS = 16
 
 # (status, usage) for one pre-warm request; usage is the response's usage block.
 Sender = Callable[[str, dict[str, str], dict[str, Any]], Awaitable[tuple[int, dict[str, Any]]]]
@@ -122,6 +141,59 @@ def prewarm_body(body: dict[str, Any]) -> dict[str, Any] | None:
     return warm
 
 
+def openai_ttl(model: str) -> int | None:
+    """30 minutes for GPT-5.6 and later (the documented minimum lifetime); ``None`` before."""
+    import re
+
+    match = re.search(r"gpt-(\d+)(?:\.(\d+))?", (model or "").lower())
+    if match is None:
+        return None
+    version = (int(match.group(1)), int(match.group(2) or 0))
+    return TTL_30M if version >= (5, 6) else None
+
+
+def openai_prewarm_body(body: dict[str, Any], flavor: str) -> dict[str, Any] | None:
+    """The ping form of an OpenAI request, or ``None`` when it cannot be warmed.
+
+    Responses: the exact request plus ``prompt_cache_options.prewarm`` (reads
+    only, no output). Chat Completions: the exact request with a 16-token
+    output limit (the limit is not part of the cache key). Streaming is off in
+    both; nothing else changes, because the cache is keyed by the parameters.
+    """
+    warm = copy.deepcopy(body)
+    warm.pop("stream", None)
+    warm.pop("stream_options", None)
+    if flavor == OPENAI_RESPONSES:
+        if warm.get("previous_response_id") and warm.get("store") is False:
+            return None  # an unstored chain is not found over HTTP
+        options = warm.get("prompt_cache_options")
+        warm["prompt_cache_options"] = {
+            **(options if isinstance(options, dict) else {}),
+            "prewarm": True,
+        }
+        warm["stream"] = False
+        return warm
+    if flavor == OPENAI_CHAT:
+        warm.pop("max_tokens", None)
+        warm["max_completion_tokens"] = CHAT_PING_MAX_TOKENS
+        warm["n"] = 1
+        warm["stream"] = False
+        return warm
+    return None
+
+
+def _openai_usage(usage: dict[str, Any]) -> tuple[int, int, int, int]:
+    """(read, write, uncached, output) from a Responses or Chat usage block."""
+    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+    if not isinstance(details, dict):
+        details = {}
+    total = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+    read = int(details.get("cached_tokens") or 0)
+    write = int(details.get("cache_write_tokens") or 0)
+    output = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    return read, write, max(0, total - read - write), output
+
+
 def group_of(
     headers: dict[str, str], liveness_id: str | None = None, owner_id: str | None = None
 ) -> str:
@@ -147,6 +219,7 @@ class _Pending:
     started: float
     owner: Any
     meta: dict[str, Any]
+    flavor: str = ANTHROPIC
 
 
 @dataclass
@@ -157,6 +230,7 @@ class _Group:
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     body: dict[str, Any] = field(default_factory=dict)  # emptied once the group stops pinging
+    flavor: str = ANTHROPIC
     model: str = ""
     ttl: int = TTL_5M
     context_tokens: int = 0
@@ -221,6 +295,7 @@ class CacheKeeper:
         liveness_id: str | None = None,
         owner: Any = None,
         meta: dict[str, Any] | None = None,
+        flavor: str = ANTHROPIC,
     ) -> None:
         """Remember a forwarded request until its usage says whether it is worth keeping.
 
@@ -231,10 +306,19 @@ class CacheKeeper:
         warm only when the client sent a liveness id, which is also what lets
         the client end them, and never once its plan has paused savings.
         """
-        if not body.get("tools") or body.get("max_tokens") == 0:
-            return  # side calls (titles, quick questions) and our own pings
-        if ttl_of(body) is None:
-            return  # nothing cached, nothing to keep warm
+        if flavor == ANTHROPIC:
+            if not body.get("tools") or body.get("max_tokens") == 0:
+                return  # side calls (titles, quick questions) and our own pings
+            if ttl_of(body) is None:
+                return  # nothing cached, nothing to keep warm
+        else:
+            options = body.get("prompt_cache_options")
+            if not body.get("tools") or (isinstance(options, dict) and options.get("prewarm")):
+                return  # side calls and our own pings
+            if openai_ttl(str(body.get("model") or "")) is None:
+                return  # before GPT-5.6: no billed writes, nothing worth keeping
+            if openai_prewarm_body(body, flavor) is None:
+                return
         if owner is not None and (
             not liveness_id or getattr(owner, "compression_allowed", True) is False
         ):
@@ -243,7 +327,7 @@ class CacheKeeper:
         if group in self._ended:
             return
         self._pending[request_id] = _Pending(
-            group, url, dict(headers), body, self._clock(), owner, dict(meta or {})
+            group, url, dict(headers), body, self._clock(), owner, dict(meta or {}), flavor
         )
         while len(self._pending) > 64:
             self._pending.popitem(last=False)
@@ -271,7 +355,11 @@ class CacheKeeper:
             self._groups[p.group] = g
         g.owner, g.meta = p.owner, p.meta
         g.url, g.headers, g.body, g.model = p.url, p.headers, copy.deepcopy(p.body), model
-        g.ttl = ttl_of(p.body) or TTL_5M
+        g.flavor = p.flavor
+        if p.flavor == ANTHROPIC:
+            g.ttl = ttl_of(p.body) or TTL_5M
+        else:
+            g.ttl = openai_ttl(model) or openai_ttl(str(p.body.get("model") or "")) or TTL_30M
         g.tools_tokens = len(json.dumps(p.body.get("tools") or [])) // 4
         g.context_tokens = context
         g.last_request_at = g.last_touch_at = p.started
@@ -335,6 +423,10 @@ class CacheKeeper:
             rates = _rates(model)
             if rates["basis"] != "fallback" and rates["read"] > 0:
                 read, write = rates["read"], rates["w1h" if ttl == TTL_1H else "w5m"]
+                if ttl == TTL_30M:
+                    # A Chat ping also bills its few output tokens; spread over
+                    # the context they are noise, so the read rate stands.
+                    write = max(write, rates["input"] * WRITE_MULTIPLIER[TTL_30M])
         if write <= read:
             return 0
         return int(self.return_odds * (write - read) / read)
@@ -387,13 +479,16 @@ class CacheKeeper:
     async def _ping(self, g: _Group, slots: asyncio.Semaphore) -> int:
         """One pre-warm for ``g``; bills it whatever happens and stops the group on a miss."""
         try:
-            body = prewarm_body(g.body)
+            if g.flavor == ANTHROPIC:
+                body = prewarm_body(g.body)
+            else:
+                body = openai_prewarm_body(g.body, g.flavor)
             if body is None:
                 g.stopped = True
                 self._release(g, "unsupported")
                 return 0
             generation, owner, meta, model, ttl = g.generation, g.owner, g.meta, g.model, g.ttl
-            rates = _rates(model)
+            rates = _rates(model) if g.flavor == ANTHROPIC else _rates(model, "openai")
             started = self._clock()
             status, usage, estimated = 0, {}, False
             try:
@@ -410,24 +505,41 @@ class CacheKeeper:
                 # The provider may have billed it: book a full read of the context.
                 usage = {"cache_read_input_tokens": g.context_tokens}
                 estimated = True
-            read = int(usage.get("cache_read_input_tokens") or 0)
-            write = int(usage.get("cache_creation_input_tokens") or 0)
-            uncached = int(usage.get("input_tokens") or 0)
+            output = 0
+            if g.flavor != ANTHROPIC and not estimated:
+                read, write, uncached, output = _openai_usage(usage)
+            else:
+                read = int(usage.get("cache_read_input_tokens") or 0)
+                write = int(usage.get("cache_creation_input_tokens") or 0)
+                uncached = int(usage.get("input_tokens") or 0)
             write_rate = rates["w1h"] if ttl == TTL_1H else rates["w5m"]
-            cost = read * rates["read"] + write * write_rate + uncached * rates["input"]
+            cost = (
+                read * rates["read"]
+                + write * write_rate
+                + uncached * rates["input"]
+                + output * rates.get("output", 0.0)
+            )
             if status and status != 200:
                 cost = 0.0  # rejected requests are not billed
             current = self._groups.get(g.key) is g and g.generation == generation
-            missed = estimated or status != 200 or write > 0 or read == 0
+            if g.flavor == ANTHROPIC:
+                missed = estimated or status != 200 or write > 0 or read == 0
+            else:
+                # OpenAI writes a few tail tokens even on a hit (measured 3-16);
+                # a rewrite of the context is what says the cache was gone.
+                context = read + write + uncached
+                missed = estimated or status != 200 or read == 0 or write > 0.05 * context
             record = {
                 "event": "cache_keeper_stop" if missed else "cache_keeper_ping",
                 "group": g.key[:16],
+                "provider": "openai" if g.flavor != ANTHROPIC else "anthropic",
                 "model": model,
                 "ttl": ttl,
                 "status": status,
                 "read": read,
                 "write": write,
                 "uncached": uncached,
+                "output": output,
                 "cost_usd": round(cost, 6),
                 "estimated": estimated,
                 "pricing_basis": rates["basis"],
@@ -462,7 +574,7 @@ class CacheKeeper:
     # -- accounting -----------------------------------------------------------
 
     def _resume_event(self, g: _Group, idle: float, cache_read: int) -> dict[str, Any]:
-        rates = _rates(g.model)
+        rates = _rates(g.model) if g.flavor == ANTHROPIC else _rates(g.model, "openai")
         write_rate = rates["w1h"] if g.ttl == TTL_1H else rates["w5m"]
         kept = max(
             0, cache_read - max(g.baseline_read, g.tools_tokens)
@@ -497,18 +609,21 @@ class CacheKeeper:
                 pass
 
 
-def _rates(model: str) -> dict[str, Any]:
-    """Per-token read / 5-minute write / 1-hour write / uncached rates for ``model``."""
+def _rates(model: str, provider: str = "anthropic") -> dict[str, Any]:
+    """Per-token read / 5-minute (or 30-minute) write / 1-hour write / uncached /
+    output rates for ``model``."""
     try:
-        from horizon.pricing.counterfactual import resolve_rates
+        from horizon.pricing.counterfactual import _catalog_row, resolve_rates
 
-        r = resolve_rates(model, long_context=False, provider="anthropic")
+        r = resolve_rates(model, long_context=False, provider=provider)
         if r is not None:
+            output = _catalog_row(model).get("output_cost_per_token")
             return {
                 "read": r.read,
                 "w5m": r.write_5m,
                 "w1h": r.write_1h,
                 "input": r.uncached,
+                "output": float(output) if output is not None else r.uncached * 5,
                 "basis": r.basis,
             }
     except Exception:  # pragma: no cover - pricing must never break the keeper
@@ -519,6 +634,7 @@ def _rates(model: str) -> dict[str, Any]:
         "w5m": base * 1.25,
         "w1h": base * 2,
         "input": base,
+        "output": base * 5,
         "basis": "fallback",
     }
 

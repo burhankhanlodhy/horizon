@@ -1995,6 +1995,39 @@ class OpenAIHandlerMixin:
         """
         return _resolve_openai_upstream_base(request.headers) or self.OPENAI_API_URL
 
+    def _keepalive_record(
+        self,
+        request: Any,
+        request_id: str,
+        url: str,
+        headers: Any,
+        body: dict[str, Any],
+        client: str | None,
+        flavor: str,
+    ) -> None:
+        """The request about to be sent: what the cache keeper re-sends as a
+        pre-warm if this session then goes idle (GPT-5.6+; horizon.proxy.cache_keeper)."""
+        keeper = getattr(self, "cache_keeper", None)
+        if keeper is None:
+            return
+        try:
+            from horizon.proxy.account_analytics import _account
+            from horizon.proxy.cache_keeper import LIVENESS_HEADER
+            from horizon.proxy.project_context import get_current_project
+
+            keeper.record_request(
+                request_id,
+                url=url,
+                headers=dict(headers),
+                body=body,
+                liveness_id=request.headers.get(LIVENESS_HEADER),
+                owner=_account.get(),
+                meta={"project": get_current_project(), "agent": client},
+                flavor=flavor,
+            )
+        except Exception:  # pragma: no cover - keep-alive must never fail a request
+            logger.debug("cache keeper record skipped", exc_info=True)
+
     def _maybe_flash_openai(
         self,
         items: Any,
@@ -5370,6 +5403,7 @@ class OpenAIHandlerMixin:
             handler_path,
         )
         url = _append_request_query(url, request.url.query)
+        self._keepalive_record(request, request_id, url, headers, body, client, "openai_chat")
 
         try:
             if stream:
@@ -6644,6 +6678,7 @@ class OpenAIHandlerMixin:
                 "upstream request for server-side retrieval handling"
             )
 
+        self._keepalive_record(request, request_id, url, headers, body, client, "openai_responses")
         try:
             if stream and not buffered_stream_ccr:
                 # Streaming for Responses API uses semantic events

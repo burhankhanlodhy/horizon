@@ -316,7 +316,7 @@ async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
         "runtime_id": context.service.runtime_id,
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
-        "provider": "anthropic",
+        "provider": str(record.get("provider") or "anthropic")[:100],
         "model": str(record.get("model") or "unknown")[:200],
         "project": str(meta["project"])[:100] if meta.get("project") else None,
         "agent": str(meta["agent"])[:100] if meta.get("agent") else None,

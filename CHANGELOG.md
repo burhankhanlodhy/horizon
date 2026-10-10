@@ -59,6 +59,15 @@ All notable changes to Horizon are documented here.
   and a $3/M fallback cost.
 
 ### Added
+- Cache keep-alive for OpenAI GPT-5.6 and later (`HORIZON_CACHE_KEEPALIVE=1`).
+  Their cache lives 30 minutes after its last use and a rewrite costs 1.25x
+  input; an idle session is pinged two minutes before expiry. Responses: the
+  exact last request with `prompt_cache_options.prewarm` (reads only, no
+  output; also stored `previous_response_id` chains). Chat Completions, which
+  rejects `prewarm`: the same request with a 16-token output limit. Measured
+  on gpt-6.1-sol: warmed sessions still hit at 52 minutes, an untouched one
+  was rewritten. Unstored chains (WebSocket / `store: false`) are not covered
+  yet. Ping rows carry their provider.
 - Cache routing for Grok (`HORIZON_CACHE_ROUTING=1`, set by
   `HORIZON_SAVINGS=auto`): when a client sends no conversation id, Horizon adds
   a stable per-conversation, per-account `x-grok-conv-id` (Chat Completions) or

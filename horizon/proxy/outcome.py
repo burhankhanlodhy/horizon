@@ -654,7 +654,11 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     # held warm carries the rewrite it avoided in its own savings.
     keepalive_usd = 0.0
     keeper = getattr(handler, "cache_keeper", None)
-    if keeper is not None and outcome.provider == "anthropic" and outcome.status_code < 400:
+    if (
+        keeper is not None
+        and outcome.provider in ("anthropic", "openai")
+        and outcome.status_code < 400
+    ):
         resume = keeper.record_usage(
             outcome.request_id,
             model=outcome.model,
