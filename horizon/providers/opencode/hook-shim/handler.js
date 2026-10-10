@@ -9,6 +9,14 @@ var fs = nodeRequire("node:fs");
 var BASE_URL_HEADER = "x-horizon-base-url";
 var ORIGINAL_PATH_HEADER = "x-horizon-original-path";
 var PROJECT_HEADER = "x-horizon-project";
+var KEEPALIVE_HEADER = "x-horizon-keepalive-id";
+var KEEPALIVE_ENV = "HORIZON_KEEPALIVE_ID";
+function setKeepaliveHeader(headers) {
+  const keepalive = process.env[KEEPALIVE_ENV];
+  if (keepalive && !headers.has(KEEPALIVE_HEADER)) {
+    headers.set(KEEPALIVE_HEADER, keepalive);
+  }
+}
 var PROXY_ENV = "HORIZON_OPENCODE_TRANSPORT_PROXY_URL";
 var EXCLUDE_HOSTS_ENV = "HORIZON_OPENCODE_EXCLUDE_HOSTS";
 var STATE_KEY = /* @__PURE__ */ Symbol.for("horizon.opencode.transport");
@@ -199,6 +207,7 @@ function mergeFetchHeaders(input, init, upstream, originalPath = void 0, project
   if (project) {
     headers.set(PROJECT_HEADER, project);
   }
+  setKeepaliveHeader(headers);
   return headers;
 }
 function withRoutedFetchInput(input, init, proxy, project, excludeHosts) {
@@ -264,6 +273,7 @@ function headersForNodeRequest(options, upstream, originalPath, project) {
   if (project) {
     headers.set(PROJECT_HEADER, project);
   }
+  setKeepaliveHeader(headers);
   headers.delete("host");
   const result = {};
   headers.forEach((value, key) => {

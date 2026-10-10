@@ -1225,3 +1225,49 @@ def test_unwrap_leaves_a_users_own_horizon_provider(
         runner.invoke(main, ["unwrap", "opencode"])
 
     assert config_file.read_text(encoding="utf-8") == own
+
+
+def _run_wrap_capturing_keepalive(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[dict[str, object], list[tuple[str | None, str | None]]]:
+    monkeypatch.chdir(tmp_path)
+    _set_test_home(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+    ended: list[tuple[str | None, str | None]] = []
+
+    def fake_launch_tool(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+
+    with (
+        patch.object(wrap_mod.shutil, "which", return_value="opencode"),
+        patch.object(wrap_mod, "_launch_tool", side_effect=fake_launch_tool),
+        patch.object(wrap_mod, "_end_keepalive", side_effect=lambda *a: ended.append(a)),
+    ):
+        result = runner.invoke(main, ["wrap", "opencode", "--port", "9000", "--no-mcp"])
+    assert result.exit_code == 0, result.output
+    return captured, ended
+
+
+def test_wrap_opencode_sends_a_keepalive_id_and_ends_it_on_exit(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hosted proxy keeps the prompt cache warm only while OpenCode runs."""
+    monkeypatch.delenv("HORIZON_KEEPALIVE_ID", raising=False)
+    captured, ended = _run_wrap_capturing_keepalive(runner, tmp_path, monkeypatch)
+    env = captured["env"]
+    assert isinstance(env, dict)
+    keepalive_id = env["HORIZON_KEEPALIVE_ID"]
+    assert len(keepalive_id) == 32
+    providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]
+    assert providers["openai"]["options"]["headers"] == {"X-Horizon-Keepalive-Id": keepalive_id}
+    assert ended == [("http://127.0.0.1:9000", keepalive_id)]
+
+
+def test_wrap_opencode_keeps_a_user_keepalive_id_and_leaves_it_running(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HORIZON_KEEPALIVE_ID", "shared-session")
+    captured, ended = _run_wrap_capturing_keepalive(runner, tmp_path, monkeypatch)
+    env = captured["env"]
+    assert isinstance(env, dict) and env["HORIZON_KEEPALIVE_ID"] == "shared-session"
+    assert ended == [("http://127.0.0.1:9000", None)]  # no-op: not ours to end

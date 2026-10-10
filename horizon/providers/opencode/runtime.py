@@ -6,10 +6,16 @@ import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from horizon.mcp_registry.install import DEFAULT_PROXY_URL
 
 from .config import HORIZON_OPENCODE_PLUGIN, horizon_provider_entry
+
+# Per-launch cache keep-alive id (set by ``horizon wrap opencode``); the
+# transport plugin reads the same env var.
+KEEPALIVE_ENV = "HORIZON_KEEPALIVE_ID"
+KEEPALIVE_HEADER = "X-Horizon-Keepalive-Id"
 
 
 def proxy_base_url(port: int) -> str:
@@ -58,6 +64,7 @@ def build_opencode_config_content(
     port: int,
     include_mcp: bool = True,
     include_plugin: bool = True,
+    keepalive_id: str | None = None,
 ) -> dict[str, object]:
     """Build JSON payload for ``OPENCODE_CONFIG_CONTENT``.
 
@@ -81,15 +88,22 @@ def build_opencode_config_content(
 
     ponytail: config-level ``options.baseURL`` is reliable where the env-var
     override (``ANTHROPIC_BASE_URL``) is not — verified against opencode 1.17.
+
+    ``keepalive_id`` (per launch) is sent as ``X-Horizon-Keepalive-Id`` so the
+    proxy keeps this session's prompt cache warm only while OpenCode runs. The
+    plugin does not touch loopback requests, so the providers pointed straight
+    at the proxy carry it as a provider header; the plugin adds it to the rest.
     """
     base_url = proxy_base_url(port)
-    config: dict[str, object] = {
-        "provider": {
-            "anthropic": {"options": {"baseURL": base_url}},
-            "openai": {"options": {"baseURL": base_url}},
-            "horizon": horizon_provider_entry(port),
-        }
+    providers: dict[str, dict[str, Any]] = {
+        "anthropic": {"options": {"baseURL": base_url}},
+        "openai": {"options": {"baseURL": base_url}},
+        "horizon": horizon_provider_entry(port),
     }
+    if keepalive_id:
+        for entry in providers.values():
+            entry["options"]["headers"] = {KEEPALIVE_HEADER: keepalive_id}
+    config: dict[str, object] = {"provider": providers}
     if include_mcp:
         proxy_url = f"http://127.0.0.1:{port}"
         mcp_entry: dict[str, object] = {
@@ -122,6 +136,7 @@ def build_launch_env(
     """Build environment variables for launching OpenCode through Horizon.
 
     ``OPENCODE_CONFIG_CONTENT`` carries Horizon provider/MCP/plugin config.
+    A ``HORIZON_KEEPALIVE_ID`` in ``environ`` is sent with every request.
     Existing provider/base URL environment variables are preserved. When the
     transport plugin is loaded, ``HORIZON_PROXY_URL`` tells it which proxy to
     route to.
@@ -132,6 +147,7 @@ def build_launch_env(
         port=port,
         include_mcp=include_mcp,
         include_plugin=include_plugin,
+        keepalive_id=env.get(KEEPALIVE_ENV) or None,
     )
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config_content, separators=(",", ":"))
 

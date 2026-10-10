@@ -190,6 +190,7 @@ from horizon.providers.opencode.config import (
     snapshot_opencode_config_if_unwrapped,
     strip_opencode_horizon_blocks,
 )
+from horizon.providers.opencode.runtime import KEEPALIVE_ENV
 from horizon.providers.zcode import (
     detect_upstream as _detect_zcode_upstream,
 )
@@ -3042,6 +3043,19 @@ def _apply_interactive_header_env(env: dict[str, str], claude_args: tuple | list
     headless = any(arg in ("-p", "--print") for arg in claude_args or ())
     header_line = f"{_INTERACTIVE_HEADER_NAME}: {0 if headless else 1}"
     env["ANTHROPIC_CUSTOM_HEADERS"] = f"{existing}\n{header_line}" if existing else header_line
+
+
+def _apply_keepalive_env(env: dict[str, str]) -> str | None:
+    """Set a per-launch keep-alive id in ``HORIZON_KEEPALIVE_ID``; returns it.
+
+    OpenCode sends it as ``X-Horizon-Keepalive-Id``. A user-set value wins, and
+    then wrap does not end that session on exit either (returns None).
+    """
+    if env.get(KEEPALIVE_ENV):
+        return None
+    keepalive_id = uuid.uuid4().hex
+    env[KEEPALIVE_ENV] = keepalive_id
+    return keepalive_id
 
 
 def _end_keepalive(proxy_url: str | None, keepalive_id: str | None) -> None:
@@ -8139,6 +8153,7 @@ def opencode(
         ),
     )
 
+    _opencode_keepalive_id: str | None = None
     try:
         # If the proxy fell back to a different port, move our marker so
         # cleanup tracking stays accurate and update MCP config.
@@ -8153,6 +8168,9 @@ def opencode(
         launch_environ = os.environ.copy()
         if subscription_resolution is not None:
             _scrub_copilot_subscription_launch_env(launch_environ)
+        # Cache keep-alive liveness: the proxy keeps this session's prompt cache
+        # warm only while OpenCode runs, and stops when it exits (finally below).
+        _opencode_keepalive_id = _apply_keepalive_env(launch_environ)
         env, env_vars_display = _build_opencode_launch_env(
             actual_port, launch_environ, project=_project_name_from_cwd(), include_mcp=not no_mcp
         )
@@ -8184,6 +8202,7 @@ def opencode(
             region=region,
         )
     finally:
+        _end_keepalive(f"http://127.0.0.1:{actual_port}", _opencode_keepalive_id)
         if _opencode_proxy and _opencode_proxy.poll() is None:
             _other = _live_proxy_clients(actual_port, exclude_self=True)
             if not _other:
