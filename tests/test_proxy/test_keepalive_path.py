@@ -57,3 +57,8 @@ def test_the_hosted_account_gate_accepts_the_path() -> None:
     assert INFERENCE.fullmatch("/k/abc123/v1/responses")
     assert AUXILIARY.fullmatch("/p/demo/k/abc123/v1/models")
     assert not INFERENCE.fullmatch("/k/abc123/admin")
+
+
+def test_the_account_gate_accepts_bobs_chat_path() -> None:
+    assert INFERENCE.fullmatch("/p/demo/inference/v1/chat/completions")
+    assert not INFERENCE.fullmatch("/admin/v1/profile")

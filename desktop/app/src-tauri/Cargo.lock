@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "contextshrink-desktop"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "dbus-secret-service",
  "dunce",

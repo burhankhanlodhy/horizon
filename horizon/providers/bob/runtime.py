@@ -123,6 +123,14 @@ def _strip_json_key(obj: object, key: str) -> bool:
     return removed
 
 
+def filters_response(base_url: str | None, path: str) -> bool:
+    """True when a reply on ``path`` from ``base_url`` may need keys removed."""
+    return _bob_origin(base_url) is not None and any(
+        path == declared or path.startswith(declared.rstrip("/") + "/")
+        for declared, _ in _STRIP_JSON_KEYS
+    )
+
+
 def strip_origin_passthrough_response_keys(
     base_url: str | None, path: str, body: bytes
 ) -> bytes | None:

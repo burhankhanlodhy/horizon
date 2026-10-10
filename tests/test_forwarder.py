@@ -366,3 +366,41 @@ def test_websocket_refused_upstream_rejects_the_handshake() -> None:
         with client.websocket_connect("/v1/responses"):
             pass
     assert exc.value.code == 1008
+
+
+# ── IBM Bob (forwarder pinned to IBM's bare gateway origin) ──────────────────
+
+BOB = "https://api.us-east.bob.ibm.com"
+
+
+def test_bob_chat_goes_to_the_proxy_tagged_for_ibm() -> None:
+    seen: list = []
+    _upstream_client(seen, BOB).post("/p/demo/inference/v1/chat/completions", json={"model": "m"})
+    (req,) = seen
+    assert str(req.url) == REMOTE + "/p/demo/inference/v1/chat/completions"
+    assert req.headers["x-horizon-base-url"] == BOB
+    assert req.headers["x-horizon-original-path"] == "/inference/v1/chat/completions"
+
+
+def test_bobs_own_gateway_paths_go_to_ibm_verbatim_and_keyless() -> None:
+    seen: list = []
+    client = _upstream_client(seen, BOB)
+    client.get("/p/demo/inference/v1/model/info", headers={"authorization": "apikey bob"})
+    client.post("/rag/v1/search", json={"q": "x"})
+    assert [str(r.url) for r in seen] == [BOB + "/inference/v1/model/info", BOB + "/rag/v1/search"]
+    assert all("x-horizon-proxy-token" not in r.headers for r in seen)
+    assert seen[0].headers["authorization"] == "apikey bob"
+
+
+def test_bobs_profile_loses_region_domain_on_the_way_back() -> None:
+    def ibm(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"id": "p1", "instances": [{"teams": [{"region_domain": "eu-de.bob.ibm.com"}]}]},
+            headers={"etag": '"v1"', "x-request-id": "r1"},
+        )
+
+    app = build_app(REMOTE, lambda: "hz_feedface", transport=httpx.MockTransport(ibm), upstream=BOB)
+    resp = TestClient(app).get("/p/demo/admin/v1/profile")
+    assert resp.json() == {"id": "p1", "instances": [{"teams": [{}]}]}
+    assert "etag" not in resp.headers and resp.headers["x-request-id"] == "r1"

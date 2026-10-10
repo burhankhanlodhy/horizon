@@ -61,10 +61,11 @@ def tenant_key(key: str | None) -> str | None:
 
 
 # Deliberately exclude admin, telemetry, global stats and response lookup URLs.
+# /inference/v1/chat/completions is IBM Bob's chat path (horizon.providers.bob).
 # Provider response IDs are credentials owned by the upstream account, so shared
 # proxy users must not enumerate/retrieve responses through passthrough routes.
 INFERENCE = re.compile(
-    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent))/?$"
+    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent)|/inference/v1/chat/completions)/?$"
 )
 AUXILIARY = re.compile(
     r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"

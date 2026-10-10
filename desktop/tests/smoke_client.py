@@ -29,6 +29,7 @@ TOOLS = {
     "goose": (["--no-proxy"], None, "OPENAI_BASE_URL"),
     "grok": (["--no-proxy", "--no-mcp", "--code-memory", "none"], None, "GROK_MODELS_BASE_URL"),
     "kimi": (["--no-proxy"], None, "KIMI_CODE_BASE_URL"),
+    "bob": (["--no-proxy"], None, "BOB_GATEWAY_URL"),
     "vibe": (["--no-proxy"], None, "VIBE_PROVIDERS"),
     "omp": (["--no-proxy"], ["--no-stop-proxy"], None),
     "openclaude": (["--no-proxy"], None, "ANTHROPIC_BASE_URL"),
