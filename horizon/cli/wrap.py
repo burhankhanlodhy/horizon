@@ -201,6 +201,7 @@ from horizon.providers.zcode import (
     upstream_to_proxy_urls as _zcode_upstream_to_urls,
 )
 from horizon.proxy.project_context import with_project_prefix as _with_project_prefix
+from horizon.proxy.project_policy import with_keepalive_prefix as _with_keepalive_prefix
 
 from .main import main
 
@@ -2703,7 +2704,12 @@ def _codex_session_launch_settings(
     provider = str(provider)
 
     project = _project_name_from_cwd()
-    proxy_url = _with_project_prefix(f"http://127.0.0.1:{port}/v1", project)
+    # Codex's built-in provider cannot add headers, so the per-launch cache
+    # keep-alive id rides in the base URL path (``/k/<id>``) like the project.
+    proxy_url = _with_project_prefix(
+        _with_keepalive_prefix(f"http://127.0.0.1:{port}/v1", environ.get(KEEPALIVE_ENV)),
+        project,
+    )
     overrides: list[str] = []
     env = dict(environ)
     display = [f"OPENAI_BASE_URL={proxy_url}"]
@@ -3048,7 +3054,8 @@ def _apply_interactive_header_env(env: dict[str, str], claude_args: tuple | list
 def _apply_keepalive_env(env: dict[str, str]) -> str | None:
     """Set a per-launch keep-alive id in ``HORIZON_KEEPALIVE_ID``; returns it.
 
-    OpenCode sends it as ``X-Horizon-Keepalive-Id``. A user-set value wins, and
+    OpenCode sends it as ``X-Horizon-Keepalive-Id``; Codex in its base URL path
+    (``/k/<id>``). A user-set value wins, and
     then wrap does not end that session on exit either (returns None).
     """
     if env.get(KEEPALIVE_ENV):
@@ -6569,6 +6576,9 @@ def _run_codex_wrap(
 
     env, env_vars_display = _build_codex_launch_env(port, os.environ)
     env["CODEX_HOME"] = str(active_codex_home)
+    # Cache keep-alive liveness: kept warm only while Codex runs (ended below).
+    keepalive_id = _apply_keepalive_env(env)
+    launched_port = [port]
 
     def configure_codex_launch(
         actual_port: int,
@@ -6577,29 +6587,33 @@ def _run_codex_wrap(
         current_display: list[str],
     ) -> tuple[tuple, dict[str, str], list[str]]:
         del current_display
+        launched_port[0] = actual_port
         return _codex_session_launch_settings(
             port=actual_port,
             codex_args=current_args,
             environ=current_env,
         )
 
-    _launch_tool(
-        binary=codex_bin,
-        args=codex_args,
-        env=env,
-        port=port,
-        no_proxy=no_proxy,
-        tool_label="CODEX",
-        env_vars_display=env_vars_display,
-        learn=learn,
-        memory=memory,
-        agent_type="codex",
-        code_graph=code_graph,
-        backend=backend,
-        anyllm_provider=anyllm_provider,
-        region=region,
-        configure_launch=configure_codex_launch,
-    )
+    try:
+        _launch_tool(
+            binary=codex_bin,
+            args=codex_args,
+            env=env,
+            port=port,
+            no_proxy=no_proxy,
+            tool_label="CODEX",
+            env_vars_display=env_vars_display,
+            learn=learn,
+            memory=memory,
+            agent_type="codex",
+            code_graph=code_graph,
+            backend=backend,
+            anyllm_provider=anyllm_provider,
+            region=region,
+            configure_launch=configure_codex_launch,
+        )
+    finally:
+        _end_keepalive(f"http://127.0.0.1:{launched_port[0]}", keepalive_id)
 
 
 @wrap.command(context_settings={"ignore_unknown_options": True})

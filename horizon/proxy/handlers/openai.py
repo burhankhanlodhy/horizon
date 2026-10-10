@@ -2004,6 +2004,7 @@ class OpenAIHandlerMixin:
         body: dict[str, Any],
         client: str | None,
         flavor: str,
+        channel: Any = None,
     ) -> None:
         """The request about to be sent: what the cache keeper re-sends as a
         pre-warm if this session then goes idle (GPT-5.6+; horizon.proxy.cache_keeper)."""
@@ -2024,9 +2025,48 @@ class OpenAIHandlerMixin:
                 owner=_account.get(),
                 meta={"project": get_current_project(), "agent": client},
                 flavor=flavor,
+                channel=channel,
             )
         except Exception:  # pragma: no cover - keep-alive must never fail a request
             logger.debug("cache keeper record skipped", exc_info=True)
+
+    def _ws_prewarm_channel(
+        self, upstream: Any, *, is_chatgpt_auth: bool, memory_enabled: bool
+    ) -> Any:
+        """In-connection cache keep-alive for one Codex WebSocket (horizon.proxy.ws_prewarm).
+
+        Not for ChatGPT sign-in (a subscription bills no cache writes) or when
+        the proxy runs memory tools on the connection (its own continuations
+        would interleave with a pre-warm).
+        """
+        if getattr(self, "cache_keeper", None) is None or is_chatgpt_auth or memory_enabled:
+            return None
+        from horizon.proxy.ws_prewarm import WsPrewarmChannel
+
+        return WsPrewarmChannel(upstream.send)
+
+    def _ws_keepalive_record(
+        self,
+        websocket: Any,
+        channel: Any,
+        key: str,
+        url: str,
+        headers: Any,
+        frame: Any,
+        client: str | None,
+    ) -> None:
+        """One Codex turn as sent upstream: the keeper's template for its pre-warm."""
+        inner = frame.get("response", frame) if isinstance(frame, dict) else None
+        if not isinstance(inner, dict):
+            return
+        from horizon.proxy.cache_keeper import OPENAI_RESPONSES_WS
+
+        # The pre-warm sends no input (it chains to the last response), so the
+        # turn's input is not held.
+        template = {k: v for k, v in inner.items() if k != "input"}
+        self._keepalive_record(
+            websocket, key, url, headers, template, client, OPENAI_RESPONSES_WS, channel=channel
+        )
 
     def _maybe_flash_openai(
         self,
@@ -8606,6 +8646,29 @@ class OpenAIHandlerMixin:
                 async with upstream:
                     await upstream.send(_strip_codex_lite_metadata(first_msg_raw))
 
+                    # Cache keep-alive on this connection (GPT-5.6+): the keeper
+                    # pre-warms the chain here while Codex is idle.
+                    ws_prewarm = self._ws_prewarm_channel(
+                        upstream,
+                        is_chatgpt_auth=is_chatgpt_auth,
+                        # Memory may switch on with a later frame: off whenever it could.
+                        memory_enabled=bool(self.memory_handler and ws_memory_tools_allowed),
+                    )
+                    ws_keepalive_turn = 0
+                    ws_keepalive_key: str | None = None
+                    if ws_prewarm is not None:
+                        ws_prewarm.client_turn_started()
+                        ws_keepalive_key = f"{request_id}:ws:0"
+                        self._ws_keepalive_record(
+                            websocket,
+                            ws_prewarm,
+                            ws_keepalive_key,
+                            upstream_url,
+                            upstream_headers,
+                            final_first_body,
+                            client,
+                        )
+
                     # Unit 3: flag the upstream side flips on seeing
                     # ``response.completed`` so the outer cause
                     # classifier can prefer it over the raw
@@ -8934,6 +8997,7 @@ class OpenAIHandlerMixin:
                         nonlocal current_response_input
                         nonlocal current_response_template
                         nonlocal termination_cause
+                        nonlocal ws_keepalive_turn, ws_keepalive_key
                         client_frame_index = 1
                         try:
                             while True:
@@ -9005,6 +9069,8 @@ class OpenAIHandlerMixin:
                                                 )
                                             return
                                     ws_response_create_frames += 1
+                                    if ws_prewarm is not None:
+                                        ws_prewarm.client_turn_started()
                                     inbound_response = _inbound_frame_body.get(
                                         "response", _inbound_frame_body
                                     )
@@ -9106,6 +9172,24 @@ class OpenAIHandlerMixin:
                                         "transforms_applied": transforms_applied,
                                     },
                                 )
+                                if (
+                                    ws_prewarm is not None
+                                    and ws_last_client_frame_type == "response.create"
+                                ):
+                                    # Waits out an in-flight pre-warm, then chains
+                                    # to the id upstream now holds.
+                                    msg = await ws_prewarm.prepare_client_frame(msg)
+                                    ws_keepalive_turn += 1
+                                    ws_keepalive_key = f"{request_id}:ws:{ws_keepalive_turn}"
+                                    self._ws_keepalive_record(
+                                        websocket,
+                                        ws_prewarm,
+                                        ws_keepalive_key,
+                                        upstream_url,
+                                        upstream_headers,
+                                        _outbound_frame_body,
+                                        client,
+                                    )
                                 await upstream.send(_strip_codex_lite_metadata(msg))
                         except asyncio.CancelledError:
                             # Explicit cancel from the outer
@@ -9286,10 +9370,14 @@ class OpenAIHandlerMixin:
                             # at the WS upgrade) so dashboards can
                             # slice WS turns by tag — same surface
                             # as HTTP turns.
+                            emission_id = await self._next_request_id()
+                            keeper = getattr(self, "cache_keeper", None)
+                            if keeper is not None and ws_prewarm is not None and ws_keepalive_key:
+                                keeper.rekey(ws_keepalive_key, emission_id)
                             await self._record_request_outcome(
                                 RequestOutcome(
                                     # Per-emission ids keep dashboard request-log keys unique.
-                                    request_id=await self._next_request_id(),
+                                    request_id=emission_id,
                                     # PERF remains grouped under the stable WS
                                     # session id even though feed rows are unique.
                                     perf_request_id=request_id,
@@ -9412,6 +9500,12 @@ class OpenAIHandlerMixin:
                                     await websocket.send_text(msg_str)
                                     continue
 
+                                if (
+                                    ws_prewarm is not None
+                                    and isinstance(event, dict)
+                                    and ws_prewarm.observe_upstream_event(event)
+                                ):
+                                    continue
                                 event_type = event.get("type", "")
                                 ws_last_upstream_frame_type = str(event_type or "unknown")
                                 logger.debug(
@@ -9752,6 +9846,11 @@ class OpenAIHandlerMixin:
                                 t.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await asyncio.gather(*relay_tasks, return_exceptions=True)
+                        if ws_prewarm is not None:
+                            ws_prewarm.close()
+                            keeper = getattr(self, "cache_keeper", None)
+                            if keeper is not None:
+                                keeper.release_channel(ws_prewarm)
 
                     logger.info(
                         "[%s] WS /v1/responses completed "

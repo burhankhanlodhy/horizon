@@ -38,7 +38,9 @@ so the copy must be exact. Chat Completions rejects ``prewarm``, but the same
 request with ``max_completion_tokens: 16`` still reads the whole cached prefix
 (the output limit is not part of the key), so a Chat session is pinged that
 way for a few output tokens. A Responses request chained to an UNSTORED
-response (``store: false``) cannot be warmed over HTTP and is skipped.
+response (``store: false``) cannot be warmed over HTTP; when it came over a
+WebSocket (Codex), it is warmed on that same connection instead
+(:mod:`horizon.proxy.ws_prewarm`, flavor ``OPENAI_RESPONSES_WS``).
 
 Measurement: every ping is billed to its owner as it happens (``reporter``),
 whether or not the user ever returns, so abandoned sessions count against the
@@ -61,6 +63,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from horizon.proxy.ws_prewarm import PrewarmUnavailable
+
 logger = logging.getLogger(__name__)
 
 TTL_5M, TTL_30M, TTL_1H = 300, 1800, 3600
@@ -77,6 +81,8 @@ LIVENESS_HEADER = "x-horizon-keepalive-id"
 ANTHROPIC = "anthropic"
 OPENAI_RESPONSES = "openai_responses"
 OPENAI_CHAT = "openai_chat"
+#: A Responses WebSocket turn, pre-warmed on its own connection (``channel``).
+OPENAI_RESPONSES_WS = "openai_responses_ws"
 #: Output limit of a Chat Completions ping (Chat has no output-free pre-warm).
 CHAT_PING_MAX_TOKENS = 16
 
@@ -220,6 +226,7 @@ class _Pending:
     owner: Any
     meta: dict[str, Any]
     flavor: str = ANTHROPIC
+    channel: Any = None
 
 
 @dataclass
@@ -231,6 +238,7 @@ class _Group:
     headers: dict[str, str] = field(default_factory=dict)
     body: dict[str, Any] = field(default_factory=dict)  # emptied once the group stops pinging
     flavor: str = ANTHROPIC
+    channel: Any = None  # OPENAI_RESPONSES_WS: the connection that holds the chain
     model: str = ""
     ttl: int = TTL_5M
     context_tokens: int = 0
@@ -296,6 +304,7 @@ class CacheKeeper:
         owner: Any = None,
         meta: dict[str, Any] | None = None,
         flavor: str = ANTHROPIC,
+        channel: Any = None,
     ) -> None:
         """Remember a forwarded request until its usage says whether it is worth keeping.
 
@@ -305,6 +314,8 @@ class CacheKeeper:
         on a hosted proxy (anything with ``user_id``): its sessions are kept
         warm only when the client sent a liveness id, which is also what lets
         the client end them, and never once its plan has paused savings.
+        ``channel`` (``OPENAI_RESPONSES_WS`` only) sends the pre-warm on the
+        connection that carried the request.
         """
         if flavor == ANTHROPIC:
             if not body.get("tools") or body.get("max_tokens") == 0:
@@ -317,7 +328,10 @@ class CacheKeeper:
                 return  # side calls and our own pings
             if openai_ttl(str(body.get("model") or "")) is None:
                 return  # before GPT-5.6: no billed writes, nothing worth keeping
-            if openai_prewarm_body(body, flavor) is None:
+            if flavor == OPENAI_RESPONSES_WS:
+                if channel is None:
+                    return
+            elif openai_prewarm_body(body, flavor) is None:
                 return
         if owner is not None and (
             not liveness_id or getattr(owner, "compression_allowed", True) is False
@@ -327,10 +341,16 @@ class CacheKeeper:
         if group in self._ended:
             return
         self._pending[request_id] = _Pending(
-            group, url, dict(headers), body, self._clock(), owner, dict(meta or {}), flavor
+            group, url, dict(headers), body, self._clock(), owner, dict(meta or {}), flavor, channel
         )
         while len(self._pending) > 64:
             self._pending.popitem(last=False)
+
+    def rekey(self, request_id: str, new_id: str) -> None:
+        """Move a pending request to the id its outcome will be recorded under."""
+        p = self._pending.pop(request_id, None)
+        if p is not None:
+            self._pending[new_id] = p
 
     def record_usage(
         self, request_id: str, *, model: str, cache_read: int, cache_write: int, uncached: int
@@ -355,7 +375,7 @@ class CacheKeeper:
             self._groups[p.group] = g
         g.owner, g.meta = p.owner, p.meta
         g.url, g.headers, g.body, g.model = p.url, p.headers, copy.deepcopy(p.body), model
-        g.flavor = p.flavor
+        g.flavor, g.channel = p.flavor, p.channel
         if p.flavor == ANTHROPIC:
             g.ttl = ttl_of(p.body) or TTL_5M
         else:
@@ -383,6 +403,15 @@ class CacheKeeper:
             self._log({"event": "cache_keeper_end", "group": key[:16], "pings": g.pings})
         return g is not None
 
+    def release_channel(self, channel: Any) -> None:
+        """A WebSocket closed: its chain is gone, so nothing on it can be warmed."""
+        for request_id in [r for r, p in self._pending.items() if p.channel is channel]:
+            del self._pending[request_id]
+        for g in list(self._groups.values()):
+            if g.channel is channel:
+                g.stopped = True
+                self._release(g, "closed")
+
     def _enforce_limits(self) -> None:
         while len(self._groups) > self._max_groups:
             self._groups.popitem(last=False)
@@ -398,7 +427,7 @@ class CacheKeeper:
         """Stop pinging ``g`` and drop its request and credentials; keep its accounting."""
         if not g.body:
             return
-        g.body, g.headers = {}, {}
+        g.body, g.headers, g.channel = {}, {}, None
         self._log(
             {
                 "event": "cache_keeper_release",
@@ -479,8 +508,17 @@ class CacheKeeper:
     async def _ping(self, g: _Group, slots: asyncio.Semaphore) -> int:
         """One pre-warm for ``g``; bills it whatever happens and stops the group on a miss."""
         try:
+            send = self._send
             if g.flavor == ANTHROPIC:
                 body = prewarm_body(g.body)
+            elif g.flavor == OPENAI_RESPONSES_WS:
+                body, channel = g.body, g.channel
+                if channel is None:
+                    return 0
+
+                async def send(url: str, headers: dict[str, str], body: dict[str, Any]):
+                    del url, headers  # the connection already carries both
+                    return await channel.prewarm(body)
             else:
                 body = openai_prewarm_body(g.body, g.flavor)
             if body is None:
@@ -494,8 +532,13 @@ class CacheKeeper:
             try:
                 async with slots:
                     status, usage = await asyncio.wait_for(
-                        self._send(g.url, g.headers, body), self._ping_timeout
+                        send(g.url, g.headers, body), self._ping_timeout
                     )
+            except PrewarmUnavailable as exc:  # nothing was sent, nothing billed
+                if exc.closed:
+                    g.stopped = True
+                    self._release(g, "closed")
+                return 0
             except Exception as exc:  # timeout or network error: the outcome is unknown
                 logger.warning(
                     "event=cache_keeper_ping_error group=%s error=%s",

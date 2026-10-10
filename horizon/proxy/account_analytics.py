@@ -64,10 +64,10 @@ def tenant_key(key: str | None) -> str | None:
 # Provider response IDs are credentials owned by the upstream account, so shared
 # proxy users must not enumerate/retrieve responses through passthrough routes.
 INFERENCE = re.compile(
-    r"^(?:/p/[^/]+)?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent))/?$"
+    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/(?:anthropic/)?v1/messages|/(?:v1/)?chat/completions|/(?:v1/(?:codex/)?|backend-api/(?:codex/)?)?responses|/v1(?:beta)?/models/[^/]+:(?:generateContent|streamGenerateContent))/?$"
 )
 AUXILIARY = re.compile(
-    r"^(?:/p/[^/]+)?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"
+    r"^(?:/p/[^/]+)?(?:/k/[A-Za-z0-9_-]{1,64})?(?:/v1/models(?:/[^/]+)?|/v1/messages/count_tokens|/v1(?:beta)?/models/[^/]+:countTokens)/?$"
 )
 # Session lifecycle: ``wrap`` reports its tool exited (cache keep-alive). The
 # route ends only sessions owned by the verified account.
