@@ -42,6 +42,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,7 +63,7 @@ from horizon.proxy.savings_tracker import (
     sanitize_project_name,
 )
 
-# fcntl is Unix-only; on Windows we skip locking (append is still best-effort).
+# fcntl is Unix-only; Windows serializes through _windows_lock instead.
 fcntl: Any | None = None
 try:
     import fcntl as _fcntl
@@ -67,6 +72,67 @@ try:
     _HAS_FCNTL = True
 except ImportError:
     _HAS_FCNTL = False
+
+# How long a Windows ledger access waits for another writer before going ahead
+# unlocked. A lost line beats a request that never finishes.
+_WINDOWS_LOCK_WAIT_SECONDS = 10.0
+_windows_thread_lock = threading.Lock()
+
+
+@contextmanager
+def _windows_lock(target: Path) -> Iterator[None]:
+    """Serialize ledger access on Windows, where there is no ``flock``.
+
+    Windows has no atomic append: the C runtime seeks to the end of the file
+    and then writes, so two writers that seek together write at the same
+    offset and one line silently replaces the other, both reporting success.
+    Proxy requests append from worker threads and each MCP server appends from
+    its own process, so this takes a thread lock and a cross-process lock. The
+    process lock is a byte-range lock on a sidecar file: locking the ledger
+    itself would make readers fail, because Windows locks are mandatory.
+    Elsewhere this is a no-op and ``flock`` on the ledger does the job.
+    """
+
+    if sys.platform != "win32":
+        yield
+        return
+
+    import msvcrt
+
+    msvcrt_any: Any = msvcrt
+    deadline = time.monotonic() + _WINDOWS_LOCK_WAIT_SECONDS
+    if not _windows_thread_lock.acquire(timeout=_WINDOWS_LOCK_WAIT_SECONDS):
+        yield
+        return
+    try:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = open(target.with_name(target.name + ".lock"), "a+b")
+        except OSError:
+            yield
+            return
+        with lock_file:
+            # Windows allows locking past end of file, so an empty file is fine.
+            lock_file.seek(0)
+            locked = False
+            while True:
+                try:
+                    msvcrt_any.locking(lock_file.fileno(), msvcrt_any.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.005)
+            try:
+                yield
+            finally:
+                if locked:
+                    lock_file.seek(0)
+                    msvcrt_any.locking(lock_file.fileno(), msvcrt_any.LK_UNLCK, 1)
+    finally:
+        _windows_thread_lock.release()
+
 
 SCHEMA_VERSION = 2
 UNKNOWN = "unknown"
@@ -399,7 +465,7 @@ def record_savings_event(
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(event, separators=(",", ":")) + "\n"
-        with open(target, "a", encoding="utf-8") as handle:
+        with _windows_lock(target), open(target, "a", encoding="utf-8") as handle:
             if _HAS_FCNTL and fcntl is not None:
                 fcntl.flock(handle, fcntl.LOCK_EX)
             try:
@@ -427,7 +493,7 @@ def _read_events(
     cutoff = now - timedelta(days=retention_days) if retention_days else None
     events: list[dict[str, Any]] = []
     try:
-        with open(target, encoding="utf-8") as handle:
+        with _windows_lock(target), open(target, encoding="utf-8") as handle:
             if _HAS_FCNTL and fcntl is not None:
                 fcntl.flock(handle, fcntl.LOCK_SH)
             try:
@@ -719,7 +785,7 @@ def _maybe_compact(target: Path) -> None:
     now = _utc_now()
     cutoff = now - timedelta(days=DEFAULT_RETENTION_DAYS)
     try:
-        with open(target, "r+", encoding="utf-8") as handle:
+        with _windows_lock(target), open(target, "r+", encoding="utf-8") as handle:
             if _HAS_FCNTL and fcntl is not None:
                 fcntl.flock(handle, fcntl.LOCK_EX)
             try:

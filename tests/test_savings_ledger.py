@@ -191,6 +191,47 @@ def test_appends_do_not_clobber_and_survive_restart(monkeypatch, tmp_path):
     assert L.aggregate_savings().lifetime["tokens_saved"] == 5 * 90
 
 
+_APPEND_WORKER = """
+import sys, threading
+from horizon import savings_ledger as L
+
+def go():
+    L.record_savings_event(tokens_before=100, tokens_after=10, model=None, client="c")
+
+threads = [threading.Thread(target=go) for _ in range(int(sys.argv[1]))]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+"""
+
+
+def test_concurrent_processes_and_threads_lose_no_appends(monkeypatch, tmp_path):
+    # The proxy appends from worker threads while each MCP server appends from
+    # its own process. Windows has no atomic append, so without a lock two
+    # writers land on the same offset and one line silently replaces the other.
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    path = _events_env(monkeypatch, tmp_path)
+    repo_root = str(Path(L.__file__).resolve().parent.parent)
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(filter(None, [repo_root, os.environ.get("PYTHONPATH")])),
+    }
+    procs = [
+        subprocess.Popen([sys.executable, "-c", _APPEND_WORKER, "10"], env=env) for _ in range(4)
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=120) == 0
+
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert all(json.loads(ln) for ln in lines), "an append was partly overwritten"
+    assert len(lines) == 40, "a concurrent append was lost"
+
+
 def test_corrupt_lines_are_skipped(monkeypatch, tmp_path):
     path = _events_env(monkeypatch, tmp_path)
     L.record_savings_event(tokens_before=1000, tokens_after=400, model=None, client="c")
