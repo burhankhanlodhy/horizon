@@ -4643,6 +4643,17 @@ def _ensure_proxy(
     **kwargs: Any,
 ) -> tuple[subprocess.Popen | None, int]:
     """Start or reuse a proxy without racing another wrap on the same port."""
+    from horizon import hosted as _hosted
+
+    if not no_proxy and _hosted.hosted_active():
+        # Signed in (horizon login): a relay to the hosted proxy on this port
+        # stands in for a local proxy; the caller stops it like one.
+        try:
+            relay = _hosted.ensure_relay(port)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"  ContextShrink: 127.0.0.1:{port} -> {_hosted.proxy_url()}")
+        return relay, port
     if no_proxy:
         result = _ensure_proxy_unlocked(port, no_proxy, **kwargs)
     else:
@@ -5174,9 +5185,19 @@ def _copy_openclaw_plugin_into_extensions(
 
 
 @main.group()
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Use a local Horizon proxy even when signed in to ContextShrink (horizon login).",
+)
 @click.pass_context
-def wrap(ctx: click.Context) -> None:
+def wrap(ctx: click.Context, local: bool) -> None:
     """Wrap CLI tools to run through Horizon.
+
+    \b
+    Signed in with `horizon login`, every tool runs through the hosted
+    ContextShrink proxy (usage and savings on your dashboard); --local
+    (or HORIZON_HOSTED=0) uses a local proxy instead.
 
     \b
     Starts a Horizon proxy, configures the environment, and launches
@@ -5217,6 +5238,19 @@ def wrap(ctx: click.Context) -> None:
     \b
     `openclaw` is a separate tool — different from opencode.
     """
+    from horizon import hosted as _hosted
+
+    if local:
+        os.environ[_hosted.HOSTED_ENV] = "0"
+    elif _hosted.hosted_active() and ctx.invoked_subcommand:
+        # Each tool's relay port, and the local-only extras off (no MCP,
+        # no code memory), as the desktop app runs them; flags still win.
+        sub = wrap.commands.get(ctx.invoked_subcommand)
+        if sub is not None:
+            ctx.default_map = {
+                **(ctx.default_map or {}),
+                ctx.invoked_subcommand: _hosted.wrap_defaults(sub),
+            }
     if _should_purge_context_tools(ctx):
         _report_context_tool_purge()
 

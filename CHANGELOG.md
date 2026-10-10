@@ -4,6 +4,30 @@ All notable changes to Horizon are documented here.
 
 ## [Unreleased]
 
+### Added
+- Signed-in CLI use of the hosted ContextShrink proxy, like the desktop app:
+  - `horizon login` (email and password; the password is never stored)
+    creates a per-device key (`CLI: <hostname>`) in the OS credential store,
+    in its own entry, so it never touches the desktop app's key;
+  - every `horizon wrap <tool>` then runs through a loopback relay to the
+    hosted proxy, so usage and savings show on the account dashboard. Each
+    tool gets its relay port (18688; Kimi, Mistral Vibe, Grok and IBM Bob get
+    their own relays pinned to their provider, 18689-18692), with MCP and code
+    memory off as in the desktop app. `horizon wrap --local` or
+    `HORIZON_HOSTED=0` uses a local proxy instead;
+  - `horizon account` shows the plan, this cycle's estimated savings and fee
+    (or the Free cap), the device key's status and the last 30 days;
+  - `horizon logout` revokes the device key and ends the session;
+  - without an OS credential store (headless Linux) the key goes to an
+    owner-only file; `CONTEXTSHRINK_API_KEY` supplies a key directly (CI).
+- `contextshrink[hosted]` extra: the relay and credential store without the
+  local proxy's compression stack.
+
+### Changed
+- The Python distribution is named `contextshrink` (`horizon-ai` on PyPI
+  belongs to another project); the `horizon` command stays, and a
+  `contextshrink` command is an alias.
+
 ## [0.42.0] — Keep-alive for every client, new integrations, Kompress fixes
 
 Desktop app 0.5.1 and 0.5.2 bundle this client.

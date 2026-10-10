@@ -27,6 +27,19 @@ Building the Rust extension requires a Rust toolchain (the pinned version in
 `rust-toolchain.toml` is installed automatically by rustup) and the MSVC
 Build Tools on Windows.
 
+## Use the hosted ContextShrink service from the CLI
+
+```bash
+pip install "contextshrink[hosted]"
+horizon login              # email and password; creates a key for this device
+horizon wrap claude        # any tool: runs through the hosted proxy
+horizon account            # plan, savings this cycle, fee estimate
+horizon logout             # revokes this device's key
+```
+
+Usage and savings appear on the same dashboard as the desktop app's.
+`horizon wrap --local <tool>` uses a local proxy instead.
+
 ## Run the proxy
 
 ```bash
