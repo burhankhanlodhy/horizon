@@ -8,6 +8,9 @@
 #       AWS_SECRET_ACCESS_KEY=...
 #       AWS_DEFAULT_REGION=...       the bucket's region
 #       # optional: BACKUP_BUCKET, BACKUP_PREFIX, KEEP_LOCAL
+#       # optional: HEALTHCHECK_URL, a dead man's switch (healthchecks.io
+#       #   style): pinged at start, on success, and at <url>/fail on error,
+#       #   so a backup that fails or never runs raises an alert.
 #   ~/horizon/.env for POSTGRES_USER / POSTGRES_DB (no password is needed:
 #   pg_dump runs inside the Postgres container over its local socket).
 #
@@ -24,7 +27,12 @@ PG_CONTAINER="${PG_CONTAINER:-contextshrink-postgres}"
 AWS_CLI_IMAGE="amazon/aws-cli:2.17.20"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
-fail() { log "FAILED: $*"; exit 1; }
+# Dead man's switch ping; never lets monitoring break the backup itself.
+ping_monitor() {
+    [ "$DRY_RUN" -eq 0 ] && [ -n "${HEALTHCHECK_URL:-}" ] || return 0
+    curl -fsS -m 10 --retry 3 -o /dev/null "${HEALTHCHECK_URL%/}$1" || log "monitor ping$1 failed"
+}
+fail() { log "FAILED: $*"; ping_monitor /fail; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
@@ -43,6 +51,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     : "${AWS_ACCESS_KEY_ID:?set in $CONFIG}" "${AWS_SECRET_ACCESS_KEY:?set in $CONFIG}" \
       "${AWS_DEFAULT_REGION:?set in $CONFIG}"
 fi
+ping_monitor /start
 BUCKET="${BACKUP_BUCKET:-contextshrink-weekly-backup}"
 PREFIX="${BACKUP_PREFIX:-postgres}"
 KEEP_LOCAL="${KEEP_LOCAL:-4}"
@@ -80,6 +89,7 @@ else
         --metadata "sha256=$SHA" \
         || fail "upload to s3://$BUCKET/$KEY"
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$BACKUP_DIR/last_success"
+    ping_monitor ""
     log "uploaded s3://$BUCKET/$KEY"
 fi
 

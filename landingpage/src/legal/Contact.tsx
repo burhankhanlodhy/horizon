@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { API_URL } from "../components/ui";
+import { Turnstile, turnstileEnabled } from "../components/Turnstile";
 import { LegalPage } from "./LegalPage";
 
 const TOPICS = [
@@ -26,6 +27,8 @@ export function Contact() {
     website: "",
   });
   const [status, setStatus] = useState<Status>("idle");
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
   const [error, setError] = useState("");
   const set = (key: keyof typeof form) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -33,13 +36,18 @@ export function Contact() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (status === "sending") return;
+    if (turnstileEnabled && !turnstileToken) {
+      setError("Please complete the security check.");
+      setStatus("error");
+      return;
+    }
     setStatus("sending");
     setError("");
     try {
       const res = await fetch(`${API_URL}/contact`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, turnstile_token: turnstileToken ?? undefined }),
       });
       if (res.ok) {
         setStatus("sent");
@@ -50,10 +58,16 @@ export function Contact() {
         message = "You've sent several messages just now. Please wait a few minutes and try again.";
       } else if (res.status === 422) {
         message = "Please check your email address, and write at least a sentence or two.";
+      } else if (res.status === 400 || res.status === 503) {
+        // The security check's own explanation (failed, expired, or unavailable).
+        const detail = await res.json().then((b) => b?.detail).catch(() => null);
+        if (typeof detail === "string") message = detail;
       }
       setError(message);
       setStatus("error");
+      setTurnstileReset((n) => n + 1);
     } catch {
+      setTurnstileReset((n) => n + 1);
       setError("We couldn't reach our server. Check your connection and try again.");
       setStatus("error");
     }
@@ -158,6 +172,7 @@ export function Contact() {
               onChange={(e) => set("website")(e.target.value)}
             />
           </div>
+          <Turnstile onToken={setTurnstileToken} resetKey={turnstileReset} />
           {error && (
             <p role="alert" className="text-sm text-ember">
               {error}

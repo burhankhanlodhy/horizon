@@ -240,7 +240,8 @@ def test_agent_usage_recovers_before_tokens_from_after_and_saved() -> None:
     assert row["before_tokens"] == 100
     assert row["savings_percent"] == 30.0
     assert row["after_percent"] == 70.0
-    assert row["share_of_saved_percent"] == 0.0
+    # The only agent with savings holds all of them, whatever the headline says.
+    assert row["share_of_saved_percent"] == 100.0
     assert summary["totals"]["savings_percent"] == 0.0
 
 
@@ -274,3 +275,39 @@ def test_agent_usage_clamps_negative_token_values() -> None:
     assert row["tokens_saved"] == 0
     assert row["output_tokens"] == 0
     assert row["has_exact_tokens"] is False
+
+
+def test_agent_shares_stay_within_100_when_logs_count_more_than_the_headline() -> None:
+    """Request logs and the headline compression figure are different bases:
+    an OpenCode session logged 16.7k saved against a 2.8k headline and showed
+    a 596.9% share. Shares now divide by the agents' own total."""
+    summary = _build_agent_usage_summary(
+        [
+            {
+                "provider": "openai",
+                "model": "gpt-6.1-sol",
+                "tags": {"client": "opencode"},
+                "input_tokens_original": 1000,
+                "input_tokens_optimized": 700,
+                "tokens_saved": 300,
+            },
+            {
+                "provider": "openai",
+                "model": "gpt-6.1-sol",
+                "tags": {"client": "codex"},
+                "input_tokens_original": 1000,
+                "input_tokens_optimized": 900,
+                "tokens_saved": 100,
+            },
+        ],
+        requests_by_provider={},
+        requests_by_model={},
+        global_before_tokens=2000,
+        global_after_tokens=1950,
+        global_tokens_saved=50,
+        global_output_tokens=0,
+    )
+
+    shares = {row["agent"]: row["share_of_saved_percent"] for row in summary["agents"]}
+    assert shares == {"opencode": 75.0, "codex": 25.0}
+    assert all(0.0 <= share <= 100.0 for share in shares.values())

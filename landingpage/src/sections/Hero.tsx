@@ -94,7 +94,7 @@ function TerminalDemo() {
           transition={{ type: "spring", stiffness: 240, damping: 14, delay: 1.9 }}
           className="mt-4 inline-flex items-center gap-1.5 rounded-sm border border-dashed border-[#a3b18a]/60 px-2.5 py-1 text-[11px] text-[#a3b18a]"
         >
-          <Zap size={11} /> 63.8% smaller — answer unchanged
+          <Zap size={11} /> this log: 63.8% smaller
         </motion.div>
       </div>
     </motion.div>

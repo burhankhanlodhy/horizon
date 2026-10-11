@@ -21,6 +21,7 @@ from uuid import UUID
 
 import asyncpg
 import db
+import turnstile
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -49,6 +50,8 @@ class ContactIn(BaseModel):
     message: str = Field(min_length=10, max_length=5000)
     # Honeypot: hidden from people, filled in by form-spamming bots.
     website: str = Field(default="", max_length=200)
+    # Cloudflare Turnstile pass from the Contact page (required once enabled).
+    turnstile_token: str | None = Field(default=None, max_length=4096)
 
 
 class ContactMessageOut(BaseModel):
@@ -158,6 +161,7 @@ def install(app: FastAPI, current_user) -> None:
         if body.website:
             # A bot filled the hidden field: look accepted, keep nothing.
             return {"ok": True}
+        await turnstile.verify(body.turnstile_token, request)
         if not limiter.allow(_client_address(request)):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,

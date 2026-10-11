@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { ArrowLeft, Shrink } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { EASE, GradientButton } from "../components/ui";
+import { Turnstile, turnstileEnabled } from "../components/Turnstile";
 import { getPostAuthDestination, signUp } from "../lib/auth";
 
 const LANDING_URL =
@@ -23,6 +24,8 @@ export default function Signup() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [agree, setAgree] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileReset, setTurnstileReset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -48,16 +51,21 @@ export default function Signup() {
       setError("Please accept the terms to continue.");
       return;
     }
+    if (turnstileEnabled && !turnstileToken) {
+      setError("Please complete the security check.");
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
-      await signUp(name.trim(), email.trim(), password);
+      await signUp(name.trim(), email.trim(), password, turnstileToken);
       if (new URLSearchParams(location.search).get("next") === "/dashboard") {
         window.location.assign("/dashboard");
         return;
       }
       navigate(getPostAuthDestination(location.state), { replace: true });
     } catch (e) {
+      setTurnstileReset((n) => n + 1);
       setError(e instanceof Error ? e.message : "Account creation failed.");
     } finally {
       setBusy(false);
@@ -153,6 +161,8 @@ export default function Signup() {
             {error}
           </motion.p>
         )}
+
+        <Turnstile onToken={setTurnstileToken} resetKey={turnstileReset} />
 
         <GradientButton onClick={submit} className="mt-1 w-full justify-center">
           {busy ? "Creating account…" : "Create account"}

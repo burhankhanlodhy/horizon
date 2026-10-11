@@ -11,7 +11,7 @@ const ITEMS = [
   },
   {
     q: "Doesn't compression destroy prompt caching?",
-    a: "Not here. Cache preservation is a first-class constraint: stable prefixes are frozen, breakpoints are placed deliberately, and compression that would invalidate a warm cache is skipped. That's why the cache hit rate stays above 90% in our evals.",
+    a: "Not here. Cache preservation is a first-class constraint: stable prefixes are frozen, breakpoints are placed deliberately, and compression that would invalidate a warm cache is skipped. In our measured sessions the prompt-cache hit rate stayed around 90%.",
   },
   {
     q: "Where does my code go?",

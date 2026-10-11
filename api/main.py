@@ -18,7 +18,9 @@ import billing
 import contact
 import db
 import security
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+import turnstile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -60,6 +62,8 @@ class SignupIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: EmailStr
     password: str = Field(min_length=8, max_length=200)
+    # Cloudflare Turnstile pass from the signup page (required once enabled).
+    turnstile_token: str | None = Field(default=None, max_length=4096)
 
 
 class LoginIn(BaseModel):
@@ -180,12 +184,22 @@ async def current_user(
 
 
 @app.get("/healthz")
-async def healthz() -> dict:
+async def healthz():
+    # Uptime monitors call this, so it checks the database too: an API that
+    # answers while Postgres is down cannot sign anyone in.
+    try:
+        await asyncio.wait_for(db._conn().fetchval("SELECT 1"), timeout=3)
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"ok": False, "service": "contextshrink-control-plane", "database": "down"},
+        )
     return {"ok": True, "service": "contextshrink-control-plane"}
 
 
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED, response_model=AuthOut)
-async def signup(body: SignupIn):
+async def signup(body: SignupIn, request: Request):
+    await turnstile.verify(body.turnstile_token, request)
     email = body.email.strip().lower()
     if await db.get_user_by_email(email):
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists")

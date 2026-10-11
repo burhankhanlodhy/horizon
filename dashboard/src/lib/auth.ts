@@ -49,10 +49,11 @@ export async function signUp(
   name: string,
   email: string,
   password: string,
+  turnstileToken?: string | null,
 ): Promise<SessionUser> {
   const out = await apiFetch<AuthResponse>("/auth/signup", {
     method: "POST",
-    body: { name, email, password },
+    body: { name, email, password, turnstile_token: turnstileToken ?? undefined },
   });
   setToken(out.token);
   cacheUser(out.user);

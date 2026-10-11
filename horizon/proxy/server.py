@@ -421,6 +421,11 @@ def _build_agent_usage_summary(
             row["requests"] += int(count)
             row["models"][str(model)] = int(row["models"].get(str(model), 0)) + int(count)
 
+    # Shares compare agents with each other, so they divide by the agents' own
+    # total. ``global_tokens_saved`` is the headline compression figure, a
+    # different basis from the per-request log counts summed here; dividing by
+    # it produced shares above 100%.
+    agents_saved_total = sum(max(0, int(row["tokens_saved"])) for row in agents.values())
     rows: list[dict[str, Any]] = []
     for row in agents.values():
         before = int(row["before_tokens"])
@@ -433,7 +438,7 @@ def _build_agent_usage_summary(
         row["savings_percent"] = savings_percent
         row["after_percent"] = round((after / before) * 100.0, 2) if before else 0.0
         row["share_of_saved_percent"] = (
-            round((saved / global_tokens_saved) * 100.0, 2) if global_tokens_saved else 0.0
+            round((saved / agents_saved_total) * 100.0, 2) if agents_saved_total else 0.0
         )
         row["share_of_requests_percent"] = 0.0
         rows.append(row)
