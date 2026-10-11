@@ -15,6 +15,9 @@ export interface SessionUser {
   subscription_status?: string;
   /** Can read Contact form messages (ADMIN_EMAILS on the API). */
   is_admin?: boolean;
+  email_verified?: boolean;
+  /** True while unconfirmed accounts may not create proxy keys. */
+  email_verification_required?: boolean;
 }
 
 const USER_KEY = "cs_session_user";

@@ -11,6 +11,7 @@ import SignOut from "./pages/SignOut";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Messages from "./pages/Messages";
+import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/AccountEmail";
 import { refreshUser, type SessionUser } from "./lib/auth";
 import { AccountProvider, useAccount } from "./lib/account";
 
@@ -140,6 +141,30 @@ export default function App() {
           element={
             <FullPageCenter>
               <SignOut />
+            </FullPageCenter>
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            <FullPageCenter>
+              <ForgotPassword />
+            </FullPageCenter>
+          }
+        />
+        <Route
+          path="/reset-password"
+          element={
+            <FullPageCenter>
+              <ResetPassword />
+            </FullPageCenter>
+          }
+        />
+        <Route
+          path="/verify-email"
+          element={
+            <FullPageCenter>
+              <VerifyEmail />
             </FullPageCenter>
           }
         />

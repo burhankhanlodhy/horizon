@@ -14,6 +14,7 @@ import {
   Download,
   Gauge,
   Inbox,
+  MailWarning,
   LineChart,
   KeyRound,
   LogOut,
@@ -25,7 +26,7 @@ import {
 import { cn, fmtUsd } from "../lib/utils";
 import { EASE } from "./ui";
 import { initials, useAccount } from "../lib/account";
-import { PROXY_URL } from "../lib/api";
+import { PROXY_URL, apiFetch } from "../lib/api";
 import { openPortal } from "../lib/billing";
 import {
   useBillingEstimate,
@@ -36,6 +37,51 @@ import {
 /** Account-level notices: an unpaid savings fee, or the Free compression cap. */
 function AccountNotices() {
   const { estimate } = useBillingEstimate();
+  const { user } = useAccount();
+  const unverified = user.email_verification_required && user.email_verified === false;
+  return (
+    <>
+      {unverified && <VerifyEmailNotice email={user.email} />}
+      <BillingNotices estimate={estimate} />
+    </>
+  );
+}
+
+/** Unconfirmed address: proxy keys (and so the desktop app) wait for it. */
+function VerifyEmailNotice({ email }: { email: string }) {
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const resend = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const out = await apiFetch<{ detail?: string }>("/auth/email/resend", { method: "POST" });
+      setStatus(out.detail ?? `We've sent a new link to ${email}.`);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : "Couldn't send the email.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-ember/40 bg-ember-soft px-4 py-3 text-sm text-ink">
+      <MailWarning size={17} className="shrink-0 text-ember" />
+      <p className="min-w-0 flex-1">
+        <strong>Confirm your email to connect your tools.</strong> Open the link we sent
+        to {email} to create API keys and use the desktop app.
+        {status && <span className="mt-1 block text-ink-3">{status}</span>}
+      </p>
+      <button
+        onClick={() => void resend()}
+        className="font-semibold text-ember underline-offset-2 hover:underline"
+      >
+        {busy ? "Sending…" : "Resend link"}
+      </button>
+    </div>
+  );
+}
+
+function BillingNotices({ estimate }: { estimate: ReturnType<typeof useBillingEstimate>["estimate"] }) {
   if (!estimate) return null;
   // A payment problem explains any cap too, so it replaces the upgrade notice.
   if (estimate.payment_issue)

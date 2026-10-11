@@ -92,6 +92,13 @@ export default function Login() {
             onKeyDown={(e) => e.key === "Enter" && submit()}
           />
         </label>
+        <button
+          type="button"
+          onClick={() => navigate("/forgot-password")}
+          className="-mt-2 self-end text-xs text-ink-3 underline-offset-2 transition hover:text-ink hover:underline"
+        >
+          Forgot password?
+        </button>
 
         {error && (
           <motion.p

@@ -88,7 +88,8 @@ async def create_session(user_id: str, token_hash: str) -> datetime:
 
 async def resolve_session(token_hash: str) -> asyncpg.Record | None:
     query = f"""
-        SELECT u.id AS user_id, u.email, u.name, u.created_at, s.id AS session_id,
+        SELECT u.id AS user_id, u.email, u.name, u.created_at, u.email_verified_at,
+               s.id AS session_id,
                COALESCE(sub.plan, 'free') AS plan,
                {EFFECTIVE_STATUS_SQL.format(grace="$2")} AS subscription_status
         FROM core.sessions s

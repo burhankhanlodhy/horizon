@@ -238,3 +238,21 @@ CREATE TABLE IF NOT EXISTS core.contact_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_contact_messages_created
     ON core.contact_messages (created_at DESC);
+
+-- ====================================================== account email
+-- NULL until the user opens the confirmation link (or completes a password
+-- reset, which proves the same thing).
+ALTER TABLE core.users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+
+-- Single-use links for password reset and email confirmation. Only the
+-- SHA-256 of each token is stored.
+CREATE TABLE IF NOT EXISTS core.auth_tokens (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
+    purpose     TEXT        NOT NULL CHECK (purpose IN ('reset', 'verify')),
+    token_hash  TEXT        NOT NULL UNIQUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON core.auth_tokens (user_id, purpose);

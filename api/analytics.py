@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
+import account_email
 import db
 import security
 from fastapi import Depends, Header, HTTPException, Query, Response
@@ -284,6 +285,8 @@ def install(app, current_user):
 
     @app.post("/keys", status_code=201)
     async def create_key(body: KeyIn, user=Depends(current_user)):
+        # The desktop app and `horizon login` connect by creating a key.
+        account_email.require_verified(user)
         if not body.name.strip():
             raise HTTPException(422, "Key name cannot be blank")
         key = "cs_live_" + security.new_session_token()

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
 
+import account_email
 import analytics
 import asyncpg
 import billing
@@ -77,6 +78,9 @@ class AccountOut(UserOut):
     plan: str
     subscription_status: str
     is_admin: bool = False
+    email_verified: bool = True
+    # True while unverified accounts may not create proxy keys.
+    email_verification_required: bool = False
 
 
 class SubscriptionIn(BaseModel):
@@ -192,6 +196,10 @@ async def signup(body: SignupIn):
             status.HTTP_409_CONFLICT, "An account with this email already exists"
         ) from None
     await db.ensure_subscription(str(user["id"]))
+    if account_email.verification_required():
+        account_email.in_background(
+            account_email.send_verification(user["id"], user["email"], user["name"])
+        )
     token = security.new_session_token()
     await db.create_session(str(user["id"]), security.hash_token(token))
     return AuthOut(
@@ -229,6 +237,8 @@ async def me(user: asyncpg.Record = Depends(current_user)):
         plan=user["plan"],
         subscription_status=user["subscription_status"],
         is_admin=contact.is_admin(user["email"]),
+        email_verified=user["email_verified_at"] is not None,
+        email_verification_required=account_email.verification_required(),
     )
 
 
@@ -308,3 +318,4 @@ async def usage_summary(
 analytics.install(app, current_user)
 billing.install(app, current_user)
 contact.install(app, current_user)
+account_email.install(app, current_user)
