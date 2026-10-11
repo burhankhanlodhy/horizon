@@ -283,3 +283,4 @@ experiments/**/batch.log
 experiments/claude-code/read-maturation/template/
 experiments/compaction-paired/template/
 experiments/cache-keeper/live.log
+horizon/_build_info.py

@@ -24,6 +24,10 @@ uv pip install -q --python "$VENV/bin/python" -e "$ROOT[proxy,vault]" "pyinstall
 excludes=(torch transformers onnxruntime magika litellm tokenizers tiktoken scipy sklearn
           fastembed hnswlib sentence_transformers PIL matplotlib pandas tkinter IPython pytest)
 client="$ROOT/desktop/client"
+# Bake the version into horizon/_build_info.py (removed on exit); without it
+# the frozen client has no package metadata to report a version from.
+version=$("$VENV/bin/python" "$client/build_info.py" write)
+trap '"$VENV/bin/python" "$client/build_info.py" remove' EXIT
 (
     cd "$ROOT"
     "$VENV/bin/python" -m PyInstaller "$client/horizon_client.py" \
@@ -36,10 +40,17 @@ client="$ROOT/desktop/client"
         --collect-data horizon \
         --collect-submodules keyring \
         --copy-metadata keyring \
+        --hidden-import horizon._build_info \
         --hidden-import keyring.backends.macOS \
         "${excludes[@]/#/--exclude-module=}"
 )
-"$client/dist/horizon/horizon" --version
+"$VENV/bin/python" "$client/build_info.py" remove
+reported=$("$client/dist/horizon/horizon" --version)
+echo "$reported"
+case "$reported" in
+    *" $version") ;;
+    *) echo "Frozen client reports '$reported', expected version $version" >&2; exit 1 ;;
+esac
 
 echo "== Tauri app"
 bundle="$ROOT/desktop/app/src-tauri/target/release/bundle"

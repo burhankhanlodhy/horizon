@@ -21,6 +21,12 @@ $excludes = @(
     "PIL", "matplotlib", "pandas", "tkinter", "IPython", "pytest"
 ) | ForEach-Object { "--exclude-module=$_" }
 
+# Bake the version into horizon\_build_info.py (removed again below); without
+# it the frozen client reports whatever stale package metadata the venv holds.
+$buildInfo = Join-Path $PSScriptRoot "build_info.py"
+$version = & $python $buildInfo write
+if ($LASTEXITCODE -ne 0) { throw "Writing the build version failed" }
+
 # Run from the repo root so `horizon` resolves to the real package (its data
 # files are collected from there); outputs still land in desktop\client.
 Push-Location $root
@@ -40,9 +46,17 @@ try {
         --copy-metadata keyring `
         --hidden-import keyring.backends.Windows `
         --hidden-import win32timezone `
+        --hidden-import horizon._build_info `
         @excludes
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 }
 finally {
+    & $python $buildInfo remove
     Pop-Location
 }
+
+$reported = & (Join-Path $PSScriptRoot "dist\horizon\horizon.exe") --version
+if ("$reported".Trim() -notmatch (" " + [regex]::Escape("$version".Trim()) + "$")) {
+    throw "Frozen client reports '$reported', expected version $version"
+}
+"Client: $reported"
