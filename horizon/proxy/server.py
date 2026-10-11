@@ -4088,7 +4088,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     _install_extensions(app, config, enabled=getattr(config, "proxy_extensions", None))
 
     # Health & Metrics
-    @app.get("/livez")
+    # HEAD too: uptime monitors (UptimeRobot) probe with HEAD, and a HEAD that
+    # matched no route would fall through to the passthrough relay.
+    @app.api_route("/livez", methods=["GET", "HEAD"])
     async def livez():
         callback_state = _loop_callback_payload()
         healthy = callback_state["status"] == "healthy"
@@ -4105,13 +4107,13 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             },
         )
 
-    @app.get("/readyz")
+    @app.api_route("/readyz", methods=["GET", "HEAD"])
     async def readyz():
         await _check_upstream()
         payload = _health_payload(include_config=False)
         return JSONResponse(status_code=200 if payload["ready"] else 503, content=payload)
 
-    @app.get("/health")
+    @app.api_route("/health", methods=["GET", "HEAD"])
     async def health(request: Request):
         await _check_upstream()
         # /health echoes upstream API URLs + backend config (the `config`

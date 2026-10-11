@@ -100,10 +100,21 @@ def test_health_check_reports_a_down_database(monkeypatch):
             return 1
 
     app = FastAPI()
-    app.get("/healthz")(main.healthz)
+    app.api_route("/healthz", methods=["GET", "HEAD"])(main.healthz)
     c = TestClient(app)
     monkeypatch.setattr(main.db, "_conn", lambda: DownPool())
     r = c.get("/healthz")
     assert r.status_code == 503 and r.json()["database"] == "down"
     monkeypatch.setattr(main.db, "_conn", lambda: UpPool())
     assert c.get("/healthz").json()["ok"] is True
+    # Uptime monitors probe with HEAD.
+    assert c.head("/healthz").status_code == 200
+
+
+def test_the_real_app_answers_head_on_healthz():
+    import main
+
+    methods = {
+        m for r in main.app.routes if getattr(r, "path", "") == "/healthz" for m in r.methods
+    }
+    assert {"GET", "HEAD"} <= methods

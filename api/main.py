@@ -183,7 +183,8 @@ async def current_user(
 # ------------------------------------------------------------ auth routes
 
 
-@app.get("/healthz")
+# HEAD too: uptime monitors (UptimeRobot) probe with HEAD by default.
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     # Uptime monitors call this, so it checks the database too: an API that
     # answers while Postgres is down cannot sign anyone in.
