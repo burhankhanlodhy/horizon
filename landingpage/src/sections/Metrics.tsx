@@ -26,7 +26,7 @@ export function Metrics() {
             *** savings ledger ***
           </p>
           <p className="mt-1 text-center text-[11px] text-ink-3">
-            receipt no. 0042 — from our eval suite
+            receipt no. 0042 from our eval suite
           </p>
           <div className="my-5 border-t border-dashed border-line-2" />
           <dl className="space-y-3.5">

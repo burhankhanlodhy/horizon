@@ -94,7 +94,7 @@ function TerminalDemo() {
           transition={{ type: "spring", stiffness: 240, damping: 14, delay: 1.9 }}
           className="mt-4 inline-flex items-center gap-1.5 rounded-sm border border-dashed border-[#a3b18a]/60 px-2.5 py-1 text-[11px] text-[#a3b18a]"
         >
-          <Zap size={11} /> 63.8% smaller — answer unchanged
+          <Zap size={11} /> 63.8% smaller with the answer unchanged
         </motion.div>
       </div>
     </motion.div>
@@ -136,7 +136,7 @@ export function Hero() {
             transition={{ duration: 0.7, ease: EASE, delay: 0.22 }}
             className="mt-6 max-w-xl text-lg leading-relaxed text-ink-2"
           >
-            ContextShrink sits between your AI agent and the model — compressing bulky context,
+            ContextShrink sits between your AI agent and the model while compressing bulky context,
             preserving prompt caches, and showing you every token you didn't pay for. Same answers.
             Dramatically smaller bills.
           </motion.p>

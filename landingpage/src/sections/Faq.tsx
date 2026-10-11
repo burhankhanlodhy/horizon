@@ -19,7 +19,7 @@ const ITEMS = [
   },
   {
     q: "Which agents and SDKs are supported?",
-    a: "Anything that speaks the Anthropic Messages API, the OpenAI Chat Completions API, or Google Vertex — plus first-class wrap scripts for Claude Code, OpenCode, Codex, Cursor and more. LangChain, CrewAI and MCP integrations are included.",
+    a: "Anything that speaks the Anthropic Messages API, the OpenAI Chat Completions API, or Google Vertex, along with first-class wrap scripts for Claude Code, OpenCode, Codex, Cursor and more. LangChain, CrewAI and MCP integrations are included.",
   },
   {
     q: "How do I know it's actually saving money?",
@@ -60,7 +60,7 @@ export function Faq() {
           transition={{ duration: 0.6, ease: EASE }}
           className="text-center"
         >
-          <Kicker className="!justify-center">04 — faq</Kicker>
+          <Kicker className="!justify-center">04. faq</Kicker>
           <h2 className="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">
             Fair questions, <span className="italic text-ember">straight answers.</span>
           </h2>

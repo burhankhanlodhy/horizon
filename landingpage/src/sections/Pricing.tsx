@@ -60,7 +60,7 @@ export function Pricing() {
           transition={{ duration: 0.6, ease: EASE }}
           className="mx-auto max-w-2xl text-center"
         >
-          <Kicker className="!justify-center">03 — Pricing</Kicker>
+          <Kicker className="!justify-center">03. Pricing</Kicker>
           <h2 className="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">
             Pays for itself. <span className="italic text-ember">Usually in week one.</span>
           </h2>

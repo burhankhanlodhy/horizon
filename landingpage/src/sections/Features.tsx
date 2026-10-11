@@ -6,7 +6,7 @@ const FEATURES = [
   {
     icon: Gauge,
     title: "Transparent compression",
-    body: "Bulky tool output, logs, docs and diffs are compressed en route to the model. Your agent keeps its workflow — the context just gets smaller.",
+    body: "Bulky tool output, logs, docs and diffs are compressed en route to the model. Your agent keeps its workflow and the context just gets smaller.",
   },
   {
     icon: Database,
@@ -16,7 +16,7 @@ const FEATURES = [
   {
     icon: GitBranch,
     title: "Retrieve on demand",
-    body: "Compressed content isn't lost — it's shelved. Every summary carries a marker; the original is one MCP tool call away (horizon_retrieve).",
+    body: "Compressed content isn't lost but it's shelved. Every summary carries a marker; the original is one MCP tool call away (horizon_retrieve).",
   },
   {
     icon: Wrench,
@@ -26,7 +26,7 @@ const FEATURES = [
   {
     icon: BookOpenCheck,
     title: "Savings you can audit",
-    body: "A durable ledger records every request, token saved and dollar avoided — with Prometheus metrics and a live dashboard.",
+    body: "A durable ledger records every request, token saved and dollar avoided, with Prometheus metrics and a live dashboard.",
   },
   {
     icon: Lock,
@@ -46,7 +46,7 @@ export function Features() {
             viewport={{ once: true, margin: "-80px" }}
             transition={{ duration: 0.6, ease: EASE }}
           >
-            <Kicker>01 — What it does</Kicker>
+            <Kicker>01. What it does</Kicker>
             <h2 className="mt-3 max-w-md font-display text-4xl font-semibold tracking-tight sm:text-5xl">
               Everything shrinks. <span className="italic text-ember">Nothing breaks.</span>
             </h2>
@@ -58,7 +58,7 @@ export function Features() {
             transition={{ duration: 0.6, ease: EASE, delay: 0.1 }}
             className="max-w-sm text-ink-2"
           >
-            A proxy layer that respects how coding agents actually work — caches, tools, multi-turn
+            A proxy layer that respects how coding agents actually work, including caches, tools, multi-turn
             state and all.
           </motion.p>
         </div>

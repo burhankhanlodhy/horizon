@@ -50,7 +50,7 @@ export function HowItWorks() {
           viewport={{ once: true, margin: "-80px" }}
           transition={{ duration: 0.6, ease: EASE }}
         >
-          <Kicker>02 — How it works</Kicker>
+          <Kicker>02. How it works</Kicker>
           <h2 className="mt-3 max-w-md font-display text-4xl font-semibold tracking-tight sm:text-5xl">
             One proxy. <span className="italic text-ember">Three</span> moving parts.
           </h2>
@@ -96,7 +96,7 @@ export function HowItWorks() {
             transition={{ duration: 0.5, ease: EASE, delay: 0.1 }}
           >
             <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3">
-              step 1 — Singup for a Plan
+              step 1: Sign up for a Plan
             </p>
             <CodeBlock code="Sign up for a Plan of your Choice" />
           </motion.div>
@@ -107,7 +107,7 @@ export function HowItWorks() {
             transition={{ duration: 0.5, ease: EASE, delay: 0.2 }}
           >
             <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3">
-              step 2 — connect your agent
+              step 2: connect your agent
             </p>
             <CodeBlock code="Download the Installer and Start using any coding agent " />
           </motion.div>
