@@ -53,6 +53,9 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
       MAIL_FROM: ${MAIL_FROM:-ContextShrink <noreply@contextshrink.com>}
+      # 0 = don't require a confirmed email for proxy keys even though email
+      # works (e.g. while SES is still in its sandbox and can't reach users).
+      EMAIL_VERIFICATION_REQUIRED: ${EMAIL_VERIFICATION_REQUIRED:-1}
     ports:
       - "${API_BIND:-127.0.0.1}:8788:8788"
 
