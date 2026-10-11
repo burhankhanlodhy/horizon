@@ -43,6 +43,8 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       APP_URL: ${APP_URL:-https://app.contextshrink.com}
+      # Accounts (comma-separated emails) that can read Contact form messages.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     ports:
       - "${API_BIND:-127.0.0.1}:8788:8788"
 

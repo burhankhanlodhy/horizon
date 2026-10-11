@@ -10,10 +10,17 @@ import Downloads from "./pages/Downloads";
 import SignOut from "./pages/SignOut";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import Messages from "./pages/Messages";
 import { refreshUser, type SessionUser } from "./lib/auth";
-import { AccountProvider } from "./lib/account";
+import { AccountProvider, useAccount } from "./lib/account";
 
 type SessionState = "checking" | "authenticated" | "unauthenticated" | "error";
+
+/** The API enforces admin access; this only keeps others off the page. */
+function AdminOnly({ children }: { children: JSX.Element }) {
+  const { user } = useAccount();
+  return user.is_admin ? children : <Navigate to="/" replace />;
+}
 
 function RequireAuth() {
   const location = useLocation();
@@ -108,6 +115,7 @@ export default function App() {
             <Route path="subscriptions" element={<Subscriptions />} />
             <Route path="downloads" element={<Downloads />} />
             <Route path="docs" element={<Documentation />} />
+            <Route path="messages" element={<AdminOnly><Messages /></AdminOnly>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

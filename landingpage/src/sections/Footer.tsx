@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { Btn, DASHBOARD_URL, EASE, LogoMark, Wordmark } from "../components/ui";
+import { Btn, DASHBOARD_URL, EASE, LEGAL_LINKS, LogoMark, Wordmark } from "../components/ui";
 
 export function Footer() {
   return (
@@ -60,6 +60,17 @@ export function Footer() {
             <a href={`${DASHBOARD_URL}/login`} className="transition hover:text-ink">
               Sign in
             </a>
+            {LEGAL_LINKS.map((l) => (
+              <a
+                key={l.href}
+                href={l.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="transition hover:text-ink"
+              >
+                {l.label}
+              </a>
+            ))}
           </nav>
           <div className="font-mono text-xs text-ink-3">© 2026 ContextShrink</div>
         </div>

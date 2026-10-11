@@ -10,6 +10,18 @@ export const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 export const DASHBOARD_URL: string =
   (import.meta.env.VITE_DASHBOARD_URL as string | undefined) ?? "http://127.0.0.1:5173";
 
+/** The control-plane API (the Contact form posts here). */
+export const API_URL: string =
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  (import.meta.env.DEV ? "http://127.0.0.1:8788" : "https://api.contextshrink.com");
+
+/** Standalone pages, opened in a new tab from the footer. */
+export const LEGAL_LINKS = [
+  { label: "Privacy Policy", href: "/privacy.html" },
+  { label: "Terms of Service", href: "/terms.html" },
+  { label: "Contact Us", href: "/contact.html" },
+];
+
 /* ------------------------------ brand ------------------------------ */
 
 export function LogoMark({ size = 30 }: { size?: number }) {

@@ -157,6 +157,27 @@ export default function Signup() {
         <GradientButton onClick={submit} className="mt-1 w-full justify-center">
           {busy ? "Creating account…" : "Create account"}
         </GradientButton>
+        <p className="text-center text-[11px] leading-relaxed text-ink-3">
+          By creating an account you agree to our{" "}
+          <a
+            href={`${LANDING_URL}/terms.html`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline transition hover:text-ink"
+          >
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a
+            href={`${LANDING_URL}/privacy.html`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline transition hover:text-ink"
+          >
+            Privacy Policy
+          </a>
+          .
+        </p>
       </div>
 
       <p className="mt-5 text-center text-xs text-slate-500">

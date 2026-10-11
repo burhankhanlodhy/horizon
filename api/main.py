@@ -14,6 +14,7 @@ from typing import Literal
 import analytics
 import asyncpg
 import billing
+import contact
 import db
 import security
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -75,6 +76,7 @@ class AccountOut(UserOut):
     created_at: datetime
     plan: str
     subscription_status: str
+    is_admin: bool = False
 
 
 class SubscriptionIn(BaseModel):
@@ -226,6 +228,7 @@ async def me(user: asyncpg.Record = Depends(current_user)):
         created_at=user["created_at"],
         plan=user["plan"],
         subscription_status=user["subscription_status"],
+        is_admin=contact.is_admin(user["email"]),
     )
 
 
@@ -304,3 +307,4 @@ async def usage_summary(
 
 analytics.install(app, current_user)
 billing.install(app, current_user)
+contact.install(app, current_user)

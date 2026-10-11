@@ -13,6 +13,7 @@ import {
   CreditCard,
   Download,
   Gauge,
+  Inbox,
   LineChart,
   KeyRound,
   LogOut,
@@ -164,6 +165,10 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
     title: "Documentation",
     subtitle: "Quickstarts, endpoints and wiring guides",
   },
+  "/messages": {
+    title: "Messages",
+    subtitle: "Contact form messages from the website",
+  },
   "/signout": { title: "Sign out", subtitle: "" },
 };
 
@@ -190,10 +195,13 @@ function Logo() {
 }
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
-  const { advanced } = useAccount();
+  const { advanced, user } = useAccount();
+  const items = user.is_admin
+    ? [...nav, { to: "/messages", label: "Messages", icon: Inbox }]
+    : nav;
   return (
     <nav className="mt-8 flex flex-1 flex-col gap-1">
-      {nav.map(({ to, label, icon: Icon }) => (
+      {items.map(({ to, label, icon: Icon }) => (
         <NavLink key={to} to={to} end={to === "/"} onClick={onNavigate}>
           {({ isActive }) => (
             <div

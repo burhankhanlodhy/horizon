@@ -222,3 +222,19 @@ RETURNS void LANGUAGE sql AS $$
             cache_hits   = EXCLUDED.cache_hits,
             updated_at   = now();
 $$;
+
+-- =========================================================== contact form
+-- Messages from the public Contact page. Only the sender's own details are
+-- kept: no IP address or user agent (the rate limit keys on a salted hash in
+-- memory). Admins read them on the dashboard's Messages page.
+CREATE TABLE IF NOT EXISTS core.contact_messages (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT        NOT NULL,
+    email       TEXT        NOT NULL,
+    topic       TEXT        NOT NULL,
+    message     TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    handled_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_contact_messages_created
+    ON core.contact_messages (created_at DESC);

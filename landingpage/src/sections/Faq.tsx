@@ -15,7 +15,7 @@ const ITEMS = [
   },
   {
     q: "Where does my code go?",
-    a: "Through our proxy, then straight to your AI provider. Requests are encrypted in transit, compressed in memory, and forwarded to the model you chose. We never log your prompts or responses. The only thing we keep is token counts for your savings ledger.",
+    a: "Through our proxy, then straight to your AI provider. Requests are encrypted in transit, compressed in memory, and forwarded to the model you chose. Your prompts and responses never go into our logs or analytics: usage records hold the model, token counts and savings. Content is held only briefly so the service works, such as the original of anything we shorten (about 30 minutes) so the model can fetch it back. Our Privacy Policy has the details.",
   },
   {
     q: "Which agents and SDKs are supported?",

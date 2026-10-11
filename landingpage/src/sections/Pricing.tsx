@@ -144,7 +144,7 @@ export function Pricing() {
           ))}
         </div>
         <p className="mt-10 text-center font-mono text-xs text-ink-3">
-          no savings, no bill. we never store your prompts.
+          no savings, no bill. your prompts never reach our logs.
         </p>
       </div>
     </section>
