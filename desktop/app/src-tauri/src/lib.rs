@@ -228,6 +228,54 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Run by the Windows uninstaller as `--uninstall-cleanup`, before it
+/// removes the app (upgrades skip it). Does what the Sign out link does, so an
+/// uninstall leaves no saved session, proxy key or connected editor behind:
+/// the session and device-key id live in the OS credential store, which an
+/// uninstall otherwise never touches, and a reinstall would sign straight
+/// back in as the previous account. No window opens; every step is best
+/// effort, since nothing may stop the uninstall.
+pub fn uninstall_cleanup() {
+    if let Some(state) = headless_state() {
+        disconnect_editors(&state);
+        state.client.clear_wanted_editors();
+        if let Some(token) = secrets::session() {
+            tauri::async_runtime::block_on(async {
+                if let Some(id) = secrets::device_key_id() {
+                    let _ = state.api.revoke_key(&token, &id).await;
+                }
+                state.api.logout(&token).await;
+            });
+        }
+        state.client.clear_key();
+    }
+    secrets::clear_all();
+}
+
+/// The paths `run()` gets from Tauri, without starting it: the bundled client
+/// next to the executable and the app's local data folder.
+fn headless_state() -> Option<AppState> {
+    let install_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let exe = install_dir.join("horizon").join(client::CLIENT_EXE);
+    let data_dir = local_data_dir()?.join("com.contextshrink.desktop");
+    Some(AppState {
+        api: Api::new(),
+        client: Client::new(exe, data_dir),
+        forwarders: Mutex::new(HashMap::new()),
+    })
+}
+
+#[cfg(windows)]
+fn local_data_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+}
+
+#[cfg(not(windows))]
+fn local_data_dir() -> Option<PathBuf> {
+    // Only the Windows installer runs the cleanup; elsewhere clear secrets only.
+    None
+}
+
 /// Plan, savings, Free cap and unpaid-fee details for the header.
 #[tauri::command]
 async fn account_summary(state: State<'_, AppState>) -> Result<Value, String> {
