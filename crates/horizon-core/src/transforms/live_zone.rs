@@ -169,6 +169,8 @@ const THRESHOLD_PLAIN_TEXT: usize = 512;
 /// HTML blocks have no compressor; threshold matches plain text so
 /// when an HTML compressor lands the value is already pinned.
 const THRESHOLD_HTML: usize = 512;
+/// Tabular text has no native compressor; keep it lossless.
+const THRESHOLD_TABULAR: usize = 512;
 
 /// Map a content type to its byte threshold. Returning `usize` rather
 /// than an `Option` because every variant has a sensible default;
@@ -182,6 +184,7 @@ fn threshold_for(content_type: ContentType) -> usize {
         ContentType::SourceCode => THRESHOLD_SOURCE_CODE,
         ContentType::PlainText => THRESHOLD_PLAIN_TEXT,
         ContentType::Html => THRESHOLD_HTML,
+        ContentType::Tabular => THRESHOLD_TABULAR,
     }
 }
 
@@ -1397,6 +1400,11 @@ fn dispatch_compressor(text: &str, content_type: ContentType) -> DispatchResult 
         // TODO(PR-B4): wire Kompress (lossless prose compressor) for
         // PlainText. For now, leave untouched.
         ContentType::PlainText => DispatchResult::NoOp {
+            content_type: content_type.as_str(),
+        },
+        // This dispatcher has no tabular compressor; preserve these rows
+        // instead of sending structured output through lossy Kompress.
+        ContentType::Tabular => DispatchResult::NoOp {
             content_type: content_type.as_str(),
         },
         // No HTML compressor on the Rust side; pages are handled by

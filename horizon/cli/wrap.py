@@ -170,6 +170,7 @@ from horizon.providers.grok import (
 )
 from horizon.providers.grok_build import render_setup_lines as _render_grok_build_setup_lines
 from horizon.providers.grok_build.config import (
+    grok_config_paths,
     inject_grok_provider_config,
     restore_grok_provider_config,
 )
@@ -3361,11 +3362,30 @@ def _inject_codex_provider_config(port: int) -> str | None:
         _snapshot_codex_config_if_unwrapped(config_file, backup_file)
 
         if config_file.exists():
-            content = _read_text(config_file)
+            original = _read_text(config_file)
             # Remove any prior Horizon-managed blocks before re-injecting so
             # the operation is idempotent and supports port changes.
-            content = _strip_codex_horizon_blocks(content)
+            content = _strip_codex_horizon_blocks(original)
             content = _strip_existing_codex_horizon_provider_table(content)
+
+            # Report a broken file in the user's own terms. The candidate
+            # validated below is the merged text, so its parse error would
+            # name a line the user never wrote. Only the user's part has to
+            # parse: stripping a stale Horizon block may be what repairs it.
+            try:
+                tomllib.loads(content)
+            except tomllib.TOMLDecodeError:
+                try:
+                    tomllib.loads(original)
+                    reason = "it is no longer valid TOML once Horizon's block is removed"
+                except tomllib.TOMLDecodeError as exc:
+                    reason = f"it is not valid TOML ({exc})"
+                click.echo(
+                    f"  Warning: could not update Codex config {config_file}: {reason}; "
+                    "Codex WebSocket traffic will bypass Horizon. Fix or remove the file, "
+                    "then re-run."
+                )
+                return None
 
             # Bare top-level keys must precede any [section] in TOML, and
             # TOML rejects duplicate top-level keys.  Rewrite any existing
@@ -3415,7 +3435,7 @@ def _inject_codex_provider_config(port: int) -> str | None:
         # history list stays whole once it routes through Horizon. Best-effort.
         retag_to_horizon(_codex_home_dir())
     except Exception as e:
-        click.echo(f"  Warning: could not update Codex config: {e}")
+        click.echo(f"  Warning: could not update Codex config {config_file}: {e}")
         return None
 
     return custom_upstream_base_url
@@ -7505,7 +7525,7 @@ def grok_build(
             config_file = inject_grok_provider_config(port, project=project)
             click.echo(f"  Grok config: injected Horizon proxy override into {config_file}")
         except Exception as e:
-            click.echo(f"  Warning: could not update Grok config: {e}")
+            click.echo(f"  Warning: could not update Grok config {grok_config_paths()[0]}: {e}")
         return
 
     def _print_grok_build_setup(actual_port: int) -> None:
@@ -7514,7 +7534,7 @@ def grok_build(
             click.echo(f"  Grok config: injected Horizon proxy override into {config_file}")
             click.echo()
         except Exception as e:
-            click.echo(f"  Warning: could not update Grok config: {e}")
+            click.echo(f"  Warning: could not update Grok config {grok_config_paths()[0]}: {e}")
             click.echo()
         for line in _render_grok_build_setup_lines(actual_port, project=project):
             click.echo(line)

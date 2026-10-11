@@ -82,6 +82,7 @@ from horizon.providers.codex.runtime import (
     resolve_codex_routing_headers as _resolve_codex_routing_headers,
 )
 from horizon.providers.copilot import model_prefers_responses_api
+from horizon.proxy import public_errors
 from horizon.proxy.auth_mode import (
     classify_auth_mode,
     classify_client,
@@ -5476,13 +5477,11 @@ class OpenAIHandlerMixin:
                 logger.error(f"[{request_id}] Backend error: {e}")
                 return JSONResponse(
                     status_code=500,
-                    content={
-                        "error": {
-                            "message": str(e),
-                            "type": "api_error",
-                            "code": "backend_error",
-                        }
-                    },
+                    content=public_errors.openai_error_body(
+                        public_errors.classify_or_internal(e),
+                        request_id=str(request_id),
+                        error_type="api_error",
+                    ),
                 )
 
         # Direct OpenAI API (no backend configured)
@@ -11253,12 +11252,10 @@ class OpenAIHandlerMixin:
             await self.metrics.record_failed(provider="compress")
             return JSONResponse(
                 status_code=503,
-                content={
-                    "error": {
-                        "type": "compression_error",
-                        "message": str(e),
-                    }
-                },
+                content=public_errors.openai_error_body(
+                    public_errors.classify_or_internal(e),
+                    error_type="compression_error",
+                ),
             )
 
     async def handle_compress_usage(self, request: Request) -> JSONResponse:
@@ -11649,12 +11646,10 @@ class OpenAIHandlerMixin:
             )
             return Response(
                 content=json.dumps(
-                    {
-                        "error": {
-                            "type": "connection_error",
-                            "message": f"Failed to connect to upstream API: {e}",
-                        }
-                    }
+                    public_errors.openai_error_body(
+                        public_errors.classify_or_internal(e),
+                        error_type="connection_error",
+                    )
                 ),
                 status_code=502,
                 media_type="application/json",
@@ -11843,12 +11838,10 @@ class OpenAIHandlerMixin:
             )
             return Response(
                 content=json.dumps(
-                    {
-                        "error": {
-                            "type": "connection_error",
-                            "message": f"Failed to connect to upstream API: {e}",
-                        }
-                    }
+                    public_errors.openai_error_body(
+                        public_errors.classify_or_internal(e),
+                        error_type="connection_error",
+                    )
                 ),
                 status_code=502,
                 media_type="application/json",

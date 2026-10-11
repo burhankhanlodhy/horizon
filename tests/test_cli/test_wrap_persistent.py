@@ -37,7 +37,8 @@ def test_ensure_proxy_recovers_matching_persistent_deployment(monkeypatch) -> No
         lambda manifest: calls.append(f"start:{manifest.profile}"),
     )
     monkeypatch.setattr(
-        "horizon.install.runtime.wait_ready", lambda manifest, timeout_seconds=45: True
+        "horizon.install.runtime.wait_ready",
+        lambda manifest, timeout_seconds=45, require_identity=False: True,
     )
     monkeypatch.setattr(
         wrap_cli,

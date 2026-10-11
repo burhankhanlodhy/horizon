@@ -16,6 +16,7 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
+from horizon import fsutil
 from horizon._subprocess import run
 
 try:
@@ -197,7 +198,7 @@ def _json_file(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     logger.debug("write json: %s (keys=%s)", path, sorted(payload.keys()))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    fsutil.write_text(path, json.dumps(payload, indent=2) + "\n")
 
 
 def _ensure_claude_hooks(path: Path, profile: str, port: int) -> None:
@@ -485,7 +486,7 @@ def _ensure_codex_provider(path: Path, port: int) -> None:
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     tomllib.loads(content)
-    path.write_text(content, encoding="utf-8")
+    fsutil.write_text(path, content)
     # Codex filters its history menu by the active model_provider, so existing
     # native threads vanish once we switch to "horizon". Retag them to match the
     # active provider so the history stays whole (#961), mirroring the install
@@ -615,7 +616,7 @@ def _ensure_codex_feature_flag(path: Path) -> None:
                 content.rstrip() + "\n\n[features]\n\n" + _codex_feature_block() + "\n"
             ).lstrip()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    fsutil.write_text(path, content)
 
 
 def _ensure_codex_hooks(path: Path, profile: str) -> None:

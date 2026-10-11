@@ -144,6 +144,7 @@ from horizon.proxy.helpers import (
     _setup_file_logging,  # noqa: F401
     is_anthropic_auth,  # noqa: F401
     jitter_delay_ms,
+    overload_retry_is_futile,
     resolve_display_provider,
     retry_after_ms,
 )
@@ -179,6 +180,7 @@ from horizon.proxy.request_logger import RequestLogger  # noqa: F401
 from horizon.proxy.savings_tracker import LITELLM_AVAILABLE
 from horizon.proxy.semantic_cache import SemanticCache  # noqa: F401
 from horizon.proxy.ssl_context import build_httpx_verify
+from horizon.proxy.tcp_keepalive import install_tcp_keepalive
 from horizon.proxy.tool_schema_savings_policy import tool_schema_saved_from_tags
 from horizon.proxy.upstream_pinning import install_upstream_pinning
 from horizon.proxy.warmup import WarmupRegistry
@@ -2063,15 +2065,19 @@ class HorizonProxy(
         # honour a pin at all — a proxy resolves the target itself, on its own
         # network. Operator-configured upstreams have no pin and are untouched,
         # so trust_env, limits, HTTP/2 and connection reuse are unchanged.
+        # Keepalive goes on first: pinning hides proxy pools behind a wrapper.
+        _keepalive = self.config.upstream_tcp_keepalive_seconds
         self.http_client = install_upstream_pinning(
-            httpx.AsyncClient(http2=_http2, **_client_kwargs)
+            install_tcp_keepalive(httpx.AsyncClient(http2=_http2, **_client_kwargs), _keepalive)
         )
         # Reuse the primary client when HTTP/2 is already off; otherwise keep a
         # dedicated HTTP/1.1 client for ChatGPT passthrough.
         self.http_client_h1 = (
             self.http_client
             if not _http2
-            else install_upstream_pinning(httpx.AsyncClient(http2=False, **_client_kwargs))
+            else install_upstream_pinning(
+                install_tcp_keepalive(httpx.AsyncClient(http2=False, **_client_kwargs), _keepalive)
+            )
         )
         logger.info("Horizon Proxy started (version %s)", __version__)
         self.cache_keeper = self._build_cache_keeper()
@@ -2600,6 +2606,11 @@ class HorizonProxy(
                         if (
                             not self.config.retry_enabled
                             or attempt >= self.config.retry_max_attempts - 1
+                            or overload_retry_is_futile(
+                                response,
+                                self.config.retry_max_delay_ms,
+                                retries_left=self.config.retry_max_attempts - attempt - 1,
+                            )
                         ):
                             return response
                         delay_ms = retry_after_ms(
@@ -6073,6 +6084,11 @@ def _proxy_config_from_env() -> ProxyConfig:
             150,
             min_value=1,
         ),
+        upstream_tcp_keepalive_seconds=_get_env_int(
+            "HORIZON_UPSTREAM_TCP_KEEPALIVE_SECONDS",
+            30,
+            min_value=0,
+        ),
         buffered_ccr_grace_seconds=_get_env_float(
             "HORIZON_BUFFERED_CCR_GRACE_SECONDS",
             DEFAULT_BUFFERED_CCR_GRACE_SECONDS,
@@ -6831,6 +6847,11 @@ if __name__ == "__main__":
             "HORIZON_WRITE_TIMEOUT_SECONDS",
             150,
             min_value=1,
+        ),
+        upstream_tcp_keepalive_seconds=_get_env_int(
+            "HORIZON_UPSTREAM_TCP_KEEPALIVE_SECONDS",
+            30,
+            min_value=0,
         ),
         vertex_api_url=_get_env_str("VERTEX_TARGET_API_URL", args.vertex_api_url),
         # Backend settings

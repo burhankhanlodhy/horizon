@@ -300,11 +300,20 @@ def extract_tags(headers: Any) -> dict[str, str]:
 
     Header name match is case-insensitive; the returned key has the
     ``x-horizon-`` prefix stripped.
+
+    Credential-bearing headers are never tags. ``x-horizon-proxy-token`` is
+    the proxy's own bearer and gateways (Kong, Envoy, LiteLLM) send it on every
+    turn; before this filter it landed in ``RequestOutcome.tags`` and from
+    there in the request log, dashboard facets and every export that carries
+    tags. The rule lives in :mod:`internal_header_policy` so producers and
+    consumers of tags agree on it.
     """
+    from horizon.proxy.internal_header_policy import is_credential_header
+
     return {
         k.lower().replace("x-horizon-", ""): v
         for k, v in headers.items()
-        if k.lower().startswith("x-horizon-")
+        if k.lower().startswith("x-horizon-") and not is_credential_header(k)
     }
 
 
@@ -1686,6 +1695,14 @@ def retry_after_ms(response: httpx.Response, max_ms: int) -> float | None:
     exponential backoff. Anthropic sends integer seconds; the HTTP-date branch
     covers other upstreams. Fails open on any parse error.
     """
+    seconds = _retry_after_seconds(response)
+    if seconds is None:
+        return None
+    return min(seconds * 1000.0, float(max_ms))
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Uncapped, non-negative ``Retry-After`` in seconds, or ``None`` if absent/unparseable."""
     value = response.headers.get("retry-after")
     if not value:
         return None
@@ -1700,7 +1717,25 @@ def retry_after_ms(response: httpx.Response, max_ms: int) -> float | None:
             seconds = (retry_at - datetime.now(retry_at.tzinfo)).total_seconds()
         except (TypeError, ValueError):
             return None
-    return min(max(seconds, 0.0) * 1000.0, float(max_ms))
+    return max(seconds, 0.0)
+
+
+def overload_retry_is_futile(response: httpx.Response, max_ms: int, retries_left: int = 1) -> bool:
+    """True when retrying a 429/529 cannot succeed within the proxy's backoff.
+
+    Upstream says so explicitly with ``x-should-retry: false``, or implicitly with a
+    ``Retry-After`` beyond every wait still available: each of the ``retries_left``
+    retries sleeps at most ``max_ms``, so a reset further out than
+    ``retries_left * max_ms`` is never reached and the retries only delay the same
+    error (an exhausted subscription window answers with a reset hours away).
+    Forwarding it at once lets the client, or a credential-rotating proxy in front,
+    act on it. A reset within that window stays retryable: later 429s carry a
+    shorter Retry-After as the reset approaches.
+    """
+    if response.headers.get("x-should-retry", "").strip().lower() == "false":
+        return True
+    seconds = _retry_after_seconds(response)
+    return seconds is not None and seconds * 1000.0 > max(retries_left, 0) * max_ms
 
 
 # Transient upstream statuses worth retrying with backoff: 429 (rate limit) and

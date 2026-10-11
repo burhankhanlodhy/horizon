@@ -1718,3 +1718,26 @@ def test_local_profile_distinguishes_identical_non_ascii_names(monkeypatch, tmp_
     second.mkdir(parents=True)
 
     assert init_cli._local_profile(first) != init_cli._local_profile(second)
+
+
+def test_write_json_keeps_the_existing_file_when_the_write_fails(monkeypatch, tmp_path) -> None:
+    """``init`` rewrites user-owned files such as ~/.claude/settings.json.
+
+    A plain ``write_text`` truncates first, so a failure mid-write (ENOSPC,
+    SIGKILL) left a half-written file; the write must be atomic.
+    """
+    init_cli, _ = _load_init_module(monkeypatch)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"theme": "dark"}\n', encoding="utf-8")
+
+    def fail_fsync(_fd: int) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("horizon.fsutil.os.fsync", fail_fsync)
+
+    with pytest.raises(OSError, match="No space left"):
+        init_cli._write_json(settings, {"theme": "dark", "env": {"A": "1"}})
+
+    assert settings.read_text(encoding="utf-8") == '{"theme": "dark"}\n'
+    assert [p.name for p in settings.parent.iterdir()] == ["settings.json"]

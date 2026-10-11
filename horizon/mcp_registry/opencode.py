@@ -13,6 +13,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from horizon import fsutil
+
 from .base import MCPRegistrar, RegisterResult, RegisterStatus, ServerSpec
 
 logger = logging.getLogger(__name__)
@@ -47,7 +49,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     if not isinstance(data, dict):
         return {}
@@ -73,7 +75,10 @@ def _read_json_for_write(path: Path) -> dict[str, Any]:
     """
     if not path.exists():
         return {}
-    raw = path.read_text(encoding="utf-8")  # OSError propagates to the caller
+    try:
+        raw = path.read_text(encoding="utf-8")  # OSError propagates to the caller
+    except UnicodeDecodeError as exc:
+        raise _MalformedConfigError(f"not valid UTF-8: {exc}") from exc
     if not raw.strip():
         return {}
     try:
@@ -87,9 +92,7 @@ def _read_json_for_write(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    fsutil.write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 def _entry_to_spec(name: str, entry: dict[str, Any]) -> ServerSpec:

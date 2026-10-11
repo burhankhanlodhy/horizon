@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from horizon import fsutil
 from horizon._subprocess import run
 
 from .base import MCPRegistrar, RegisterResult, RegisterStatus, ServerSpec
@@ -136,6 +137,10 @@ class ClaudeRegistrar(MCPRegistrar):
             except OSError as exc:
                 raise ClaudeConfigMutationError(
                     f"could not read Claude config {config_path}: {exc}"
+                ) from exc
+            except UnicodeDecodeError as exc:
+                raise ClaudeConfigMutationError(
+                    f"Claude config {config_path} is not valid UTF-8; refusing to mutate"
                 ) from exc
             try:
                 config = json.loads(raw)
@@ -263,7 +268,8 @@ class ClaudeRegistrar(MCPRegistrar):
         del servers[server_name]
         try:
             _write_json(path, config)
-        except OSError:
+        except OSError as exc:
+            logger.warning("could not remove %r from %s: %s", server_name, path, exc)
             return False
         return True
 
@@ -330,7 +336,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
     if not isinstance(data, dict):
         return {}
@@ -393,7 +399,10 @@ def _read_json_for_write(path: Path) -> dict[str, Any]:
     """
     if not path.exists():
         return {}
-    raw = path.read_text(encoding="utf-8")  # OSError propagates to the caller
+    try:
+        raw = path.read_text(encoding="utf-8")  # OSError propagates to the caller
+    except UnicodeDecodeError as exc:
+        raise _MalformedConfigError(f"not valid UTF-8: {exc}") from exc
     if not raw.strip():
         return {}
     try:
@@ -407,9 +416,7 @@ def _read_json_for_write(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    fsutil.write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 def _spec_to_entry(spec: ServerSpec) -> dict[str, Any]:
