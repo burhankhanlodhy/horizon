@@ -1,0 +1,4 @@
+# Cloudflare Pages response headers (ignored by the Pi 4's Caddy).
+# Advanced Analytics is one static page that must always be current.
+/dashboard/*
+  Cache-Control: no-store

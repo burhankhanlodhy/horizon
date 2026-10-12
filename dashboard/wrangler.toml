@@ -1,0 +1,10 @@
+# Cloudflare Pages project behind app.contextshrink.com.
+# Deploy with deploy/cloudflare-pages/deploy.ps1 (see its README).
+name = "contextshrink-dashboard"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-09-01"
+
+# Desktop installers, served at /releases/* by functions/releases/[[path]].js.
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "contextshrink-releases"

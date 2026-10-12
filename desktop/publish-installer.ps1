@@ -5,16 +5,23 @@
 .DESCRIPTION
   Uploads the Windows NSIS installer, the Linux packages for the same version
   (desktop\dist-linux, from desktop/linux/build-in-container.sh) and a
-  latest.json listing every file with its size and SHA-256 to the Pi 4, and
-  stages an install script there. Installing into
-  /var/www/contextshrink/releases needs sudo, so the script prints the one
-  command to run. Earlier installers are kept; latest.json points at the new ones.
+  latest.json listing every file with its size and SHA-256. Earlier installers
+  are kept; latest.json points at the new ones and is uploaded last.
+
+  -Target r2 (default) uploads to the private R2 bucket that
+  app.contextshrink.com/releases/* serves from (dashboard\functions\releases),
+  using the token described in deploy\cloudflare-pages\README.md.
+  -Target pi4 is the old path: stage on the Pi 4 and print the one sudo
+  command that installs into /var/www/contextshrink/releases.
 
   Run after desktop\build-installer.ps1 and the macOS/Linux builds (GitHub
   Actions "Desktop app" artifacts, unpacked into desktop\dist-macos and
   desktop\dist-linux), from PowerShell. -Platforms limits what is published.
 #>
 param(
+    [ValidateSet("r2", "pi4")]
+    [string]$Target = "r2",
+    [string]$Bucket = "contextshrink-releases",
     [string]$Pi4 = "raspberrypi4@192.168.0.64",
     [ValidateSet("windows", "macos", "linux")]
     [string[]]$Platforms = @("windows", "macos", "linux")
@@ -71,6 +78,27 @@ New-Item -ItemType Directory -Force $staging | Out-Null
 $latest = Join-Path $staging "latest.json"
 [IO.File]::WriteAllText($latest, ($release | ConvertTo-Json -Depth 4))
 
+if ($Target -eq "r2") {
+    . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
+    Use-CloudflareToken
+    $types = @{
+        ".exe" = "application/vnd.microsoft.portable-executable"
+        ".dmg" = "application/x-apple-diskimage"
+        ".deb" = "application/vnd.debian.binary-package"
+        ".rpm" = "application/x-rpm"
+    }
+    foreach ($f in $files) {
+        $type = $types[$f.Extension.ToLower()]
+        if (-not $type) { $type = "application/octet-stream" }
+        "Uploading $($f.Name) ($([math]::Round($f.Length / 1MB)) MB)"
+        Invoke-Wrangler r2 object put "$Bucket/$($f.Name)" --file $f.FullName --content-type $type --remote
+    }
+    # Last, so the Downloads page never lists a file that is not there yet.
+    Invoke-Wrangler r2 object put "$Bucket/latest.json" --file $latest --content-type application/json --remote
+    "Published version ${version}: https://app.contextshrink.com/releases/latest.json"
+    return
+}
+
 # Windows PowerShell 5.1 turns any stderr line from a native command (e.g.
 # OpenSSH's harmless "IO is still pending on closed socket") into a terminating
 # error under "Stop"; judge ssh/scp by their exit codes instead.
@@ -79,7 +107,7 @@ function Assert-Ok([string]$what) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" }
 }
 
-$remote = ssh -o BatchMode=yes $Pi4 "mktemp -d /tmp/cs-release.XXXXXX" 2>$null
+$remote = ssh -o BatchMode=yes $Pi4 "mktemp -d ~/cs-release.XXXXXX" 2>$null
 Assert-Ok "Creating the staging folder on the Pi 4"
 $remote = "$remote".Trim()
 foreach ($f in $files) {
