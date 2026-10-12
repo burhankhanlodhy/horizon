@@ -1,12 +1,12 @@
-# Weekly Postgres backup to S3 Glacier
+# Daily Postgres backup to S3 Glacier
 
 `pg-weekly-backup.sh` dumps the control-plane database (accounts, keys,
 subscriptions, usage), checks the dump restores, and uploads it to
 `s3://contextshrink-weekly-backup/postgres/<year>/` as **S3 Glacier Flexible
-Retrieval** (storage class `GLACIER`) with S3-managed encryption. The newest 4
+Retrieval** (storage class `GLACIER`) with S3-managed encryption. The newest 7
 dumps also stay on the Pi in `~/backups/contextshrink/` for quick restores.
 
-It runs every **Sunday at 23:30** Pi time (America/Chicago) from the
+It runs **every night at 23:30** Pi time (America/Chicago) from the
 `raspberrypi5` user's crontab.
 
 ## 1. An upload-only AWS key
@@ -59,7 +59,7 @@ AWS_DEFAULT_REGION=us-east-1   # the bucket's region
 Crontab line (`crontab -e`):
 
 ```
-30 23 * * 0 /home/raspberrypi5/horizon/deploy/backup/pg-weekly-backup.sh >> /home/raspberrypi5/backups/contextshrink/backup.log 2>&1
+30 23 * * * /home/raspberrypi5/horizon/deploy/backup/pg-weekly-backup.sh >> /home/raspberrypi5/backups/contextshrink/backup.log 2>&1
 ```
 
 `~/backups/contextshrink/last_success` holds the time of the last good upload;
@@ -93,5 +93,23 @@ Glacier wait.
 ## Costs
 
 Glacier Flexible Retrieval bills each object for at least 90 days, and a
-retrieval costs a little per GB. Weekly dumps of this database are small (well
+retrieval costs a little per GB. Daily dumps of this database are small (well
 under 100 MB), so storage stays at cents per month.
+
+## Why daily
+
+The Pi 5 keeps the database on an SD card, the storage that wears out under
+constant writes. A weekly backup could lose a week of signups and usage; daily
+caps it at a day. The script name and bucket still say "weekly" from the
+first version.
+
+## Disk upkeep on the Pi 5
+
+Every proxy rebuild leaves Docker build cache behind (71 GB had piled up by
+2026-10-11). A second crontab line clears cache older than three days each
+Monday, keeping the latest build's layers so the next rebuild stays fast:
+
+```
+0 4 * * 1 docker builder prune -f --filter until=72h > /dev/null 2>&1
+```
+

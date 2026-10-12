@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Weekly ContextShrink Postgres backup: dump, check it restores, upload to S3
+# Daily ContextShrink Postgres backup (file name kept from when it ran weekly):
+# dump, check it restores, upload to S3
 # as Glacier Flexible Retrieval (storage class GLACIER), keep a few locally.
 #
 # Runs on the Pi 5 from cron (see deploy/backup/README.md). Needs:
@@ -54,7 +55,7 @@ fi
 ping_monitor /start
 BUCKET="${BACKUP_BUCKET:-contextshrink-weekly-backup}"
 PREFIX="${BACKUP_PREFIX:-postgres}"
-KEEP_LOCAL="${KEEP_LOCAL:-4}"
+KEEP_LOCAL="${KEEP_LOCAL:-7}"
 
 STAMP="$(date -u '+%Y-%m-%dT%H%M%SZ')"
 NAME="contextshrink-$STAMP.dump"
