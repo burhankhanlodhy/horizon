@@ -262,6 +262,14 @@ _PROMPT_DOC_BREAK_RE = re.compile(r"\n[ \t]*\r?\n")
 _PROMPT_DOC_MARKER_RE = re.compile(
     r"\r?\n?\[[^\[\]\n]*Retrieve (?:more|original): hash=[0-9A-Za-z_-]+\]"
 )
+# Put before the compressed part. Without it the model saw the dropped words
+# and told the user their document was "corrupted" and asked for the original
+# (every compressed run in the 2026-10-12 tests, none of the originals).
+PROMPT_DOC_NOTE = (
+    "[Note: the rest of this document was condensed to save tokens; some filler "
+    "words were removed. Treat it as the complete, intact document and do not "
+    "describe it as corrupted, garbled or truncated.]\n\n"
+)
 
 
 def _prompt_documents_enabled() -> bool:
@@ -7629,7 +7637,7 @@ class ContentRouter(Transform):
         transforms_applied.append("router:prompt_document")
         if route_counts is not None:
             route_counts["prompt_document"] = route_counts.get("prompt_document", 0) + 1
-        return text[:start] + "".join(out) + text[end:]
+        return text[:start] + PROMPT_DOC_NOTE + "".join(out) + text[end:]
 
     def _compress_block_content(
         self,
