@@ -122,7 +122,12 @@ _OPENAI_RESPONSES_UNIT_PARALLELISM_MAX = 16
 _OPENAI_RESPONSES_UNIT_CACHE_INIT_LOCK = threading.RLock()
 _OPENAI_RESPONSES_UNIT_EXECUTOR_LOCK = threading.RLock()
 _OPENAI_RESPONSES_UNIT_EXECUTOR: ThreadPoolExecutor | None = None
+# Default budget for compressing one Codex WS frame. Slow hosts (a Pi 5 takes
+# 2-3.5s for one new turn) can raise it with the env var below; a frame that
+# runs out is forwarded uncompressed and its finished units still warm the
+# cache for the next turn.
 _CODEX_WS_COMPRESSION_TIMEOUT_SECONDS = 5.0
+_CODEX_WS_COMPRESSION_TIMEOUT_ENV = "HORIZON_CODEX_WS_COMPRESSION_TIMEOUT_SECONDS"
 # The WS->HTTP fallback streams SSE, so `read` is the gap BETWEEN events, not a
 # cap on the whole response: 120s of silence from a live Codex turn means the
 # upstream is gone, not thinking. That is this path's own bound and is
@@ -195,7 +200,23 @@ def _response_ccr_hashes(messages: list[dict[str, Any]], markers: list[str]) -> 
 
 
 def _codex_ws_compression_timeout_seconds() -> float:
-    return min(COMPRESSION_TIMEOUT_SECONDS, _CODEX_WS_COMPRESSION_TIMEOUT_SECONDS)
+    budget = _CODEX_WS_COMPRESSION_TIMEOUT_SECONDS
+    raw = os.getenv(_CODEX_WS_COMPRESSION_TIMEOUT_ENV)
+    if raw is not None and raw.strip():
+        try:
+            requested = float(raw)
+        except ValueError:
+            requested = 0.0
+        if requested > 0:
+            budget = requested
+        else:
+            logger.warning(
+                "Invalid %s=%r; using %.1fs",
+                _CODEX_WS_COMPRESSION_TIMEOUT_ENV,
+                raw,
+                _CODEX_WS_COMPRESSION_TIMEOUT_SECONDS,
+            )
+    return min(COMPRESSION_TIMEOUT_SECONDS, budget)
 
 
 _WS_ALLOWED_ORIGINS_ENV = "HORIZON_WS_ORIGINS"

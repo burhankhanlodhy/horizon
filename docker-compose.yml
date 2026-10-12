@@ -60,6 +60,9 @@ services:
       - HORIZON_FLASH_MIN_READ_RATIO=${HORIZON_FLASH_MIN_READ_RATIO:-0.04}
       # Telemetry: client-caused prompt-cache misses priced per cause in /stats.
       - HORIZON_CACHE_MISS_WATCH=${HORIZON_CACHE_MISS_WATCH:-}
+      # Seconds to compress one Codex WebSocket frame before forwarding it as is
+      # (default 5). Slower hosts such as the Pi 5 need more.
+      - HORIZON_CODEX_WS_COMPRESSION_TIMEOUT_SECONDS=${HORIZON_CODEX_WS_COMPRESSION_TIMEOUT_SECONDS:-}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
     volumes:
       - horizon_workspace:/home/nonroot/.horizon
