@@ -237,6 +237,84 @@ def _compression_deadline_seconds() -> float:
         return 20.0
 
 
+# ── Documents inside the caller's prompt (HORIZON_PROMPT_DOCUMENTS) ──────────
+# The newest user turn and the opening prompt stay verbatim: they are what the
+# model is asked to do. A document pasted or attached into that same message
+# (a spec, a PDF's text, a report) is reference material, and in a single-shot
+# request it is most of the bill. With the flag on, the large prose middle of a
+# protected user message is compressed and the first and last
+# PROMPT_DOC_EDGE_CHARS (where a typed question sits, before or after the
+# paste) stay byte-exact, as do fenced code blocks and harness reminders.
+# Measured on a 9.3K-token blueprint: -15.5% tokens, -16% cost, equivalent
+# answers (Sonnet 5.5, 2026-10-12).
+PROMPT_DOC_MIN_CHARS = 6000
+PROMPT_DOC_EDGE_CHARS = 1500
+PROMPT_DOC_MIN_PIECE_CHARS = 1500
+# A region that is mostly fenced code is a code paste, not a document.
+PROMPT_DOC_MAX_FENCED_SHARE = 0.5
+_PROMPT_DOC_FENCE_RE = re.compile(r"^```[^\n]*\n.*?^```[ \t]*$", re.M | re.S)
+
+
+def _prompt_documents_enabled() -> bool:
+    return os.environ.get("HORIZON_PROMPT_DOCUMENTS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _prompt_document_span(text: str, edge_chars: int) -> tuple[int, int] | None:
+    """Character span of the compressible document inside a prompt, or None.
+
+    The span starts at the first paragraph break at least ``edge_chars`` in and
+    ends at the last paragraph break at least ``edge_chars`` before the end, so
+    the typed words around a paste are never inside it. ``edge_chars=0`` takes
+    the whole text (a standalone document block).
+    """
+    if len(text) < PROMPT_DOC_MIN_CHARS + 2 * edge_chars:
+        return None
+    if edge_chars:
+        start = text.find("\n\n", edge_chars)
+        end = text.rfind("\n\n", 0, len(text) - edge_chars)
+        if start < 0 or end < 0:
+            return None
+        start += 2
+    else:
+        start, end = 0, len(text)
+    if end - start < PROMPT_DOC_MIN_CHARS:
+        return None
+    middle = text[start:end]
+    if "<system-reminder" in middle or "</system-reminder>" in middle:
+        return None
+    fenced = sum(len(m.group(0)) for m in _PROMPT_DOC_FENCE_RE.finditer(middle))
+    if fenced > PROMPT_DOC_MAX_FENCED_SHARE * len(middle):
+        return None
+    return start, end
+
+
+def _prompt_document_pieces(middle: str) -> list[tuple[str, bool]]:
+    """Split a document into (text, compressible) pieces; fenced code is never compressible."""
+    pieces: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _PROMPT_DOC_FENCE_RE.finditer(middle):
+        if m.start() > pos:
+            pieces.append((middle[pos : m.start()], True))
+        pieces.append((m.group(0), False))
+        pos = m.end()
+    if pos < len(middle):
+        pieces.append((middle[pos:], True))
+    return [
+        (
+            piece,
+            ok
+            and len(piece) >= PROMPT_DOC_MIN_PIECE_CHARS
+            and _regex_detect_content_type(piece).content_type is ContentType.PLAIN_TEXT,
+        )
+        for piece, ok in pieces
+    ]
+
+
 def _router_debug_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
 
@@ -6205,6 +6283,19 @@ class ContentRouter(Transform):
             # Protection 1: Never compress user messages (unless overridden),
             # and never the caller's prompt on a replaying path.
             if role == "user" and (skip_user or prompt_turn):
+                _doc = self._compress_prompt_document(
+                    content,
+                    edge_chars=PROMPT_DOC_EDGE_CHARS,
+                    context=context,
+                    min_ratio=min_ratio,
+                    compressor_timing=compressor_timing,
+                    transforms_applied=transforms_applied,
+                    route_counts=route_counts,
+                    compressed_details=compressed_details,
+                )
+                if _doc is not None:
+                    result_slots[i] = {**message, "content": _doc}
+                    continue
                 result_slots[i] = message
                 transforms_applied.append("router:protected:user_message")
                 route_counts["user_msg"] += 1
@@ -7108,7 +7199,18 @@ class ContentRouter(Transform):
             # cache breakpoint. Frozen-message-count is a coarse
             # message-level approximation; this is the per-block
             # guarantee that we never bust an explicit cache key.
-            if "cache_control" in block and not (fresh_turn and block.get("type") == "tool_result"):
+            # A fresh turn's user text or document may carry a pasted document;
+            # its marker names an unwritten key too, and the prompt-document
+            # carve-out below keeps the typed words byte-exact.
+            fresh_document = (
+                fresh_turn
+                and role == "user"
+                and block.get("type") in ("text", "document")
+                and _prompt_documents_enabled()
+            )
+            if "cache_control" in block and not (
+                fresh_turn and block.get("type") == "tool_result"
+            ) and not fresh_document:
                 new_blocks.append(block)
                 if route_counts is not None:
                     route_counts.setdefault("cache_control_protected", 0)
@@ -7350,6 +7452,37 @@ class ContentRouter(Transform):
             # block-list form. Roles are gated above (user/system always
             # skipped; assistant default-skipped, opt-in via
             # `compress_assistant_text_blocks`).
+            # The caller's prompt: text stays verbatim except a pasted document's
+            # prose middle; a plain-text document block is all document.
+            elif role == "user" and (
+                (block_type == "text" and protect_text_blocks)
+                or (
+                    block_type == "document"
+                    and isinstance(block.get("source"), dict)
+                    and block["source"].get("type") == "text"
+                )
+            ):
+                is_doc_block = block_type == "document"
+                _doc = self._compress_prompt_document(
+                    block["source"].get("data") if is_doc_block else block.get("text"),
+                    edge_chars=0 if is_doc_block else PROMPT_DOC_EDGE_CHARS,
+                    context=context,
+                    min_ratio=min_ratio,
+                    compressor_timing=compressor_timing,
+                    transforms_applied=transforms_applied,
+                    route_counts=route_counts,
+                    compressed_details=compressed_details,
+                )
+                if _doc is None:
+                    new_blocks.append(block)
+                elif is_doc_block:
+                    new_blocks.append({**block, "source": {**block["source"], "data": _doc}})
+                    any_compressed = True
+                else:
+                    new_blocks.append({**block, "text": _doc})
+                    any_compressed = True
+                continue
+
             elif block_type == "text" and not protect_text_blocks:
                 # Same CCR-retrieve exemption as the tool_result branch above, for the
                 # top-level-text-block wire shape: a role:"tool"/"function" harness that
@@ -7413,6 +7546,64 @@ class ContentRouter(Transform):
         if any_compressed:
             return {**message, "content": new_blocks}
         return message
+
+    def _compress_prompt_document(
+        self,
+        text: Any,
+        *,
+        edge_chars: int,
+        context: str,
+        min_ratio: float,
+        compressor_timing: dict[str, float] | None,
+        transforms_applied: list[str],
+        route_counts: dict[str, int] | None,
+        compressed_details: list[str] | None,
+    ) -> str | None:
+        """Compress the document inside a protected user prompt; None leaves it verbatim.
+
+        See ``_prompt_document_span``: only the prose middle changes, through the
+        same cached block compressor as everything else, so a repeat of the same
+        paste compresses to the same bytes.
+        """
+        if not isinstance(text, str) or not _prompt_documents_enabled():
+            return None
+        span = _prompt_document_span(text, edge_chars)
+        if span is None:
+            return None
+        start, end = span
+        out: list[str] = []
+        changed = False
+        for piece, compressible in _prompt_document_pieces(text[start:end]):
+            if compressible and not _is_already_compressed(piece):
+                body = piece.strip()
+                compressed, _ = self._compress_block_content(
+                    content=body,
+                    content_key=hash(
+                        ("prompt_document", body, getattr(self, "_runtime_target_ratio", None))
+                    ),
+                    context=context,
+                    bias=1.0,
+                    min_ratio=min_ratio,
+                    compressor_timing=compressor_timing,
+                    transforms_applied=transforms_applied,
+                    route_counts=route_counts,
+                    compressed_details=compressed_details,
+                    strategy_label="prompt_document",
+                    details_prefix="doc",
+                )
+                if compressed is not None and len(compressed) < len(body):
+                    lead = piece[: len(piece) - len(piece.lstrip())]
+                    trail = piece[len(piece.rstrip()) :]
+                    out.append(lead + compressed.strip() + trail)
+                    changed = True
+                    continue
+            out.append(piece)
+        if not changed:
+            return None
+        transforms_applied.append("router:prompt_document")
+        if route_counts is not None:
+            route_counts["prompt_document"] = route_counts.get("prompt_document", 0) + 1
+        return text[:start] + "".join(out) + text[end:]
 
     def _compress_block_content(
         self,
