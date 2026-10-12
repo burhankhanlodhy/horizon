@@ -206,3 +206,19 @@ def test_documents_carry_no_retrieval_marker(monkeypatch):
     out = r.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
     body = out.messages[0]["content"]
     assert "Retrieve more" not in body and len(body) < len(text)
+
+
+def test_markdown_tables_stay_exact_and_specs_count_as_prose():
+    table = "| Id | Status | Owner |\n|---|---|---|\n| AC-1 | PASS | ops |\n| AC-2 | FAIL | dev |\n"
+    middle = _doc(10) + "\n\n" + table + "\n" + _doc(10)
+    pieces = cr._prompt_document_pieces(middle)
+    assert "".join(p for p, _ in pieces) == middle
+    assert (table, False) in pieces
+    assert [ok for _, ok in pieces].count(True) == 2
+    # Status words and IDs made the detector call specs build logs; sentences decide.
+    spec = "\n".join(
+        f"- AC-{i}: The quota service must reject a request when the tenant budget is spent, status FAIL."
+        for i in range(40)
+    )
+    assert cr._looks_like_prose(spec)
+    assert not cr._looks_like_prose("\n".join(f"ERROR {i} at 0x{i:04x}" for i in range(40)))

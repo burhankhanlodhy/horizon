@@ -311,15 +311,50 @@ def _prompt_document_span(text: str, edge_chars: int) -> tuple[int, int] | None:
     return start, end
 
 
+# Markdown table rows: dropping words from a table scrambles its columns.
+_PROMPT_DOC_TABLE_RE = re.compile(r"(?:^[ \t]*\|.*\|[ \t]*\r?(?:\n|$))+", re.M)
+# Content kinds that are never prose, whatever their sentence share.
+_PROMPT_DOC_NEVER = (
+    ContentType.SOURCE_CODE,
+    ContentType.JSON_ARRAY,
+    ContentType.GIT_DIFF,
+    ContentType.HTML,
+)
+_PROSE_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _looks_like_prose(piece: str) -> bool:
+    """Most non-blank lines read as sentences or list items.
+
+    The regex detector calls markdown specs BUILD_OUTPUT or TABULAR (status
+    words, ID columns), so a PLAIN_TEXT verdict alone skipped real documents.
+    """
+    lines = [line for line in piece.splitlines() if line.strip()]
+    if not lines:
+        return False
+    worded = sum(1 for line in lines if len(_PROSE_WORD_RE.findall(line)) >= 6)
+    return worded / len(lines) >= 0.4
+
+
 def _prompt_document_pieces(middle: str) -> list[tuple[str, bool]]:
-    """Split a document into (text, compressible) pieces; fenced code is never compressible."""
+    """Split a document into (text, compressible) pieces.
+
+    Fenced code and markdown tables are never compressible; the prose between
+    them is when it is long enough and reads as prose.
+    """
+    spans = sorted(
+        [(m.start(), m.end()) for m in _PROMPT_DOC_FENCE_RE.finditer(middle)]
+        + [(m.start(), m.end()) for m in _PROMPT_DOC_TABLE_RE.finditer(middle)]
+    )
     pieces: list[tuple[str, bool]] = []
     pos = 0
-    for m in _PROMPT_DOC_FENCE_RE.finditer(middle):
-        if m.start() > pos:
-            pieces.append((middle[pos : m.start()], True))
-        pieces.append((m.group(0), False))
-        pos = m.end()
+    for start, end in spans:
+        if start < pos:  # a table inside a fence: the fence already covers it
+            continue
+        if start > pos:
+            pieces.append((middle[pos:start], True))
+        pieces.append((middle[start:end], False))
+        pos = end
     if pos < len(middle):
         pieces.append((middle[pos:], True))
     return [
@@ -327,7 +362,8 @@ def _prompt_document_pieces(middle: str) -> list[tuple[str, bool]]:
             piece,
             ok
             and len(piece) >= PROMPT_DOC_MIN_PIECE_CHARS
-            and _regex_detect_content_type(piece).content_type is ContentType.PLAIN_TEXT,
+            and _looks_like_prose(piece)
+            and _regex_detect_content_type(piece).content_type not in _PROMPT_DOC_NEVER,
         )
         for piece, ok in pieces
     ]
