@@ -7,7 +7,9 @@ import { LegalPage, List, Section, Strong } from "./LegalPage";
  * per-account partition (horizon/proxy/semantic_cache.py), the prefix tracker
  * living for the provider's cache lifetime (horizon/cache/prefix_tracker.py),
  * and the keep-alive's in-memory session (horizon/proxy/cache_keeper.py).
- * Change the page whenever one of those changes.
+ * Email link lifetimes come from api/account_email.py (30 minutes / 7 days);
+ * backup retention from the S3 lifecycle rule on contextshrink-weekly-backup
+ * (deploy/backup/README.md). Change the page whenever one of those changes.
  */
 
 export function Privacy() {
@@ -28,11 +30,12 @@ export function Privacy() {
     >
       <Section title="Who we are">
         <p>
-          ContextShrink (&ldquo;we&rdquo;, &ldquo;us&rdquo;) operates the website at
+          ContextShrink (&ldquo;we&rdquo;, &ldquo;us&rdquo;), a company registered in
+          the State of Illinois, United States, operates the website at
           contextshrink.com, the dashboard at app.contextshrink.com, the account API
           at api.contextshrink.com, the hosted compression proxy at
-          proxy.contextshrink.com, and the ContextShrink desktop app. Questions about
-          this policy can reach us through our{" "}
+          proxy.contextshrink.com, and the ContextShrink desktop app. Our servers are
+          in the United States. Questions about this policy can reach us through our{" "}
           <a href="/contact.html" className="text-ember underline">
             Contact page
           </a>
@@ -96,9 +99,25 @@ export function Privacy() {
           cost is billed by your provider and shown in your dashboard.
         </p>
         <p>
+          <Strong>Account emails.</Strong> When you sign up or reset your password we
+          email you a link. We store only a one-way hash of each link, and it stops
+          working after 30 minutes (password reset) or 7 days (email confirmation).
+        </p>
+        <p>
           <Strong>Contact messages.</Strong> When you use the Contact page we keep the
           name, email address, topic and message you enter. We do not store your IP
           address with it.
+        </p>
+        <p>
+          <Strong>Security checks.</Strong> The signup and contact forms use
+          Cloudflare Turnstile to tell people from bots. It processes your IP address
+          and signals from your browser for that check only.
+        </p>
+        <p>
+          <Strong>Desktop app updates.</Strong> The desktop app checks
+          app.contextshrink.com for a newer version when it starts and every six hours.
+          That request carries your IP address, like any web request, but nothing about
+          your account or your work.
         </p>
         <p>
           <Strong>Operational logs.</Strong> Our servers keep technical logs (request
@@ -132,8 +151,15 @@ export function Privacy() {
             <Strong>Stripe</Strong>, which processes payments for paid plans.
           </li>
           <li>
-            <Strong>Cloudflare</Strong>, which carries traffic to our servers and
-            protects them. It processes your IP address and request data in transit.
+            <Strong>Cloudflare</Strong>, which hosts our website, dashboard and app
+            downloads, carries traffic to our servers, protects them, and runs the
+            Turnstile security check. It processes your IP address and request data in
+            transit.
+          </li>
+          <li>
+            <Strong>Amazon Web Services</Strong>, which sends our account emails
+            (Amazon SES) and stores our encrypted database backups (Amazon S3, in the
+            United States).
           </li>
           <li>
             <Strong>Google Fonts</Strong>, which serves the fonts on our website and
@@ -148,7 +174,8 @@ export function Privacy() {
 
       <Section title="Cookies and tracking">
         <p>
-          The website uses no cookies and no analytics or advertising trackers. The
+          The website sets no cookies of its own and uses no analytics or advertising
+          trackers. The
           dashboard keeps your sign-in session in your browser&rsquo;s local storage,
           which you can clear by signing out. The desktop app stores its device key in
           your operating system&rsquo;s credential store and sends no usage telemetry
@@ -163,6 +190,11 @@ export function Privacy() {
           <li>Proxy content: as described above, from minutes up to about an hour.</li>
           <li>Contact messages: until your question is resolved, then as long as useful for follow-up.</li>
           <li>Operational logs: a short period, after which they are overwritten.</li>
+          <li>
+            Database backups: taken daily, encrypted, and kept for up to 90 days. When
+            you delete your account, its information leaves our backups as they
+            expire.
+          </li>
         </List>
       </Section>
 
@@ -186,15 +218,31 @@ export function Privacy() {
           <a href="/contact.html" className="text-ember underline">
             Contact page
           </a>{" "}
-          with the topic &ldquo;Privacy&rdquo;.
+          with the topic &ldquo;Privacy&rdquo;. We answer within 30 days, and we may
+          need to confirm it is really you before acting.
+        </p>
+        <p>
+          We do not sell or share your personal information for advertising, as those
+          terms are defined in US state privacy laws such as California&rsquo;s, and
+          we will not treat you differently for using your rights.
         </p>
       </Section>
 
       <Section title="International transfers">
         <p>
-          Our servers and the providers listed above may be in a different country
-          from yours, so your information may be processed outside it. We rely on
-          those providers&rsquo; safeguards for such transfers.
+          ContextShrink is based in the United States and our servers are there. If
+          you use the service from another country, your information is transferred to
+          and processed in the United States, and the providers listed above may
+          process it in other countries too. We rely on those providers&rsquo;
+          safeguards for such transfers.
+        </p>
+      </Section>
+
+      <Section title="If something goes wrong">
+        <p>
+          If a security incident affects your personal information, we will tell you
+          and the relevant authorities as the law requires, including the Illinois
+          Personal Information Protection Act.
         </p>
       </Section>
 

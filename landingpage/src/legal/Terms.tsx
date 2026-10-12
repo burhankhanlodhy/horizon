@@ -7,7 +7,8 @@ export function Terms() {
       updated="11 October 2026"
       intro={
         <p>
-          These terms are the agreement between you and ContextShrink for using our
+          These terms are the agreement between you and ContextShrink, a company
+          registered in the State of Illinois, United States, for using our
           website, dashboard, API, hosted proxy and desktop app (together, &ldquo;the
           service&rdquo;). By creating an account or using the service you accept
           them. If you use it for an organisation, you accept them on its behalf and
@@ -76,6 +77,12 @@ export function Terms() {
           reached. Taxes may apply on top.
         </p>
         <p>
+          When you add a card for a paid plan, you authorise us, through Stripe, to
+          charge it for your plan and for each savings fee when it falls due, until you
+          cancel. Fees already charged are not refundable, except where we billed in
+          error or the law requires a refund.
+        </p>
+        <p>
           You can cancel a paid plan at any time from Manage billing; it stays active
           until the end of the period already paid, and any savings fee for that
           period is still billed. If a payment fails, paid features may pause until it
@@ -105,7 +112,8 @@ export function Terms() {
           The service and its software belong to ContextShrink and its licensors.
           Parts of ContextShrink are built on open-source software, which remains
           under its own licences. We give you a personal, non-transferable right to
-          use the service and the desktop app under these terms.
+          use the service and the desktop app under these terms. The desktop app checks
+          for updates and installs them when you choose to.
         </p>
       </Section>
 
@@ -131,8 +139,17 @@ export function Terms() {
           To the fullest extent the law allows, ContextShrink is not liable for
           indirect, incidental, special or consequential losses, or for lost profits,
           data or goodwill. Our total liability for any claim about the service is
-          limited to the fees you paid us in the 12 months before the claim arose.
-          Nothing in these terms limits liability that cannot be limited by law.
+          limited to the greater of the fees you paid us in the 12 months before the
+          claim arose and US$100. Nothing in these terms limits liability that cannot
+          be limited by law.
+        </p>
+      </Section>
+
+      <Section title="Indemnity">
+        <p>
+          If you use the service for a business, you will cover our reasonable losses
+          and costs from third-party claims caused by your breach of these terms or
+          your unlawful use of the service.
         </p>
       </Section>
 
@@ -155,9 +172,23 @@ export function Terms() {
 
       <Section title="Governing law">
         <p>
-          These terms are governed by the laws of the country where ContextShrink is
-          registered, and its courts have jurisdiction, unless the law where you live
-          gives you the right to bring a claim there.
+          These terms are governed by the laws of the State of Illinois and the
+          federal laws of the United States, without regard to conflict-of-law rules.
+          Any dispute about them or the service goes to the state or federal courts
+          located in Illinois, and both you and we accept their jurisdiction. If you
+          are a consumer and the law where you live gives you the right to bring a
+          claim in your local courts or under your local law, these terms do not take
+          that right away.
+        </p>
+      </Section>
+
+      <Section title="General">
+        <p>
+          These terms and the Privacy Policy are the whole agreement between you and us
+          about the service. If a court finds part of them unenforceable, the rest still
+          applies. If we do not enforce a term straight away, we have not given it up.
+          You may not transfer these terms without our consent; we may transfer them as
+          part of a reorganisation, merger or sale of the service.
         </p>
       </Section>
 

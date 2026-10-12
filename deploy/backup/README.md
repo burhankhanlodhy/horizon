@@ -113,3 +113,12 @@ Monday, keeping the latest build's layers so the next rebuild stays fast:
 0 4 * * 1 docker builder prune -f --filter until=72h > /dev/null 2>&1
 ```
 
+
+## Retention (the Privacy Policy depends on this)
+
+The Pi's upload key cannot delete objects, so expiry is an S3 lifecycle rule
+on the bucket: **contextshrink-weekly-backup → Management → Create lifecycle
+rule**, prefix `postgres/`, action "Expire current versions of objects" after
+**90 days**. The Privacy Policy promises backups are kept for up to 90 days;
+change both together. (Glacier Flexible Retrieval bills a 90-day minimum per
+object anyway, so a shorter rule saves nothing.)

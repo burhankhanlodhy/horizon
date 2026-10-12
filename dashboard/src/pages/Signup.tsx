@@ -147,8 +147,9 @@ export default function Signup() {
             className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-indigo-500"
           />
           <span>
-            I agree to the terms of service and acknowledge that ContextShrink
-            processes my agents' requests locally on my own hardware.
+            I agree to the Terms of Service and Privacy Policy, and understand that my
+            AI tools' requests pass through ContextShrink's servers, which compress
+            them and forward them to my AI provider.
           </span>
         </label>
 
