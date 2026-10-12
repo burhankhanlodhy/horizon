@@ -357,3 +357,24 @@ footer {
   word-break: break-all;
   user-select: all;
 }
+
+.update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: 360px;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--ember);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+}
+
+.update-banner .row {
+  display: flex;
+  gap: 8px;
+}
+

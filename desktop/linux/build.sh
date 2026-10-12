@@ -60,9 +60,13 @@ rm -rf "$bundle"  # the bundler keeps earlier versions' packages
     npm ci --no-audit --no-fund --loglevel=error
     # linuxdeploy (AppImage) is itself an AppImage: no FUSE in containers.
     # Its bundled strip cannot read newer ELF sections, so skip stripping.
-    APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true npx tauri build
+    # With the updater key (a CI secret) the AppImage gets a .sig for updater.json.
+    set --
+    [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && set -- --config src-tauri/tauri.updater.conf.json
+    APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true npx tauri build "$@"
 )
 
 rm -f "$OUT"/*
 cp "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm "$bundle"/appimage/*.AppImage "$OUT/"
+cp "$bundle"/appimage/*.AppImage.sig "$OUT/" 2>/dev/null || true
 ls -l "$OUT"

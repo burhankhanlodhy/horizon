@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import "./App.css";
 import { ToolIcon } from "./ToolIcon";
 
@@ -49,6 +51,7 @@ interface Summary {
 }
 
 const FOLDER_KEY = "cs_project_folder";
+const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 const usd = (n: number) =>
   `$${n.toLocaleString("en", { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
 const message = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "Something went wrong");
@@ -82,17 +85,112 @@ export default function App() {
     void restore();
   }, [restore]);
 
-  if (booting) return <Splash text="Connecting to ContextShrink…" />;
-  if (bootError)
-    return (
+  let screen;
+  if (booting) screen = <Splash text="Connecting to ContextShrink…" />;
+  else if (bootError)
+    screen = (
       <Splash text={bootError}>
         <button className="primary" onClick={() => void restore()}>
           Try again
         </button>
       </Splash>
     );
-  if (!session) return <Login onSignedIn={setSession} />;
-  return <Home session={session} onSignedOut={() => setSession(null)} />;
+  else if (!session) screen = <Login onSignedIn={setSession} />;
+  else screen = <Home session={session} onSignedOut={() => setSession(null)} />;
+  return (
+    <>
+      {screen}
+      <UpdateBanner />
+    </>
+  );
+}
+
+/** Offers a newer signed release (app.contextshrink.com/releases/updater.json)
+ *  and installs it on request; checks at start and every six hours. */
+function UpdateBanner() {
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [step, setStep] = useState<"offer" | "downloading" | "installing" | "failed">("offer");
+  const [progress, setProgress] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [later, setLater] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const look = () =>
+      check()
+        .then((u) => {
+          if (alive && u) {
+            setUpdate(u);
+            clearInterval(timer);
+          }
+        })
+        // Offline, or no release for this platform yet: try again later.
+        .catch(() => undefined);
+    const timer = setInterval(look, UPDATE_CHECK_MS);
+    void look();
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  if (!update || (later && step === "offer")) return null;
+
+  async function install() {
+    if (!update) return;
+    setStep("downloading");
+    setError("");
+    let total = 0;
+    let done = 0;
+    try {
+      await update.download((e) => {
+        if (e.event === "Started") total = e.data.contentLength ?? 0;
+        else if (e.event === "Progress" && total) {
+          done += e.data.chunkLength;
+          setProgress(Math.min(100, Math.round((100 * done) / total)));
+        }
+      });
+      setStep("installing");
+      await invoke("prepare_for_update");
+      await update.install(); // Windows: the installer closes the app here
+      await relaunch();
+    } catch (e) {
+      setStep("failed");
+      setError(message(e));
+    }
+  }
+
+  return (
+    <div className="update-banner" role="status">
+      {step === "offer" && (
+        <>
+          <span>
+            ContextShrink {update.version} is available (you have {update.currentVersion}).
+          </span>
+          <div className="row">
+            <button className="primary" onClick={() => void install()}>
+              Update and restart
+            </button>
+            <button onClick={() => setLater(true)}>Later</button>
+          </div>
+        </>
+      )}
+      {step === "downloading" && (
+        <span>Downloading {update.version}{progress === null ? "…" : ` (${progress}%)`}</span>
+      )}
+      {step === "installing" && <span>Installing {update.version}… the app will restart.</span>}
+      {step === "failed" && (
+        <>
+          <span className="error">
+            The update failed: {error}. Restart ContextShrink, or install it from the Downloads page.
+          </span>
+          <div className="row">
+            <button onClick={() => void install()}>Try again</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function Logo() {

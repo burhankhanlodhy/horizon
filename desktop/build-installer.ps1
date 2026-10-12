@@ -6,8 +6,26 @@
   1. Freezes the Horizon client (client\build-client.ps1) so users need no Python.
   2. Builds the Tauri app, bundling the client as a resource.
   Output: app\src-tauri\target\release\bundle\nsis\ContextShrink_<version>_x64-setup.exe
+
+  With the updater signing key (TAURI_SIGNING_PRIVATE_KEY, or the file
+  %USERPROFILE%\.tauri\contextshrink-updater.key) the build also writes
+  <installer>.exe.sig, which publish-installer.ps1 puts in updater.json so
+  installed apps update themselves. Without it the installer still builds,
+  but installed apps are not offered that version.
 #>
 $ErrorActionPreference = "Stop"
+
+$updaterConfig = @()
+$keyFile = Join-Path $env:USERPROFILE ".tauri\contextshrink-updater.key"
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and (Test-Path $keyFile)) {
+    $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyFile -Raw).Trim()
+}
+if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+    if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "" }
+    $updaterConfig = @("--config", "src-tauri/tauri.updater.conf.json")
+} else {
+    Write-Warning "No updater signing key: installed apps will not be offered this build."
+}
 
 & (Join-Path $PSScriptRoot "client\build-client.ps1")
 
@@ -16,7 +34,7 @@ try {
     $ErrorActionPreference = "Continue"
     npm ci
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-    npx tauri build
+    npx tauri build @updaterConfig
     if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 }
 finally {

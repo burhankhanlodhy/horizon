@@ -8,6 +8,10 @@
   latest.json listing every file with its size and SHA-256. Earlier installers
   are kept; latest.json points at the new ones and is uploaded last.
 
+  Files with an updater signature (<file>.sig, written by builds that had the
+  signing key) also go into updater.json, which installed apps check to update
+  themselves.
+
   -Target r2 (default) uploads to the private R2 bucket that
   app.contextshrink.com/releases/* serves from (dashboard\functions\releases),
   using the token described in deploy\cloudflare-pages\README.md.
@@ -78,6 +82,36 @@ New-Item -ItemType Directory -Force $staging | Out-Null
 $latest = Join-Path $staging "latest.json"
 [IO.File]::WriteAllText($latest, ($release | ConvertTo-Json -Depth 4))
 
+# In-app updates (tauri-plugin-updater): one entry per platform whose package
+# carries a signature. Windows updates through the NSIS installer, Linux
+# through the AppImage.
+$updaterKeys = @{ "windows/installer" = "windows-x86_64"; "linux/appimage" = "linux-x86_64" }
+$platforms = [ordered]@{}
+for ($i = 0; $i -lt $files.Count; $i++) {
+    $key = $updaterKeys["$($assets[$i].os)/$($assets[$i].kind)"]
+    $sig = "$($files[$i].FullName).sig"
+    if ($key -and (Test-Path $sig)) {
+        $platforms[$key] = [ordered]@{
+            signature = (Get-Content $sig -Raw).Trim()
+            url       = "https://app.contextshrink.com/releases/$($files[$i].Name)"
+        }
+    }
+}
+$updater = $null
+if ($platforms.Count) {
+    $updater = Join-Path $staging "updater.json"
+    $manifest = [ordered]@{
+        version   = $version
+        notes     = "ContextShrink $version"
+        pub_date  = $release.released
+        platforms = $platforms
+    }
+    [IO.File]::WriteAllText($updater, ($manifest | ConvertTo-Json -Depth 4))
+    "In-app update for: $($platforms.Keys -join ', ')"
+} else {
+    Write-Warning "No updater signatures found: installed apps will not be offered $version."
+}
+
 if ($Target -eq "r2") {
     . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
     Use-CloudflareToken
@@ -93,8 +127,12 @@ if ($Target -eq "r2") {
         "Uploading $($f.Name) ($([math]::Round($f.Length / 1MB)) MB)"
         Invoke-Wrangler r2 object put "$Bucket/$($f.Name)" --file $f.FullName --content-type $type --remote
     }
-    # Last, so the Downloads page never lists a file that is not there yet.
+    # Last, so the Downloads page and installed apps never point at a file
+    # that is not there yet.
     Invoke-Wrangler r2 object put "$Bucket/latest.json" --file $latest --content-type application/json --remote
+    if ($updater) {
+        Invoke-Wrangler r2 object put "$Bucket/updater.json" --file $updater --content-type application/json --remote
+    }
     "Published version ${version}: https://app.contextshrink.com/releases/latest.json"
     return
 }

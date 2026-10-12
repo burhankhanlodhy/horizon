@@ -294,6 +294,16 @@ fn list_tools() -> Vec<client::ToolInfo> {
     client::tools()
 }
 
+/// Called by the update banner after the new version has downloaded and just
+/// before it installs: on Windows the installer closes the app without a normal
+/// exit, so let go of the forwarders and editor settings first, as quitting does.
+/// The next start reconnects them.
+#[tauri::command]
+fn prepare_for_update(state: State<'_, AppState>) {
+    disconnect_editors(&state);
+    stop_forwarders(&state);
+}
+
 #[tauri::command]
 fn forwarder_running() -> bool {
     Client::forwarder_listening(client::FORWARDER_PORT)
@@ -345,6 +355,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Desktop-menu launches miss the PATH the user's shell sets up.
             #[cfg(unix)]
@@ -385,6 +397,7 @@ pub fn run() {
             account_summary,
             list_tools,
             forwarder_running,
+            prepare_for_update,
             launch_tool,
             editor_status,
             set_editor_connected

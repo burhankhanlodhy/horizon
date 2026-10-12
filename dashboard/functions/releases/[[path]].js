@@ -47,7 +47,7 @@ export async function onRequest({ request, env, params }) {
   if (!headers.has("Content-Type")) headers.set("Content-Type", contentType(key));
   headers.set("ETag", object.httpEtag);
   headers.set("Accept-Ranges", "bytes");
-  if (key === "latest.json") {
+  if (key === "latest.json" || key === "updater.json") {
     headers.set("Cache-Control", "no-cache");
   } else {
     // Installer names carry the version, so a name never changes content.
