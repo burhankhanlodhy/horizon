@@ -187,3 +187,22 @@ def test_windows_line_endings_are_paragraph_breaks_too(router, monkeypatch):
     )
     out = result.messages[0]["content"]
     assert "[doc]" in out and out.endswith(QUESTION)
+
+
+def test_documents_carry_no_retrieval_marker(monkeypatch):
+    """With a marker the model fetched the whole original straight away."""
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    r = ContentRouter()
+
+    def with_marker(self, content, content_key, *a, **k):
+        return (
+            content[: len(content) // 2]
+            + "\n[120 words compressed to 60 (from 9 source lines). Retrieve more: hash=ab12cd34ef56]",
+            True,
+        )
+
+    monkeypatch.setattr(ContentRouter, "_compress_block_content", with_marker)
+    text = QUESTION + "\n\n" + _doc() + "\n\n" + QUESTION
+    out = r.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    body = out.messages[0]["content"]
+    assert "Retrieve more" not in body and len(body) < len(text)

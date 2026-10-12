@@ -255,6 +255,13 @@ PROMPT_DOC_MAX_FENCED_SHARE = 0.5
 _PROMPT_DOC_FENCE_RE = re.compile(r"^```[^\n]*\n.*?^```[ \t]*\r?$", re.M | re.S)
 # A blank line, with Unix or Windows line endings (pastes on Windows arrive as \r\n).
 _PROMPT_DOC_BREAK_RE = re.compile(r"\n[ \t]*\r?\n")
+# The retrieval marker a lossy pass appends. A document in the prompt is
+# compressed without one: asked to review the whole document, the model
+# retrieved the original at once (blueprint, 2026-10-12), so the request paid
+# for the compressed copy and the full one -- more than not compressing.
+_PROMPT_DOC_MARKER_RE = re.compile(
+    r"\r?\n?\[[^\[\]\n]*Retrieve (?:more|original): hash=[0-9A-Za-z_-]+\]"
+)
 
 
 def _prompt_documents_enabled() -> bool:
@@ -7608,6 +7615,8 @@ class ContentRouter(Transform):
                     strategy_label="prompt_document",
                     details_prefix="doc",
                 )
+                if compressed is not None:
+                    compressed = _PROMPT_DOC_MARKER_RE.sub("", compressed)
                 if compressed is not None and len(compressed) < len(body):
                     lead = piece[: len(piece) - len(piece.lstrip())]
                     trail = piece[len(piece.rstrip()) :]
