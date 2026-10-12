@@ -14,6 +14,7 @@ import {
   Download,
   Gauge,
   Inbox,
+  Ticket,
   MailWarning,
   LineChart,
   KeyRound,
@@ -215,6 +216,10 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
     title: "Messages",
     subtitle: "Contact form messages from the website",
   },
+  "/invites": {
+    title: "Invites",
+    subtitle: "Beta invite codes for new accounts",
+  },
   "/signout": { title: "Sign out", subtitle: "" },
 };
 
@@ -243,7 +248,11 @@ function Logo() {
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const { advanced, user } = useAccount();
   const items = user.is_admin
-    ? [...nav, { to: "/messages", label: "Messages", icon: Inbox }]
+    ? [
+        ...nav,
+        { to: "/messages", label: "Messages", icon: Inbox },
+        { to: "/invites", label: "Invites", icon: Ticket },
+      ]
     : nav;
   return (
     <nav className="mt-8 flex flex-1 flex-col gap-1">

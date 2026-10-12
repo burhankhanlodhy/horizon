@@ -6,6 +6,7 @@ import { LegalPage } from "./LegalPage";
 
 const TOPICS = [
   { id: "general", label: "General question" },
+  { id: "beta", label: "Request a beta invite" },
   { id: "support", label: "Help with setup or the desktop app" },
   { id: "billing", label: "Billing and plans" },
   { id: "privacy", label: "Privacy or data request" },
@@ -18,11 +19,17 @@ const labelCls = "mb-1.5 block font-mono text-xs uppercase tracking-[0.15em] tex
 
 type Status = "idle" | "sending" | "sent" | "error";
 
+// contact.html?topic=beta (the dashboard's "Request an invite" link) preselects a topic.
+function initialTopic(): string {
+  const wanted = new URLSearchParams(window.location.search).get("topic");
+  return TOPICS.some((t) => t.id === wanted) ? (wanted as string) : "general";
+}
+
 export function Contact() {
   const [form, setForm] = useState({
     name: "",
     email: "",
-    topic: "general",
+    topic: initialTopic(),
     message: "",
     website: "",
   });
