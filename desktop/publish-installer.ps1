@@ -86,28 +86,28 @@ $latest = Join-Path $staging "latest.json"
 # carries a signature. Windows updates through the NSIS installer, Linux
 # through the AppImage.
 $updaterKeys = @{ "windows/installer" = "windows-x86_64"; "linux/appimage" = "linux-x86_64" }
-$platforms = [ordered]@{}
+$updatePlatforms = [ordered]@{}
 for ($i = 0; $i -lt $files.Count; $i++) {
     $key = $updaterKeys["$($assets[$i].os)/$($assets[$i].kind)"]
     $sig = "$($files[$i].FullName).sig"
     if ($key -and (Test-Path $sig)) {
-        $platforms[$key] = [ordered]@{
+        $updatePlatforms[$key] = [ordered]@{
             signature = (Get-Content $sig -Raw).Trim()
             url       = "https://app.contextshrink.com/releases/$($files[$i].Name)"
         }
     }
 }
 $updater = $null
-if ($platforms.Count) {
+if ($updatePlatforms.Count) {
     $updater = Join-Path $staging "updater.json"
     $manifest = [ordered]@{
         version   = $version
         notes     = "ContextShrink $version"
         pub_date  = $release.released
-        platforms = $platforms
+        platforms = $updatePlatforms
     }
     [IO.File]::WriteAllText($updater, ($manifest | ConvertTo-Json -Depth 4))
-    "In-app update for: $($platforms.Keys -join ', ')"
+    "In-app update for: $($updatePlatforms.Keys -join ', ')"
 } else {
     Write-Warning "No updater signatures found: installed apps will not be offered $version."
 }
