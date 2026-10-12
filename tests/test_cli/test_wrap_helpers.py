@@ -16,6 +16,8 @@ import errno
 import json
 import os
 import signal
+import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -951,3 +953,44 @@ def test_no_proxy_does_not_create_startup_lock(monkeypatch: pytest.MonkeyPatch) 
 
     assert wrap_mod._ensure_proxy(8787, True) == (None, 8787)
     assert entered is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="mandatory byte locks are Windows-only")
+def test_locked_file_waits_for_another_process_on_windows(tmp_path) -> None:
+    """A second wrap in the same project waits for the lock instead of crashing.
+
+    Windows byte locks are mandatory, so reading the locked byte raised
+    PermissionError before the wait loop was reached.
+    """
+    import subprocess
+    import textwrap
+
+    lock_path = tmp_path / ".horizon_wrap_settings.lock"
+    lock_path.write_bytes(b"0")
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import msvcrt, sys, time
+                f = open({str(lock_path)!r}, "r+b")
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                print("locked", flush=True)
+                time.sleep(1.0)
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                """
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        started = time.monotonic()
+        with wrap_mod._locked_file(open(lock_path, "a+b")):
+            waited = time.monotonic() - started
+        assert waited >= 0.5
+    finally:
+        holder.wait(timeout=10)

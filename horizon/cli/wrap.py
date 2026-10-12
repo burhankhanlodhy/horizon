@@ -1288,7 +1288,13 @@ def _locked_file(lock_file: Any) -> Any:
 
             # msvcrt.locking operates on bytes from the current file position.
             lock_file.seek(0)
-            if lock_file.read(1) == b"":
+            try:
+                empty = lock_file.read(1) == b""
+            except PermissionError:
+                # Windows locks are mandatory: while another wrap holds byte 0,
+                # reading it fails. The byte exists, so just wait for the lock.
+                empty = False
+            if empty:
                 lock_file.seek(0)
                 lock_file.write(b"0")
                 lock_file.flush()
