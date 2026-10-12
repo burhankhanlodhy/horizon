@@ -57,7 +57,7 @@
 	# the caller's session against ADMIN_EMAILS in the API.
 	# Public control-plane routes only; /internal/* (service token), the
 	# legacy /ingest and FastAPI's /docs and /openapi.json stay private.
-	@public_api path_regexp api ^/(healthz|auth/(signup|signup-mode|login|logout|me|password/(forgot|reset)|email/(verify|resend))|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/summary|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?|admin/invites(/[0-9a-fA-F-]{36}/revoke)?)$
+	@public_api path_regexp api ^/(healthz|auth/(signup|login|logout|me|password/(forgot|reset)|email/(verify|resend))|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/summary|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?)$
 	handle @public_api {
 		reverse_proxy 127.0.0.1:8788 {
 			header_up -Cdn-Loop

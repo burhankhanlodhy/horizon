@@ -1,10 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Shrink } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { EASE, GradientButton } from "../components/ui";
 import { Turnstile, turnstileEnabled } from "../components/Turnstile";
-import { apiFetch } from "../lib/api";
 import { getPostAuthDestination, signUp } from "../lib/auth";
 
 const LANDING_URL =
@@ -20,11 +19,6 @@ const backLinkCls =
 export default function Signup() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [inviteCode, setInviteCode] = useState(
-    () => new URLSearchParams(location.search).get("invite") ?? "",
-  );
-  // Private beta: the API says whether signups need an invite code.
-  const [inviteRequired, setInviteRequired] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,18 +29,8 @@ export default function Signup() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    apiFetch<{ invite_required: boolean }>("/auth/signup-mode")
-      .then((r) => setInviteRequired(r.invite_required))
-      .catch(() => undefined);
-  }, []);
-
   const submit = async () => {
     if (busy) return;
-    if (inviteRequired && !inviteCode.trim()) {
-      setError("ContextShrink is in private beta: enter your invite code.");
-      return;
-    }
     if (!name.trim() || !email.trim() || !password) {
       setError("Fill in every field to continue.");
       return;
@@ -74,7 +58,7 @@ export default function Signup() {
     setError(null);
     setBusy(true);
     try {
-      await signUp(name.trim(), email.trim(), password, turnstileToken, inviteCode.trim());
+      await signUp(name.trim(), email.trim(), password, turnstileToken);
       if (new URLSearchParams(location.search).get("next") === "/dashboard") {
         window.location.assign("/dashboard");
         return;
@@ -108,39 +92,10 @@ export default function Signup() {
         Create your account
       </h1>
       <p className="mt-1.5 text-center text-sm text-ink-3">
-        {inviteRequired
-          ? "ContextShrink is in private beta. Sign up with your invite code."
-          : "Start shrinking context in minutes."}
+        Start shrinking context in minutes.
       </p>
 
       <div className="mt-6 flex flex-col gap-3.5">
-        {(inviteRequired || inviteCode) && (
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-ink-3">Invite code</span>
-            <input
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-              placeholder="ABCDE-FGHJK"
-              autoComplete="off"
-              spellCheck={false}
-              className={`${inputCls} font-mono uppercase tracking-wider`}
-            />
-            {inviteRequired && !inviteCode && (
-              <span className="mt-1.5 block text-[11px] text-ink-3">
-                No code yet?{" "}
-                <a
-                  href={`${LANDING_URL}/contact.html?topic=beta`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline transition hover:text-ink"
-                >
-                  Request an invite
-                </a>
-                .
-              </span>
-            )}
-          </label>
-        )}
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-ink-3">Name</span>
           <input

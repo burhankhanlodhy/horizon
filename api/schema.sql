@@ -256,21 +256,3 @@ CREATE TABLE IF NOT EXISTS core.auth_tokens (
     used_at     TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON core.auth_tokens (user_id, purpose);
-
--- ====================================================== beta invites
--- Codes admins hand out while SIGNUP_MODE=invite (api/invites.py).
-CREATE TABLE IF NOT EXISTS core.invites (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code        TEXT        NOT NULL UNIQUE,
-    note        TEXT        NOT NULL DEFAULT '',
-    max_uses    INTEGER     NOT NULL DEFAULT 1 CHECK (max_uses >= 1),
-    uses        INTEGER     NOT NULL DEFAULT 0 CHECK (uses >= 0),
-    expires_at  TIMESTAMPTZ,
-    revoked_at  TIMESTAMPTZ,
-    created_by  UUID        REFERENCES core.users (id) ON DELETE SET NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_invites_created ON core.invites (created_at DESC);
--- The invite an account signed up with (NULL for accounts made before invites).
-ALTER TABLE core.users ADD COLUMN IF NOT EXISTS invite_id UUID
-    REFERENCES core.invites (id) ON DELETE SET NULL;

@@ -56,9 +56,6 @@ services:
       # 0 = don't require a confirmed email for proxy keys even though email
       # works (e.g. while SES is still in its sandbox and can't reach users).
       EMAIL_VERIFICATION_REQUIRED: ${EMAIL_VERIFICATION_REQUIRED:-1}
-      # open = anyone can sign up (the default); invite = signups need an invite
-      # code made on the dashboard's Invites page (api/invites.py).
-      SIGNUP_MODE: ${SIGNUP_MODE:-open}
       # Cloudflare Turnstile on signup and contact; unset = off.
       TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
     ports:

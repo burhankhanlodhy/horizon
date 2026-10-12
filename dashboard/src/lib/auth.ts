@@ -50,17 +50,10 @@ export async function signUp(
   email: string,
   password: string,
   turnstileToken?: string | null,
-  inviteCode?: string,
 ): Promise<SessionUser> {
   const out = await apiFetch<AuthResponse>("/auth/signup", {
     method: "POST",
-    body: {
-      name,
-      email,
-      password,
-      turnstile_token: turnstileToken ?? undefined,
-      invite_code: inviteCode || undefined,
-    },
+    body: { name, email, password, turnstile_token: turnstileToken ?? undefined },
   });
   setToken(out.token);
   cacheUser(out.user);

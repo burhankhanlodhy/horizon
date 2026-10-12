@@ -35,7 +35,7 @@ PER_SENDER_WINDOW_S = 10 * 60
 #: Messages accepted from everyone together per hour.
 GLOBAL_HOURLY_LIMIT = int(os.environ.get("CONTACT_GLOBAL_HOURLY_LIMIT", "100"))
 
-Topic = Literal["general", "beta", "support", "billing", "privacy", "security"]
+Topic = Literal["general", "support", "billing", "privacy", "security"]
 
 
 def is_admin(email: str | None) -> bool:

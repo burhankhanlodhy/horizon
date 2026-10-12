@@ -11,7 +11,6 @@ import SignOut from "./pages/SignOut";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Messages from "./pages/Messages";
-import Invites from "./pages/Invites";
 import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/AccountEmail";
 import { refreshUser, type SessionUser } from "./lib/auth";
 import { AccountProvider, useAccount } from "./lib/account";
@@ -118,7 +117,6 @@ export default function App() {
             <Route path="downloads" element={<Downloads />} />
             <Route path="docs" element={<Documentation />} />
             <Route path="messages" element={<AdminOnly><Messages /></AdminOnly>} />
-            <Route path="invites" element={<AdminOnly><Invites /></AdminOnly>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

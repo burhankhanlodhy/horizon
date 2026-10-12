@@ -17,7 +17,6 @@ import asyncpg
 import billing
 import contact
 import db
-import invites
 import security
 import turnstile
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -65,8 +64,6 @@ class SignupIn(BaseModel):
     password: str = Field(min_length=8, max_length=200)
     # Cloudflare Turnstile pass from the signup page (required once enabled).
     turnstile_token: str | None = Field(default=None, max_length=4096)
-    # Beta invite; required while SIGNUP_MODE=invite.
-    invite_code: str | None = Field(default=None, max_length=64)
 
 
 class LoginIn(BaseModel):
@@ -207,31 +204,12 @@ async def signup(body: SignupIn, request: Request):
     email = body.email.strip().lower()
     if await db.get_user_by_email(email):
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists")
-    invite_id = None
-    if invites.invite_required():
-        if not (body.invite_code or "").strip():
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "ContextShrink is invite-only for now: enter your invite code."
-            )
-        invite_id = await invites.claim(body.invite_code)
-        if invite_id is None:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "This invite code is not valid, used up, or expired."
-            )
     try:
         user = await db.create_user(email, body.name.strip(), security.hash_password(body.password))
     except asyncpg.UniqueViolationError:
-        if invite_id is not None:
-            await invites.release(invite_id)
         raise HTTPException(
             status.HTTP_409_CONFLICT, "An account with this email already exists"
         ) from None
-    except BaseException:
-        if invite_id is not None:
-            await invites.release(invite_id)
-        raise
-    if invite_id is not None:
-        await invites.attach(user["id"], invite_id)
     await db.ensure_subscription(str(user["id"]))
     if account_email.verification_required():
         account_email.in_background(
@@ -356,4 +334,3 @@ analytics.install(app, current_user)
 billing.install(app, current_user)
 contact.install(app, current_user)
 account_email.install(app, current_user)
-invites.install(app, current_user)
