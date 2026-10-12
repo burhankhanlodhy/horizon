@@ -1,10 +1,10 @@
-"""Invite-only signup for the beta.
+"""Optional invite-only signup.
 
-SIGNUP_MODE=invite (the production default in docker-compose.controlplane.yml)
-makes /auth/signup require an invite code; SIGNUP_MODE=open lets anyone sign
-up. Admins (contact.ADMIN_EMAILS) create codes on the dashboard, each with a
-note saying who it is for, a use limit and an optional expiry, and share them
-as https://app.contextshrink.com/signup?invite=<code>.
+SIGNUP_MODE=open (the default) lets anyone sign up; SIGNUP_MODE=invite makes
+/auth/signup require an invite code, for a gated launch. Admins
+(contact.ADMIN_EMAILS) create codes on the dashboard, each with a note saying
+who it is for, a use limit and an optional expiry, and share them as
+https://app.contextshrink.com/signup?invite=<code>.
 
 Codes are stored as typed (they are shown to admins again); a code is worth
 one account per use, nothing more. Each account remembers the invite it used.
