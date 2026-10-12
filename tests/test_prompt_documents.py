@@ -174,3 +174,16 @@ def test_a_later_typed_turn_before_a_trailing_system_message_stays_verbatim(rout
         messages, _Tokenizer(), prefix_replay_guaranteed=True, compress_user_messages=True
     )
     assert result.messages[2]["content"] == typed
+
+
+def test_windows_line_endings_are_paragraph_breaks_too(router, monkeypatch):
+    """Pastes on Windows arrive with \r\n; the document must still be found."""
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    text = (QUESTION + "\n\n" + _doc() + "\n\n" + QUESTION).replace("\n", "\r\n")
+    span = cr._prompt_document_span(text, cr.PROMPT_DOC_EDGE_CHARS)
+    assert span is not None and QUESTION not in text[span[0] : span[1]]
+    result = router.apply(
+        [{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True
+    )
+    out = result.messages[0]["content"]
+    assert "[doc]" in out and out.endswith(QUESTION)

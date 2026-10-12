@@ -252,7 +252,9 @@ PROMPT_DOC_EDGE_CHARS = 1500
 PROMPT_DOC_MIN_PIECE_CHARS = 1500
 # A region that is mostly fenced code is a code paste, not a document.
 PROMPT_DOC_MAX_FENCED_SHARE = 0.5
-_PROMPT_DOC_FENCE_RE = re.compile(r"^```[^\n]*\n.*?^```[ \t]*$", re.M | re.S)
+_PROMPT_DOC_FENCE_RE = re.compile(r"^```[^\n]*\n.*?^```[ \t]*\r?$", re.M | re.S)
+# A blank line, with Unix or Windows line endings (pastes on Windows arrive as \r\n).
+_PROMPT_DOC_BREAK_RE = re.compile(r"\n[ \t]*\r?\n")
 
 
 def _prompt_documents_enabled() -> bool:
@@ -275,11 +277,12 @@ def _prompt_document_span(text: str, edge_chars: int) -> tuple[int, int] | None:
     if len(text) < PROMPT_DOC_MIN_CHARS + 2 * edge_chars:
         return None
     if edge_chars:
-        start = text.find("\n\n", edge_chars)
-        end = text.rfind("\n\n", 0, len(text) - edge_chars)
-        if start < 0 or end < 0:
+        breaks = list(_PROMPT_DOC_BREAK_RE.finditer(text))
+        after = [m for m in breaks if m.start() >= edge_chars]
+        before = [m for m in breaks if m.start() <= len(text) - edge_chars]
+        if not after or not before:
             return None
-        start += 2
+        start, end = after[0].end(), before[-1].start()
     else:
         start, end = 0, len(text)
     if end - start < PROMPT_DOC_MIN_CHARS:
