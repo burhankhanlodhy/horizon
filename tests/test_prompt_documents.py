@@ -134,3 +134,43 @@ def test_a_cached_earlier_turn_is_never_touched(router, monkeypatch):
     )
     assert out["content"][0] == block
     assert router.calls == []
+
+
+def test_trailing_system_messages_leave_the_user_turn_mutable():
+    from horizon.proxy.handlers.anthropic import AnthropicHandlerMixin as A
+
+    user, asst, system = {"role": "user"}, {"role": "assistant"}, {"role": "system"}
+    assert A._strict_previous_turn_frozen_count([user, system], 0) == 0
+    assert A._strict_previous_turn_frozen_count([user, asst, user, system, system], 0) == 2
+    # An assistant prefill (or nothing but system) still freezes everything.
+    assert A._strict_previous_turn_frozen_count([user, asst], 0) == 2
+    assert A._strict_previous_turn_frozen_count([system], 0) == 1
+
+
+def test_claude_code_shape_compresses_the_paste_and_keeps_the_question(router, monkeypatch):
+    """Claude Code sends [..., user(question + paste, cache-marked), system(effort)]."""
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    text = _doc() + "\n\n" + QUESTION
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": [{"type": "text", "text": "Effort: medium."}]},
+    ]
+    result = router.apply(messages, _Tokenizer(), prefix_replay_guaranteed=True)
+    out = result.messages[0]["content"][0]["text"]
+    assert "[doc]" in out and out.endswith(QUESTION)
+    assert result.messages[1] == messages[1]
+
+
+def test_a_later_typed_turn_before_a_trailing_system_message_stays_verbatim(router, monkeypatch):
+    monkeypatch.delenv("HORIZON_PROMPT_DOCUMENTS", raising=False)
+    typed = "Please now also add retries. " * 120
+    messages = [
+        {"role": "user", "content": "Build it."},
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": typed},
+        {"role": "system", "content": "Effort: medium."},
+    ]
+    result = router.apply(
+        messages, _Tokenizer(), prefix_replay_guaranteed=True, compress_user_messages=True
+    )
+    assert result.messages[2]["content"] == typed

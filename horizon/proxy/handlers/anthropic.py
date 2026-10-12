@@ -744,11 +744,16 @@ class AnthropicHandlerMixin:
     ) -> int:
         """Freeze all prior turns; only the final turn is mutable.
 
-        If the final message is not a user turn, freeze everything.
+        Claude Code can end a request with mid-conversation ``system`` messages
+        (effort and reminders) after the user turn. They are new this turn too,
+        so the user turn before them is still the mutable one. Any other final
+        message (an assistant prefill) freezes everything.
         """
         if not messages:
             return base_frozen_count
         final_idx = len(messages) - 1
+        while final_idx > 0 and messages[final_idx].get("role") == "system":
+            final_idx -= 1
         if messages[final_idx].get("role") == "user":
             return max(base_frozen_count, final_idx)
         return len(messages)

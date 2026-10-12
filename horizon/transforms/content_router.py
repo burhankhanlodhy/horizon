@@ -5904,6 +5904,16 @@ class ContentRouter(Transform):
             ),
             num_messages,
         )
+        # Mid-conversation system messages Claude Code appends after the newest
+        # user turn (effort, reminders) are not turns: count positions from the
+        # last non-system message so "newest turn" still means the user's.
+        trailing_system = 0
+        for msg in reversed(messages):
+            if not (isinstance(msg, dict) and msg.get("role") == "system"):
+                break
+            trailing_system += 1
+        if trailing_system == num_messages:
+            trailing_system = 0
         model_limit = kwargs.get("model_limit", 0)
 
         # Adaptive Read protection: protect a fraction of recent messages
@@ -6115,7 +6125,9 @@ class ContentRouter(Transform):
                 route_counts["hook_protected"] = route_counts.get("hook_protected", 0) + 1
                 continue
 
-            messages_from_end = num_messages - i
+            messages_from_end = num_messages - i - (
+                trailing_system if i < num_messages - trailing_system else 0
+            )
             # The caller's own words stay verbatim on a replaying path even
             # when user messages are compressible for their tool observations:
             # the opening prompt (a task statement with test ids and paths)
@@ -6345,7 +6357,9 @@ class ContentRouter(Transform):
             is_code = detection.content_type == ContentType.SOURCE_CODE
 
             # Protection 2: Don't compress recent CODE
-            messages_from_end = num_messages - i
+            messages_from_end = num_messages - i - (
+                trailing_system if i < num_messages - trailing_system else 0
+            )
             if protect_recent > 0 and messages_from_end <= protect_recent and is_code:
                 result_slots[i] = message
                 transforms_applied.append("router:protected:recent_code")
