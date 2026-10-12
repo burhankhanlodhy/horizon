@@ -20,6 +20,8 @@ export const LEGAL_LINKS = [
   { label: "Privacy Policy", href: "/privacy.html" },
   { label: "Terms of Service", href: "/terms.html" },
   { label: "Contact Us", href: "/contact.html" },
+  // Hosted by UptimeRobot, so it stays up when ContextShrink does not.
+  { label: "Status", href: "https://stats.uptimerobot.com/RNJwy7h05k" },
 ];
 
 /* ------------------------------ brand ------------------------------ */

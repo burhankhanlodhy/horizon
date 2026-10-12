@@ -312,13 +312,24 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-/** Where tools connect (see Documentation); a label, not a health check. */
+/** Public status page, hosted by UptimeRobot so it stays up when we do not. */
+const STATUS_URL = "https://stats.uptimerobot.com/RNJwy7h05k";
+
+/** Where tools connect (see Documentation), plus a link to live service status. */
 function ProxyStatus() {
   return (
     <div className="paper-panel rounded-lg px-3 py-2.5">
       <div className="text-[11px] leading-tight">
         <div className="font-semibold text-ink">Proxy</div>
         <div className="truncate text-ink-3">{PROXY_URL.replace(/^https?:\/\//, "")}</div>
+        <a
+          href={STATUS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-block text-ink-3 underline transition hover:text-ink"
+        >
+          Service status
+        </a>
       </div>
     </div>
   );
