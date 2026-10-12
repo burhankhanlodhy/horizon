@@ -26,11 +26,13 @@ function Use-CloudflareToken {
 function Invoke-Wrangler {
     # Windows PowerShell 5.1 turns native stderr lines into terminating errors
     # under "Stop"; judge wrangler by its exit code instead.
+    # Copy $args first: splatting @args straight into npx.ps1 passes nothing.
+    $wranglerArgs = @($args)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & npx --yes "wrangler@$WranglerVersion" @args
-        if ($LASTEXITCODE -ne 0) { throw "wrangler $($args[0]) $($args[1]) failed (exit $LASTEXITCODE)" }
+        & npx --yes "wrangler@$WranglerVersion" @wranglerArgs
+        if ($LASTEXITCODE -ne 0) { throw "wrangler $($wranglerArgs[0]) $($wranglerArgs[1]) failed (exit $LASTEXITCODE)" }
     } finally {
         $ErrorActionPreference = $prev
     }
