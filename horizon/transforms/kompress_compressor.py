@@ -129,6 +129,37 @@ def _join_kept_words_by_line(words: list[str], line_ids: list[int], kept_ids: se
     return "".join(parts)
 
 
+def _token_bounded_chunks(
+    tokenizer: Any, words: list[str], max_words: int, max_tokens: int = 512
+) -> list[tuple[int, int]]:
+    """Split ``words`` into ``(start, end)`` chunks the model sees whole.
+
+    Inference truncates each chunk at ``max_tokens``; a word past that point
+    gets no score and so never reaches the output. Dense technical prose runs
+    1.5-2 tokens a word, so a ``max_words`` chunk often overflows: end such a
+    chunk before its last scored word (which may be cut mid-way) and start the
+    next chunk there.
+    """
+    spans: list[tuple[int, int]] = []
+    start, n = 0, len(words)
+    while start < n:
+        end = min(start + max_words, n)
+        try:
+            encoding = tokenizer(
+                words[start:end], is_split_into_words=True, truncation=True, max_length=max_tokens
+            )
+            word_ids = encoding.word_ids()
+        except (AttributeError, TypeError, ValueError):
+            # A tokenizer without word alignment: fixed word chunks, as before.
+            return [(s, min(s + max_words, n)) for s in range(0, n, max_words)]
+        if len(word_ids) >= max_tokens:
+            seen = [w for w in word_ids if w is not None]
+            end = start + max(1, max(seen) if seen else 1)
+        spans.append((start, end))
+        start = end
+    return spans
+
+
 def _tabular_protected_line_ids(content: str) -> set[int]:
     """Flag lines in a run of >=3 consecutive lines with a consistent fixed-width
     column count (ls -l, ps, etc.), so compression keeps each such row whole
@@ -1744,7 +1775,9 @@ class KompressCompressor(Transform):
             budget = _capped_time_budget(_time_budget_cap_seconds)
             deadline = time.monotonic() + budget if budget is not None else None
 
-            for chunk_start in range(0, n_words, max_chunk_words):
+            for chunk_start, chunk_end in _token_bounded_chunks(
+                tokenizer, words, max_chunk_words
+            ):
                 remaining: float | None = None
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
@@ -1772,7 +1805,7 @@ class KompressCompressor(Transform):
                     )
                     break
                 chunk_count += 1
-                chunk_words = words[chunk_start : chunk_start + max_chunk_words]
+                chunk_words = words[chunk_start:chunk_end]
 
                 # ONNX uses numpy tensors, PyTorch uses torch tensors
                 return_tensors = "np" if is_onnx else "pt"
@@ -2142,15 +2175,11 @@ class KompressCompressor(Transform):
         max_chunk_words = self.config.chunk_words
         _floor = max(10, self.config.min_input_words)
         chunk_queue: list[tuple[int, int, list[str], float | None]] = []
-        for i, (words, ratio) in enumerate(zip(word_lists, ratios, strict=True)):
+        for i, words in enumerate(word_lists):
             if len(words) < _floor:
                 results[i] = self._passthrough(contents[i], len(words))
-                continue
-            for chunk_start in range(0, len(words), max_chunk_words):
-                chunk_words = words[chunk_start : chunk_start + max_chunk_words]
-                chunk_queue.append((i, chunk_start, chunk_words, ratio))
 
-        if not chunk_queue:
+        if all(r is not None for r in results):
             # Every input was short — all passthrough, no model needed.
             return [r for r in results if r is not None]
 
@@ -2163,6 +2192,12 @@ class KompressCompressor(Transform):
                 if results[i] is None:
                     results[i] = self._passthrough(contents[i], len(word_lists[i]))
             return [r for r in results if r is not None]
+
+        for i, (words, ratio) in enumerate(zip(word_lists, ratios, strict=True)):
+            if results[i] is not None:
+                continue
+            for chunk_start, chunk_end in _token_bounded_chunks(tokenizer, words, max_chunk_words):
+                chunk_queue.append((i, chunk_start, words[chunk_start:chunk_end], ratio))
 
         is_onnx = backend.startswith("onnx")
         device_type = _model_device_type(model, backend)
