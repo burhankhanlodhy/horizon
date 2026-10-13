@@ -411,10 +411,82 @@ async def test_ws_first_frame_output_shaper_rewrites_without_compression(monkeyp
 
     sent = json.loads(upstream.sent[0])
     payload = sent["response"]
-    assert "<horizon_output_shaping>" in payload["instructions"]
-    # text.verbosity is no longer injected: steering is the only lever.
-    assert "text" not in payload
+    # Known Responses models use native verbosity without prompt overhead.
+    assert "instructions" not in payload
+    assert payload["text"]["verbosity"] == "low"
     assert any(t == "output_shaper:verbosity:L2" for t in outcomes[-1].transforms_applied)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["valid-blocks", "deep-json", "rollback"])
+async def test_ws_output_shaper_safely_forwards_tool_observations(monkeypatch, case):
+    from horizon.proxy import output_shaper
+    from horizon.proxy.validation_feedback import MARKER
+
+    monkeypatch.setenv("HORIZON_OUTPUT_SHAPER", "1")
+    monkeypatch.setenv("HORIZON_OUTPUT_HOLDOUT", "0")
+    monkeypatch.setenv("HORIZON_VALIDATION_FEEDBACK", "1")
+    output = [{"type": "input_text", "text": "Ran 0 tests in 0.00s\nOK"}]
+    if case == "deep-json":
+        output = '{"output":' + "[" * 1100 + "0" + "]" * 1100 + "}"
+    payload = {
+        "model": "gpt-5.4",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "x",
+                "name": "shell",
+                "arguments": json.dumps({"command": "python -m unittest discover"}),
+            },
+            {"type": "function_call_output", "call_id": "x", "output": output},
+        ],
+    }
+    frame = json.dumps({"type": "response.create", "response": payload}, indent=2)
+    if case == "rollback":
+        real_feedback = output_shaper._validation_feedback
+
+        def fail(body, result):
+            real_feedback(body, result)
+            body["input"][-1]["corrupted"] = True
+            raise RuntimeError("injected failure after feedback")
+
+        monkeypatch.setattr(output_shaper, "_validation_feedback", fail)
+    upstream = _FakeUpstream(
+        [
+            json.dumps({"type": "response.created", "response": {"id": "r_1"}}),
+            json.dumps({"type": "response.completed", "response": {"id": "r_1"}}),
+        ]
+    )
+    client_ws = _FakeWebSocket(frames=[frame])
+    handler = _DummyOpenAIHandler()
+    handler.config.optimize = False
+    outcomes = []
+
+    async def record_outcome(outcome):
+        outcomes.append(outcome)
+
+    # Inspect the real relay's outcomes without starting pricing/accounting
+    # dependencies, which are outside this protocol-safety regression.
+    handler._record_request_outcome = record_outcome
+    with patch.dict(sys.modules, {"websockets": _make_fake_websockets_module(upstream)}):
+        await asyncio.wait_for(handler.handle_openai_responses_ws(client_ws), timeout=5.0)
+    sent = json.loads(upstream.sent[0])["response"]
+    if case == "valid-blocks":
+        blocks = sent["input"][-1]["output"]
+        assert blocks[:-1] == output
+        assert blocks[-1]["type"] == "input_text"
+        assert MARKER in blocks[-1]["text"]
+    elif case == "deep-json":
+        assert sent["input"][-1]["output"] == output
+        assert sent["text"]["verbosity"] == "low"
+    else:
+        assert sent == payload
+        assert upstream.sent[0] == frame
+        assert not any(
+            label.startswith(("validation_feedback:", "output_shaper:verbosity:"))
+            for outcome in outcomes
+            for label in outcome.transforms_applied
+        )
 
 
 @pytest.mark.asyncio

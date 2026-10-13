@@ -3883,7 +3883,7 @@ class AnthropicHandlerMixin:
                         next_original_messages = copy.deepcopy(original_client_messages)
                         next_forwarded_messages = copy.deepcopy(
                             # What the upstream accepted (an unflashed retry, if any).
-                            _flash_sent_value("messages", optimized_messages)
+                            _flash_sent_value("messages", body.get("messages", optimized_messages))
                         )
                         assistant_message = self._assistant_message_from_response_json(
                             backend_response.body
@@ -4894,7 +4894,7 @@ class AnthropicHandlerMixin:
                         next_original_messages = copy.deepcopy(original_client_messages)
                         next_forwarded_messages = copy.deepcopy(
                             # What the upstream accepted (an unflashed retry, if any).
-                            _flash_sent_value("messages", optimized_messages)
+                            _flash_sent_value("messages", body.get("messages", optimized_messages))
                         )
                         assistant_message = self._assistant_message_from_response_json(resp_json)
                         if assistant_message is not None:

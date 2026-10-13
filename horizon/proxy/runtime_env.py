@@ -60,6 +60,11 @@ class Knob:
 RUNTIME_ENV_KNOBS: tuple[Knob, ...] = (
     Knob("HORIZON_OUTPUT_SHAPER", "bool", "Master switch for output-token shaping."),
     Knob(
+        "HORIZON_OUTPUT_NATIVE_VERBOSITY",
+        "bool",
+        "Prefer native Responses verbosity when supported.",
+    ),
+    Knob(
         "HORIZON_VERBOSITY_LEVEL", "int", "Verbosity steering level 0-4 (unset = learned/default)."
     ),
     Knob("HORIZON_VERBOSITY_AUTOTUNE", "bool", "Use the AIMD verbosity controller state."),

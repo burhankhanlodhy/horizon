@@ -1,66 +1,30 @@
-"""Output token shaping for proxied Anthropic and OpenAI Responses requests.
+"""Request-side controls for output token usage.
 
-Horizon's transforms compress what goes INTO the model. This module is the
-first request-side lever on what comes OUT of it. The proxy never generates
-output tokens, so every lever here works by reshaping the request:
+Level 2 preserves required content while suppressing repeated context and
+unrequested examples. Known OpenAI Responses models use native text.verbosity
+without adding input instructions; explicit client verbosity is preserved.
+Other protocols use byte-stable, idempotent steering at the system prompt tail.
 
-1. Verbosity steering — a deterministic instruction block appended to the
-   TAIL of the system prompt (after any ``cache_control`` breakpoint, so the
-   provider prefix cache is preserved). Five levels, from "no ceremony" to
-   full caveman.
-
-2. Effort routing — agentic loops are mostly mechanical continuations (the
-   last message is a clean tool_result: a file read, a passing test). Thinking
-   bills as output tokens, and harnesses like Claude Code pin
-   ``output_config.effort`` at ``xhigh`` for every turn. On turns classified
-   as mechanical we lower an explicitly-present effort; on errors or new user
-   asks we leave it alone. For legacy models still sending
-   ``thinking.budget_tokens`` we clamp the budget to the API floor instead.
-
-   **Design rule — change effort per turn only through per-message effort.**
-   A change to the top-level ``output_config.effort`` (or the thinking
-   configuration) is rendered into the prompt and invalidates every cached
-   message block. Lowering it on one mechanical turn saves about 500 thinking
-   tokens ($0.01 on Opus 5.5) but re-writes the conversation: $0.38 at 80k
-   context, $0.72 at 150k, a 38-72x loss at 0.05x cache reads. On models with
-   per-message effort (Fable 5.1, Mythos 5.1, Opus 5.5, Opus 5, Sonnet 5.5,
-   Haiku 5.5; beta ``mid-conversation-output-config-2026-07-01``) an
-   effort-only system message (``{"role": "system", "content": [],
-   "output_config": {"effort": "low"}}``) changes effort from the next user
-   turn and keeps the cache, so per-turn routing is cache-free there, provided
-   every inserted message is replayed byte for byte on later requests. On any
-   other model, change effort only on a conversation's first request or on a
-   request that misses the cache anyway (:mod:`horizon.proxy.cache_miss_watch`).
-   Effort routing is not implemented yet; this rule binds whoever builds it.
-
-Safety rules (each prevents a concrete failure mode):
-- Never INJECT ``output_config.effort`` where the client didn't send it —
-  models without effort support 400 on it. Lowering an existing value is
-  always valid.
-- Never toggle ``thinking.type`` — disabling thinking while history carries
-  thinking blocks 400s on some models, and the toggle busts the messages
-  cache tier.
-- Steering text is byte-stable per level and applied idempotently, so
-  repeated requests keep an identical prefix.
-
-Turn classification is purely structural (block types, roles, ``is_error``
-flags) — no content regexes or keyword patterns.
-
-The same lever exists for the OpenAI Responses format (Codex et al.):
-:func:`apply_responses_verbosity_steering` appends the byte-stable steering
-block to the tail of the ``instructions`` string, and
-:func:`shape_responses_request` is the Responses-format counterpart of
-:func:`shape_request`.
+An opt-in startup budget caps already-enabled Haiku 4.5 thinking. It never
+injects thinking, changes adaptive effort, removes history or caps final text.
+Keep the budget fixed across a conversation to avoid invalidating prompt caches.
+Budget reductions can affect reasoning quality and require workload evaluation.
+Dynamic effort routing is not implemented.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import os
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any
 
 from horizon.proxy import runtime_env
+from horizon.proxy.output_controls import (
+    apply_legacy_thinking_budget,
+    apply_responses_native_verbosity,
+)
 from horizon.proxy.output_steering import (
     apply_openai_chat_verbosity_steering,
     apply_openai_responses_verbosity_steering,
@@ -73,6 +37,9 @@ from horizon.proxy.output_turn_policy import (
     classify_openai_responses_input,
     classify_turn,
 )
+from horizon.proxy.symbol_read_plan import apply_symbol_read_plan
+from horizon.proxy.tool_json_compaction import apply_tool_json_compaction
+from horizon.proxy.validation_feedback import annotate_validation_results, load_inspection_json
 from horizon.rollout import FeatureDecisionReason
 
 logger = logging.getLogger(__name__)
@@ -97,14 +64,8 @@ __all__ = [
 _replace_or_append_steering_block = replace_or_append_steering_block
 
 
-#: Level handed to an operator who turned the shaper on and said nothing else.
-#: Two, not three: L3 instructs the model to drop content ("give conclusions
-#: only; omit rationale"), which reads as the model getting worse to someone who
-#: did not ask for it -- the same reasoning the feature's own rollout spec gives
-#: for not defaulting the shaper on at all. L2 only forbids ceremony and
-#: restatement. Measured on a long explain-with-code turn (3 paired runs,
-#: non-overlapping ranges): 2375 -> 1663 output tokens, -30%, with no visible
-#: loss of content.
+#: Default content-preserving prose level. Savings depend on the workload;
+#: paired measurements, including failures, live in experiments/output-20.
 DEFAULT_VERBOSITY_LEVEL = 2
 
 
@@ -114,12 +75,12 @@ class OutputShaperSettings:
 
     enabled: bool = False
     verbosity_level: int = DEFAULT_VERBOSITY_LEVEL
-    # False in ``mode="cache"``. Steering is the one lever that writes into the
-    # provider prefix-cache key (it appends to the system-prompt tail, and on a
-    # body with no system field it creates one); effort routing and the
-    # thinking budget sit outside the key and stay on. See
-    # :func:`steering_allowed_for`.
+    # False in cache mode: select a startup-pinned level instead of learned
+    # profiles or the live controller, which could rewrite cached instructions.
     steering_enabled: bool = True
+    thinking_budget_cap: int = 0
+    tool_json_compaction_enabled: bool = False
+    symbol_read_plan: str | None = None
 
     @classmethod
     def from_env(
@@ -138,16 +99,25 @@ class OutputShaperSettings:
                 "yes",
             )
         try:
-            level = int(
-                runtime_env.getenv("HORIZON_VERBOSITY_LEVEL", str(DEFAULT_VERBOSITY_LEVEL))
-            )
+            level = int(runtime_env.getenv("HORIZON_VERBOSITY_LEVEL", str(DEFAULT_VERBOSITY_LEVEL)))
         except ValueError:
             level = DEFAULT_VERBOSITY_LEVEL
         level = max(0, min(4, level))
+        try:
+            # Deliberately not a hot-reload knob: a mid-session budget switch
+            # would invalidate the prompt prefix. Select this before startup.
+            thinking_cap = int(os.environ.get("HORIZON_OUTPUT_THINKING_BUDGET", "0"))
+        except ValueError:
+            thinking_cap = 0
+        if thinking_cap < 1024:
+            thinking_cap = 0
         return cls(
             enabled=enabled,
             verbosity_level=level,
             steering_enabled=steering_enabled,
+            thinking_budget_cap=thinking_cap,
+            tool_json_compaction_enabled=os.environ.get("HORIZON_OUTPUT_TOOL_JSON", "0").lower()
+            in ("1", "true", "yes"),
         )
 
 
@@ -293,9 +263,8 @@ def resolve_verbosity_level(settings: OutputShaperSettings) -> tuple[int, str]:
     the environment before the proxy starts is written into turn 1's prefix and
     is byte-identical on every turn after it. The cache is established
     including the block and hits normally from then on; the only cost is the
-    block's own tokens riding along in the cached prefix (~80 at L2, about
-    $0.000024 per turn at Sonnet cache-read rates, against a measured ~700
-    output tokens saved per turn — roughly 450x the other way).
+    block's own tokens riding along in the cached prefix. Net savings depend
+    on the response, provider rates and whether the prefix is already cached.
 
     What matters is therefore not WHICH level, but whether it can move. Both
     sources that cannot move are allowed through in cache mode:
@@ -304,9 +273,8 @@ def resolve_verbosity_level(settings: OutputShaperSettings) -> tuple[int, str]:
     * otherwise the settings level, fixed at startup → ``cache_mode_default``
 
     The second is what makes ``HORIZON_OUTPUT_SHAPER=1`` sufficient on its
-    own. The shaper is opt-in (see the ``proxy_output_shaper`` rollout spec, which
-    deliberately does not default-enable it), so an enabled shaper is already an
-    explicit request and there is nothing further to ask the operator for.
+    own. Optimized proxies enable the shaper by default; optimize=False retains
+    byte-faithful forwarding unless shaping is explicitly enabled.
 
     The controller and the learned profile stay out of cache mode entirely —
     those are exactly the sources that rewrite themselves while conversations
@@ -317,10 +285,7 @@ def resolve_verbosity_level(settings: OutputShaperSettings) -> tuple[int, str]:
         return settings.verbosity_level, ("env" if settings.steering_enabled else "env_pinned")
 
     if not settings.steering_enabled:
-        # Cache mode. The shaper is opt-in (see the ``proxy_output_shaper``
-        # rollout spec), so an enabled shaper is already an explicit operator
-        # act -- there is nothing further to ask for. Steer at the settings
-        # level, which was fixed at startup and cannot move.
+        # Cache mode: steer at the settings level selected at startup.
         #
         # The controller and the learned profile are deliberately NOT consulted
         # here. Both rewrite their files while conversations are open, and a
@@ -354,6 +319,66 @@ class ShapeResult:
             self.labels = []
 
 
+# Bound staging work; text/image strings are immutable and shared, not copied.
+_MAX_STAGING_DEPTH = 64
+_MAX_STAGING_NODES = 100_000
+
+
+def _stage_body(body: dict[str, Any]) -> dict[str, Any]:
+    remaining = _MAX_STAGING_NODES
+
+    def clone(value: Any, depth: int) -> Any:
+        nonlocal remaining
+        remaining -= 1
+        if remaining < 0 or depth > _MAX_STAGING_DEPTH:
+            raise ValueError("output-shaper staging budget exceeded")
+        if isinstance(value, dict):
+            if len(value) > remaining:
+                raise ValueError("output-shaper staging budget exceeded")
+            return {key: clone(item, depth + 1) for key, item in value.items()}
+        if isinstance(value, list):
+            if len(value) > remaining:
+                raise ValueError("output-shaper staging budget exceeded")
+            return [clone(item, depth + 1) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        raise TypeError("output-shaper requires JSON containers")
+
+    return clone(body, 0)
+
+
+def _atomic_shaping(shape):
+    """Commit optional transforms together, or forward the original request.
+
+    No exception text is logged: parser/transform errors can contain secrets.
+    Unchanged top-level fields retain their original objects and cache history.
+    """
+
+    @wraps(shape)
+    def apply(body, settings=None, level_override=None):
+        try:
+            settings = settings if settings is not None else OutputShaperSettings.from_env()
+            if not settings.enabled:
+                return ShapeResult()
+            staged = _stage_body(body)
+            result = shape(staged, settings, level_override)
+            # Compute every comparison before touching the original body.
+            updates = {
+                key: value for key, value in staged.items() if key not in body or value != body[key]
+            }
+            removed = body.keys() - staged.keys()
+        except Exception as exc:
+            logger.warning("OutputShaper: skipped %s (%s)", shape.__name__, type(exc).__name__)
+            return ShapeResult()
+        for key in removed:
+            del body[key]
+        body.update(updates)
+        return result
+
+    return apply
+
+
+@_atomic_shaping
 def shape_openai_responses_request(
     body: dict[str, Any],
     settings: OutputShaperSettings | None = None,
@@ -369,13 +394,27 @@ def shape_openai_responses_request(
     assert result.labels is not None  # __post_init__ guarantees
 
     level = settings.verbosity_level if level_override is None else level_override
-    if level > 0 and apply_openai_responses_verbosity_steering(body, level):
+    _compact_tool_json(body, settings, result)
+    _validation_feedback(body, result)
+    handled, changed = apply_responses_native_verbosity(body, level)
+    if changed:
         result.changed = True
         result.labels.append(f"output_shaper:verbosity:L{level}")
+        result.labels.append("output_shaper:native_verbosity:low")
+    if (
+        level > 0
+        and (not handled or level >= 3)
+        and apply_openai_responses_verbosity_steering(body, level)
+    ):
+        result.changed = True
+        label = f"output_shaper:verbosity:L{level}"
+        if label not in result.labels:
+            result.labels.append(label)
 
     return result
 
 
+@_atomic_shaping
 def shape_request(
     body: dict[str, Any],
     settings: OutputShaperSettings | None = None,
@@ -399,10 +438,19 @@ def shape_request(
     if level > 0 and apply_verbosity_steering(body, level):
         result.changed = True
         result.labels.append(f"output_shaper:verbosity:L{level}")
+    _compact_tool_json(body, settings, result)
+    _validation_feedback(body, result)
+    if apply_legacy_thinking_budget(body, settings.thinking_budget_cap):
+        result.changed = True
+        result.labels.append(f"output_shaper:thinking_budget:{settings.thinking_budget_cap}")
+    if apply_symbol_read_plan(body, settings.symbol_read_plan):
+        result.changed = True
+        result.labels.append("input_planning:symbol_reads")
 
     return result
 
 
+@_atomic_shaping
 def shape_openai_chat_request(
     body: dict[str, Any],
     settings: OutputShaperSettings | None = None,
@@ -426,8 +474,34 @@ def shape_openai_chat_request(
     if level > 0 and apply_openai_chat_verbosity_steering(body, level):
         result.changed = True
         result.labels.append(f"output_shaper:verbosity:L{level}")
+    _compact_tool_json(body, settings, result)
+    _validation_feedback(body, result)
 
     return result
+
+
+def _validation_feedback(body: dict, result: ShapeResult) -> None:
+    if (runtime_env.getenv("HORIZON_VALIDATION_FEEDBACK", "1") or "1").lower() in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }:
+        return
+    count = annotate_validation_results(body)
+    if count:
+        result.changed = True
+        result.labels.append(f"validation_feedback:{count}")
+
+
+def _compact_tool_json(
+    body: dict[str, Any], settings: OutputShaperSettings, result: ShapeResult
+) -> None:
+    if settings.tool_json_compaction_enabled:
+        count = apply_tool_json_compaction(body)
+        if count:
+            result.changed = True
+            result.labels.append(f"input_compaction:tool_json:{count}")
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +535,7 @@ def _responses_tool_output_is_error(item: dict[str, Any]) -> bool:
         if not (stripped.startswith("{") and stripped.endswith("}")):
             return False
         try:
-            data = json.loads(stripped)
+            data = load_inspection_json(stripped)
         except (ValueError, TypeError):
             return False
     if not isinstance(data, dict):
@@ -546,17 +620,4 @@ def shape_responses_request(
     The Responses counterpart of :func:`shape_request`: same settings, same
     labels, same level-resolution contract.
     """
-    if settings is None:
-        settings = OutputShaperSettings.from_env()
-    result = ShapeResult()
-    if not settings.enabled:
-        return result
-
-    assert result.labels is not None  # __post_init__ guarantees this
-
-    level = settings.verbosity_level if level_override is None else level_override
-    if level > 0 and apply_responses_verbosity_steering(body, level):
-        result.changed = True
-        result.labels.append(f"output_shaper:verbosity:L{level}")
-
-    return result
+    return shape_openai_responses_request(body, settings, level_override)

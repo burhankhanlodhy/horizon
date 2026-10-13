@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from horizon.proxy.internal_header_policy import is_credential_header
+
 WIRE_DEBUG_REDACTED = "[REDACTED]"
 WIRE_DEBUG_SECRET_KEYS = (
     "authorization",
@@ -26,6 +28,8 @@ WIRE_DEBUG_SECRET_KEYS = (
 
 def should_redact_key(key: str) -> bool:
     """Return whether a wire-debug field name should be redacted."""
+    if is_credential_header(key):
+        return True
     normalized = key.lower().replace("-", "_")
     if normalized in {marker.replace("-", "_") for marker in WIRE_DEBUG_SECRET_KEYS}:
         return True

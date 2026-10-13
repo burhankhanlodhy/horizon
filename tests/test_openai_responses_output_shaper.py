@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
+import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -30,11 +33,21 @@ def _make_client() -> TestClient:
             cache_enabled=False,
             rate_limit_enabled=False,
             cost_tracking_enabled=False,
+            subscription_tracking_enabled=False,
             log_requests=False,
             http2=False,
         )
     )
     app.dependency_overrides[require_loopback] = lambda: None
+
+    # Exercise real routing/rewrites/admin settings with a fake upstream. The
+    # production lifespan starts unrelated ML, quota and account workers that
+    # persist user state; those services belong in separate lifecycle tests.
+    @asynccontextmanager
+    async def route_test_lifespan(app):
+        yield
+
+    app.router.lifespan_context = route_test_lifespan
     return TestClient(app)
 
 
@@ -100,15 +113,15 @@ def test_http_responses_output_shaper_rewrites_and_labels(monkeypatch):
 
     assert response.status_code == 200
     sent = captured["body"]
-    assert "<horizon_output_shaping>" in sent["instructions"]
-    # Steering is the only lever; request params pass through untouched.
+    assert "instructions" not in sent
+    # Explicit client verbosity and reasoning remain authoritative.
     assert sent["reasoning"]["effort"] == "xhigh"
     assert sent["text"]["verbosity"] == "medium", "client value passes through"
-    assert captured["retry_kwargs"]["body_mutated"] is True
+    assert captured["retry_kwargs"]["body_mutated"] is False
     assert captured["retry_kwargs"]["original_body_bytes"] is not None
     transforms = outcomes[-1].transforms_applied
     assert any(t.startswith("output_shaper:stratum:") for t in transforms)
-    assert "output_shaper:verbosity:L2" in transforms
+    assert "output_shaper:verbosity:L2" not in transforms
 
 
 def test_http_responses_output_shaper_respects_bypass(monkeypatch):
@@ -181,7 +194,6 @@ def test_http_output_shaper_hot_reload_changes_the_running_request_path(monkeypa
         "model": "gpt-5",
         "input": [{"type": "function_call_output", "call_id": "call_1", "output": "ok"}],
         "reasoning": {"effort": "high"},
-        "text": {"verbosity": "medium"},
     }
     sent: list[dict[str, Any]] = []
 
@@ -203,7 +215,7 @@ def test_http_output_shaper_hot_reload_changes_the_running_request_path(monkeypa
 
     assert first.status_code == second.status_code == update.status_code == 200
     assert sent[0] == payload
-    assert "<horizon_output_shaping>" in sent[1]["instructions"]
+    assert sent[1]["text"]["verbosity"] == "low"
     decision = next(
         item
         for item in update.json()["rollout"]["features"]
@@ -211,3 +223,162 @@ def test_http_output_shaper_hot_reload_changes_the_running_request_path(monkeypa
     )
     assert decision["enabled"] is True
     assert decision["decision"] == "legacy_alias"
+
+
+def _validation_payload(dialect, output):
+    if dialect == "responses":
+        return "/v1/responses", {
+            "model": "gpt-5",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "x",
+                    "name": "shell",
+                    "arguments": json.dumps({"command": "python -m unittest discover"}),
+                },
+                {"type": "function_call_output", "call_id": "x", "output": output},
+            ],
+        }
+    return "/v1/messages", {
+        "model": "claude-sonnet-4-5",
+        "system": "Original system",
+        "max_tokens": 100,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "x",
+                        "name": "Bash",
+                        "input": {"command": "python -m unittest discover"},
+                    }
+                ],
+            },
+            # Pre-place the native cache marker so rollback assertions isolate
+            # shaping from the handler's independent cache normalization.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "x",
+                        "content": output,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _capture_upstream(proxy, captured):
+    async def retry(*args, **kwargs):
+        captured["body"] = copy.deepcopy(args[3])
+        captured["kwargs"] = dict(kwargs)
+        if "messages" in args[1]:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            )
+        return await _ok_response(*args, **kwargs)
+
+    proxy._retry_request = retry
+
+
+def test_http_responses_forwards_schema_valid_validation_blocks(monkeypatch):
+    from horizon.proxy.validation_feedback import MARKER
+
+    monkeypatch.setenv("HORIZON_OUTPUT_SHAPER", "1")
+    monkeypatch.setenv("HORIZON_ROLLOUT_CHANNEL", "beta")
+    monkeypatch.setenv("HORIZON_OUTPUT_HOLDOUT", "0")
+    monkeypatch.setenv("HORIZON_VALIDATION_FEEDBACK", "1")
+    blocks = [{"type": "input_text", "text": "Ran 0 tests in 0.00s\nOK"}]
+    path, payload = _validation_payload("responses", blocks)
+    captured = {}
+    with _make_client() as client:
+        _capture_upstream(client.app.state.proxy, captured)
+        response = client.post(path, headers={"authorization": "Bearer test-key"}, json=payload)
+    assert response.status_code == 200
+    output = captured["body"]["input"][-1]["output"]
+    assert output[:-1] == blocks
+    assert output[-1]["type"] == "input_text"
+    assert MARKER in output[-1]["text"]
+    assert captured["kwargs"]["body_mutated"] is True
+
+
+@pytest.mark.parametrize("dialect", ["responses", "anthropic"])
+def test_http_transform_failure_forwards_original_request(monkeypatch, dialect):
+    from horizon.proxy import output_shaper
+
+    monkeypatch.setenv("HORIZON_OUTPUT_SHAPER", "1")
+    monkeypatch.setenv("HORIZON_ROLLOUT_CHANNEL", "beta")
+    monkeypatch.setenv("HORIZON_OUTPUT_HOLDOUT", "0")
+    path, payload = _validation_payload(dialect, "Ran 0 tests in 0.00s\nOK")
+    captured = {}
+
+    def fail(body, result):
+        sequence = body.get("input", body.get("messages"))
+        sequence[-1]["corrupted"] = True
+        raise RuntimeError("injected failure after mutation")
+
+    monkeypatch.setattr(output_shaper, "_validation_feedback", fail)
+    raw = json.dumps(payload, indent=2).encode()
+    with _make_client() as client:
+        _capture_upstream(client.app.state.proxy, captured)
+        response = client.post(
+            path,
+            headers={"authorization": "Bearer test-key", "content-type": "application/json"},
+            content=raw,
+        )
+    assert response.status_code == 200, response.text
+    assert captured["body"] == payload
+    assert captured["kwargs"]["body_mutated"] is False
+    assert captured["kwargs"]["original_body_bytes"] == raw
+
+
+@pytest.mark.parametrize("dialect", ["responses", "anthropic"])
+def test_http_deep_tool_result_does_not_return_proxy_error(monkeypatch, dialect):
+    monkeypatch.setenv("HORIZON_OUTPUT_SHAPER", "1")
+    monkeypatch.setenv("HORIZON_ROLLOUT_CHANNEL", "beta")
+    monkeypatch.setenv("HORIZON_OUTPUT_HOLDOUT", "0")
+    deep = "[" * 1100 + "0" + "]" * 1100
+    path, payload = _validation_payload(dialect, deep)
+    captured = {}
+    with _make_client() as client:
+        _capture_upstream(client.app.state.proxy, captured)
+        response = client.post(path, headers={"authorization": "Bearer test-key"}, json=payload)
+    assert response.status_code == 200, response.text
+    assert deep in json.dumps(captured["body"])
+
+
+def test_ingress_logger_redacts_proxy_credentials(monkeypatch, caplog):
+    token = "private-proxy-token-regression"
+    monkeypatch.setenv("HORIZON_PROXY_TOKEN", token)
+    with _make_client() as client, caplog.at_level(logging.INFO, logger="horizon.proxy"):
+        # Proxy construction installs file logging and disables propagation.
+        monkeypatch.setattr(logging.getLogger("horizon"), "propagate", True)
+        response = client.get(
+            "/health",
+            headers={
+                "X-Horizon-Proxy-Token": token,
+                "X-Horizon-License_Token": "private-license-token-regression",
+                "X-Horizon-Tool-Search-Deferred-Tokens": "42",
+            },
+        )
+    assert response.status_code == 200
+    logs = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if "event=proxy_inbound_request" in record.getMessage()
+    )
+    assert logs
+    assert token not in logs and "private-license-token-regression" not in logs
+    assert '"x-horizon-proxy-token": "[REDACTED]"' in logs
+    assert '"x-horizon-tool-search-deferred-tokens": "42"' in logs

@@ -23,6 +23,7 @@ Mirrors the chat handlers: gated by the ``proxy_output_shaper`` rollout
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -45,6 +46,25 @@ CLAUDE = "claude-sonnet-4-5"
 STRATUM_PREFIX = "output_shaper:stratum:"
 CONTROL_PREFIX = "output_shaper:control:"
 VERBOSITY_PREFIX = "output_shaper:verbosity:L"
+
+
+@pytest.fixture(autouse=True)
+def _route_only_lifespan(monkeypatch):
+    """Keep output-contract tests independent of quota/ML worker lifecycle."""
+    from tests.gateway import conftest
+
+    create_app = conftest.create_app
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+
+    def route_app(config):
+        app = create_app(config)
+        app.router.lifespan_context = lifespan
+        return app
+
+    monkeypatch.setattr(conftest, "create_app", route_app)
 
 
 def _anthropic_body(**extra: Any) -> dict[str, Any]:

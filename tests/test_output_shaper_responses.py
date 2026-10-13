@@ -218,7 +218,9 @@ class TestShapeResponsesRequest:
         result = shape_responses_request(body, OutputShaperSettings(enabled=True))
         assert result.changed is True
         assert body["reasoning"]["effort"] == "high"
-        assert result.labels == [f"output_shaper:verbosity:L{DEFAULT_VERBOSITY_LEVEL}"]
+        assert f"output_shaper:verbosity:L{DEFAULT_VERBOSITY_LEVEL}" in result.labels
+        assert "output_shaper:native_verbosity:low" in result.labels
+        assert body["text"]["verbosity"] == "low"
 
 
 # ---------------------------------------------------------------------------

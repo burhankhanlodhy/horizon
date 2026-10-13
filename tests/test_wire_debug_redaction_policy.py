@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from horizon.proxy.wire_debug_redaction_policy import (
     WIRE_DEBUG_REDACTED,
     redact_for_wire_debug,
@@ -43,3 +45,22 @@ def test_wire_debug_key_matching_normalizes_dashes_and_case() -> None:
     assert should_redact_key("Anthropic-API-Key")
     assert should_redact_key("custom-refresh-token")
     assert not should_redact_key("token_count")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "x-horizon-proxy-token",
+        "X-Horizon-Proxy-Token",
+        " X_Horizon_License_Token ",
+        "x-horizon-api-key",
+        "x-horizon-signature",
+        "proxy-authorization",
+    ],
+)
+def test_wire_debug_uses_the_internal_credential_policy(key):
+    original = {"headers": {key: "private", "x-horizon-tool-search-deferred-tokens": "42"}}
+    redacted = redact_for_wire_debug(original)
+    assert redacted["headers"][key] == WIRE_DEBUG_REDACTED
+    assert redacted["headers"]["x-horizon-tool-search-deferred-tokens"] == "42"
+    assert original["headers"][key] == "private"
