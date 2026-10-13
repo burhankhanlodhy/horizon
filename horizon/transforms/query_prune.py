@@ -51,6 +51,8 @@ def prune_pieces(
     embed: Embed,
     *,
     relevance_weight: float = 0.6,
+    density: Callable[[list[str]], np.ndarray] | None = None,
+    density_weight: float = 0.0,
 ) -> tuple[list[str], int, int]:
     """Prune compressible pieces; returns (pieces out, words before, words after).
 
@@ -97,7 +99,11 @@ def prune_pieces(
         def z(a: np.ndarray) -> np.ndarray:
             return (a - a.mean()) / (a.std() or 1.0)
 
-        score = relevance_weight * z(rel) + (1 - relevance_weight) * z(cen)
+        score = (1 - density_weight) * (
+            relevance_weight * z(rel) + (1 - relevance_weight) * z(cen)
+        )
+        if density is not None and density_weight > 0:
+            score += density_weight * z(np.asarray(density([u.text for u in units]), dtype=float))
         score += np.array([0.5 if u.lead else 0.0 for u in units])
         score += np.array([0.25 if _SIGNAL_RE.search(u.text) else 0.0 for u in units])
         budget = total * (1 - remove_fraction)
@@ -124,3 +130,62 @@ def prune_pieces(
         out.append(re.sub(r"\n{3,}", "\n\n", piece))
     after = sum(u.words for u, k in zip(units, keep) if k)
     return out, total, after
+
+
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+SECTION_OMITTED = "[Section omitted: not relevant to this request.]"
+
+
+def _sections(text: str) -> list[str]:
+    """Split markdown at headings outside code fences; each section keeps its heading."""
+    sections: list[list[str]] = [[]]
+    in_fence = False
+    for line in text.split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+        elif not in_fence and _MD_HEADING_RE.match(line) and sections[-1]:
+            sections.append([])
+        sections[-1].append(line)
+    return ["\n".join(s) for s in sections]
+
+
+def prune_sections(
+    text: str, question: str, remove_fraction: float, embed: Embed
+) -> tuple[str, int, int]:
+    """Keep the sections most relevant to ``question`` whole; omit the rest.
+
+    A section scores by its best-matching sentence (a narrow question names one
+    part of a document) plus its average. Omitted sections keep their heading
+    so the reader still sees the document's shape. Returns (text, words before,
+    words after).
+    """
+    secs = _sections(text)
+    words = [len(s.split()) for s in secs]
+    total = sum(words)
+    if remove_fraction <= 0 or not question.strip() or len(secs) < 3:
+        return text, total, total
+    q = embed([question])[0]
+    scores = []
+    for s in secs:
+        units = [u for line in s.split("\n") for u in _split_line(line)[1] if len(u.split()) >= 3]
+        if not units:
+            scores.append(float("inf"))  # headings alone cost nothing to keep
+            continue
+        rel = embed(units) @ q
+        scores.append(float(rel.max() + 0.3 * rel.mean()))
+    keep = [False] * len(secs)
+    kept, budget = 0, total * (1 - remove_fraction)
+    for i in sorted(range(len(secs)), key=lambda i: -scores[i]):
+        if kept >= budget and scores[i] != float("inf"):
+            continue
+        keep[i] = True
+        kept += words[i]
+    out = []
+    for s, k in zip(secs, keep):
+        if k:
+            out.append(s)
+        else:
+            heading = s.split("\n", 1)[0]
+            out.append(heading + "\n" + SECTION_OMITTED + "\n" if _MD_HEADING_RE.match(heading) else SECTION_OMITTED + "\n")
+    return "\n".join(out), total, kept

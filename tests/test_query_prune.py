@@ -59,3 +59,45 @@ def test_non_compressible_pieces_and_no_question_are_untouched():
 def test_budget_is_met_but_not_overshot():
     out, before, after = prune_pieces([(DOC, True)], QUESTION, 0.3, _embed)
     assert before * 0.7 <= after < before
+
+
+SECTIONED = """# Service
+
+Intro paragraph about the whole service and its owners.
+
+## Risk check
+
+The risk check stops orders above the exposure limit. It runs before every order.
+
+```bash
+# not a heading inside a fence
+make risk
+```
+
+## Lunch
+
+Lunch is served at noon on Fridays and the weather is pleasant.
+
+## Logging
+
+Every decision is logged with its order id.
+"""
+
+
+def test_sections_keep_the_relevant_one_whole_and_headings_of_the_rest():
+    from horizon.transforms.query_prune import SECTION_OMITTED, _sections, prune_sections
+
+    assert len(_sections(SECTIONED)) == 4  # the fenced "# not a heading" does not split
+    out, before, after = prune_sections(SECTIONED, QUESTION, 0.5, _embed)
+    assert "The risk check stops orders above the exposure limit. It runs before every order." in out
+    assert "make risk" in out
+    assert "## Lunch\n" + SECTION_OMITTED in out
+    assert "Lunch is served" not in out
+    assert after < before
+
+
+def test_sections_leave_short_or_unquestioned_documents_alone():
+    from horizon.transforms.query_prune import prune_sections
+
+    assert prune_sections(SECTIONED, "", 0.5, _embed)[0] == SECTIONED
+    assert prune_sections("# One\n\nJust one section here.", QUESTION, 0.5, _embed)[0].startswith("# One")
