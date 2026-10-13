@@ -325,6 +325,7 @@ def query_embedder(monkeypatch):
     monkeypatch.setattr(cr, "_PROMPT_DOC_QUERY_CACHE", cr.OrderedDict())
     monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
     monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_QUERY", "1")
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_QUERY_SCORER", "embed")
     return fake
 
 
@@ -377,3 +378,14 @@ def test_the_question_can_come_from_its_own_block(router, query_embedder):
     )["content"]
     assert out[0]["text"] == NARROW_Q
     assert out[1]["text"].count("[Section omitted") >= 2
+
+
+def test_keyword_scoring_needs_no_model(router, query_embedder, monkeypatch):
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_QUERY_SCORER", "bm25")
+    query_embedder.ready = False
+    text = NARROW_Q + "\n\n" + _sectioned_doc()
+    result = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    out = result.messages[0]["content"]
+    assert "router:prompt_document:query" in result.transforms_applied
+    assert "The risk check rejects an order when exposure exceeds the limit." in out
+    assert query_embedder.warmed == 0

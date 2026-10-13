@@ -214,8 +214,41 @@ def _sections(text: str) -> list[str]:
     return ["\n".join(s) for s in sections]
 
 
+_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+def _terms(text: str) -> list[str]:
+    return [t.rstrip("s") if len(t) > 3 else t for t in _TERM_RE.findall(text.lower())]
+
+
+def bm25_section_scores(sections: list[str], question: str, k1: float = 1.2, b: float = 0.75) -> list[float]:
+    """Keyword relevance of each section to the question (BM25; headings count twice)."""
+    import math
+
+    docs = []
+    for s in sections:
+        heading = s.split("\n", 1)[0]
+        docs.append(_terms(s) + (_terms(heading) if _MD_HEADING_RE.match(heading) else []))
+    q_terms = {t for t in _terms(question) if t not in _GENERIC_WORDS and len(t) >= 3}
+    n = len(docs)
+    avg = sum(len(d) for d in docs) / max(n, 1)
+    df = {t: sum(1 for d in docs if t in d) for t in q_terms}
+    scores = []
+    for d in docs:
+        tf: dict[str, int] = {}
+        for t in d:
+            if t in q_terms:
+                tf[t] = tf.get(t, 0) + 1
+        s = 0.0
+        for t, f in tf.items():
+            idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
+            s += idf * f * (k1 + 1) / (f + k1 * (1 - b + b * len(d) / max(avg, 1)))
+        scores.append(s)
+    return scores
+
+
 def prune_sections(
-    text: str, question: str, remove_fraction: float, embed: Embed
+    text: str, question: str, remove_fraction: float, embed: Embed | None
 ) -> tuple[str, int, int]:
     """Keep the sections most relevant to ``question`` whole; omit the rest.
 
@@ -232,6 +265,11 @@ def prune_sections(
     per_section = [
         [u for line in s.split("\n") for u in _split_line(line)[1] if len(u.split()) >= 3] for s in secs
     ]
+    if embed is None:  # keyword scoring: milliseconds, for slow hosts
+        kw = bm25_section_scores(secs, question)
+        return _keep_sections(secs, words, [
+            float("inf") if not units else kw[i] for i, units in enumerate(per_section)
+        ], remove_fraction)
     flat = [u for units in per_section for u in units]
     vecs = embed([question] + flat)  # one call: batches share padding work
     rel_all = vecs[1:] @ vecs[0]
@@ -244,6 +282,14 @@ def prune_sections(
         rel = rel_all[pos : pos + len(units)]
         pos += len(units)
         scores.append(float(rel.max() + 0.3 * rel.mean()))
+    return _keep_sections(secs, words, scores, remove_fraction)
+
+
+def _keep_sections(
+    secs: list[str], words: list[int], scores: list[float], remove_fraction: float
+) -> tuple[str, int, int]:
+    """Keep the best-scoring sections up to the word budget; the rest become headings."""
+    total = sum(words)
     keep = [False] * len(secs)
     kept, budget = 0, total * (1 - remove_fraction)
     for i in sorted(range(len(secs)), key=lambda i: -scores[i]):

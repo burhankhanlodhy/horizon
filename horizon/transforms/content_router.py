@@ -7760,7 +7760,8 @@ class ContentRouter(Transform):
         if question_scope(question, middle) != "narrow":
             return None
         remove = _env_float("HORIZON_PROMPT_DOCUMENTS_QUERY_REMOVE", 0.5, 0.05, 0.9)
-        key = hash((middle, question, remove))
+        scorer = os.environ.get("HORIZON_PROMPT_DOCUMENTS_QUERY_SCORER", "bm25").strip().lower()
+        key = hash((middle, question, remove, scorer))
         with _PROMPT_DOC_QUERY_CACHE_LOCK:
             if key in _PROMPT_DOC_QUERY_CACHE:
                 _PROMPT_DOC_QUERY_CACHE.move_to_end(key)
@@ -7769,8 +7770,15 @@ class ContentRouter(Transform):
         # once must not be pruned when it is replayed later (a changed earlier
         # turn would bust the provider's prompt cache).
         result: str | None = None
-        embedder = shared_embedder()
-        if not embedder.ready:
+        embedder = shared_embedder() if scorer == "embed" else None
+        if embedder is None:
+            # Keyword scoring takes milliseconds: no model, no time budget.
+            try:
+                pruned, before, after = prune_sections(middle, question, remove, None)
+                result = pruned if after < before else None
+            except Exception as exc:  # noqa: BLE001 - never break the request
+                logger.warning("prompt document query pruning failed: %s", exc)
+        elif not embedder.ready:
             embedder.warm()
         else:
             budget = _env_float("HORIZON_PROMPT_DOCUMENTS_QUERY_BUDGET_S", 4.0, 0.1, 60.0)
