@@ -45,6 +45,7 @@ import re
 import sys
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
@@ -279,6 +280,45 @@ def _prompt_documents_enabled() -> bool:
         "yes",
         "on",
     )
+
+
+PROMPT_DOC_QUESTION_MAX_CHARS = 600
+PROMPT_DOC_QUERY_NOTE = (
+    "[Note: sections of this document not relevant to the request were omitted to save "
+    "tokens; their headings remain. Every section shown is verbatim and complete.]\n\n"
+)
+_PROMPT_DOC_QUERY_CACHE: OrderedDict[int, str | None] = OrderedDict()
+_PROMPT_DOC_QUERY_CACHE_LOCK = threading.Lock()
+
+
+def _prompt_documents_query_enabled() -> bool:
+    return os.environ.get("HORIZON_PROMPT_DOCUMENTS_QUERY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _env_float(name: str, default: float, low: float, high: float) -> float:
+    try:
+        value = float(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if low <= value <= high else default
+
+
+def _prompt_document_question(text: str, start: int, end: int, hint: str = "") -> str:
+    """The caller's question around a pasted document: ``hint`` (the message's
+    other short text blocks) when there is one, else a short first or last
+    paragraph outside the document."""
+    if hint.strip():
+        return hint.strip()
+    # Typed words sit at the outer ends: before a paste, or after it.
+    lead = [p.strip() for p in _PROMPT_DOC_BREAK_RE.split(text[:start]) if p.strip()]
+    tail = [p.strip() for p in _PROMPT_DOC_BREAK_RE.split(text[end:]) if p.strip()]
+    parts = [p for p in lead[:1] + tail[-1:] if len(p) <= PROMPT_DOC_QUESTION_MAX_CHARS]
+    return "\n".join(dict.fromkeys(parts))
 
 
 def _prompt_document_keep() -> float | None:
@@ -7543,6 +7583,16 @@ class ContentRouter(Transform):
                 )
             ):
                 is_doc_block = block_type == "document"
+                # The typed request often rides in its own text block (Claude
+                # Code sends the prompt and a piped file separately).
+                _hint = "\n".join(
+                    b.get("text", "")
+                    for b in content_blocks
+                    if b is not block
+                    and isinstance(b, dict)
+                    and b.get("type") == "text"
+                    and len(b.get("text", "")) <= PROMPT_DOC_QUESTION_MAX_CHARS
+                )
                 _doc = self._compress_prompt_document(
                     block["source"].get("data") if is_doc_block else block.get("text"),
                     edge_chars=0 if is_doc_block else PROMPT_DOC_EDGE_CHARS,
@@ -7552,6 +7602,7 @@ class ContentRouter(Transform):
                     transforms_applied=transforms_applied,
                     route_counts=route_counts,
                     compressed_details=compressed_details,
+                    question_hint=_hint,
                 )
                 if _doc is None:
                     new_blocks.append(block)
@@ -7638,6 +7689,7 @@ class ContentRouter(Transform):
         transforms_applied: list[str],
         route_counts: dict[str, int] | None,
         compressed_details: list[str] | None,
+        question_hint: str = "",
     ) -> str | None:
         """Compress the document inside a protected user prompt; None leaves it verbatim.
 
@@ -7651,6 +7703,17 @@ class ContentRouter(Transform):
         if span is None:
             return None
         start, end = span
+        if _prompt_documents_query_enabled():
+            pruned = self._query_prune_prompt_document(
+                text[start:end], _prompt_document_question(text, start, end, question_hint)
+            )
+            if pruned is not None:
+                transforms_applied.append("router:prompt_document:query")
+                if route_counts is not None:
+                    route_counts["prompt_document_query"] = (
+                        route_counts.get("prompt_document_query", 0) + 1
+                    )
+                return text[:start] + PROMPT_DOC_QUERY_NOTE + pruned + text[end:]
         # Prose goes to Kompress only: the detector reads specs full of IDs and
         # status words as logs, and the log compressor drops whole lines. With
         # no model ready the document stays verbatim.
@@ -7682,6 +7745,50 @@ class ContentRouter(Transform):
         if route_counts is not None:
             route_counts["prompt_document"] = route_counts.get("prompt_document", 0) + 1
         return text[:start] + PROMPT_DOC_NOTE + "".join(out) + text[end:]
+
+    def _query_prune_prompt_document(self, middle: str, question: str) -> str | None:
+        """Keep the sections a narrow question is about; None for anything else.
+
+        Whole-document requests (review, summarize, plan) lose the findings
+        that make the answer useful when pruned, so only a question the gate
+        calls narrow is pruned. The result is cached by input, so a repeat of
+        the same message yields the same bytes; a cold embedder or a blown
+        time budget leaves the document to the normal path.
+        """
+        from .query_prune import PruneDeadline, prune_sections, question_scope, shared_embedder
+
+        if question_scope(question, middle) != "narrow":
+            return None
+        remove = _env_float("HORIZON_PROMPT_DOCUMENTS_QUERY_REMOVE", 0.5, 0.05, 0.9)
+        key = hash((middle, question, remove))
+        with _PROMPT_DOC_QUERY_CACHE_LOCK:
+            if key in _PROMPT_DOC_QUERY_CACHE:
+                _PROMPT_DOC_QUERY_CACHE.move_to_end(key)
+                return _PROMPT_DOC_QUERY_CACHE[key]
+        # Every outcome is pinned, "left whole" included: a message sent whole
+        # once must not be pruned when it is replayed later (a changed earlier
+        # turn would bust the provider's prompt cache).
+        result: str | None = None
+        embedder = shared_embedder()
+        if not embedder.ready:
+            embedder.warm()
+        else:
+            budget = _env_float("HORIZON_PROMPT_DOCUMENTS_QUERY_BUDGET_S", 4.0, 0.1, 60.0)
+            deadline = time.monotonic() + budget
+            try:
+                pruned, before, after = prune_sections(
+                    middle, question, remove, lambda texts: embedder.embed(texts, deadline)
+                )
+                result = pruned if after < before else None
+            except PruneDeadline:
+                logger.info("prompt document query pruning ran past %.1fs; left whole", budget)
+            except Exception as exc:  # noqa: BLE001 - never break the request
+                logger.warning("prompt document query pruning failed: %s", exc)
+        with _PROMPT_DOC_QUERY_CACHE_LOCK:
+            _PROMPT_DOC_QUERY_CACHE[key] = result
+            while len(_PROMPT_DOC_QUERY_CACHE) > 64:
+                _PROMPT_DOC_QUERY_CACHE.popitem(last=False)
+        return result
 
     def _compress_prompt_document_pieces(
         self,

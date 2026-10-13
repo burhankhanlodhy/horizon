@@ -11,7 +11,11 @@ Headings, short lines, fenced code and tables are never removed.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
+import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -143,7 +147,7 @@ _WHOLE_DOC_RE = re.compile(
     r"go (?:through|over)|walk me through|read (?:it|this|the)|analy[sz]e|assess|evaluate|"
     r"(?:a|me a|make a|write a|draft a) plan|plan (?:for|out)|roadmap|"
     r"build (?:it|this)|implement (?:it|this)|"
-    r"gaps|(?:any|the|all|main|biggest|key|major|top|open) (?:gaps?|risks?)(?! (?:section|part|chapter))|risky|"
+    r"gaps|risks|(?:any|all|main|biggest|key|major|top|open) (?:gap|risk)\b|risky|"
     r"look (?:over|at|into) (?:it|this)|makes? sense|(?:score|rate|grade|judge) (?:it|this)|out of 10|"
     r"ready to (?:ship|go|merge|launch|publish)|good enough|sound|"
     r"would you|should (?:i|we)|reasonable|sensible|better|worse|recommend\w*|suggest\w*|"
@@ -225,14 +229,20 @@ def prune_sections(
     total = sum(words)
     if remove_fraction <= 0 or not question.strip() or len(secs) < 3:
         return text, total, total
-    q = embed([question])[0]
+    per_section = [
+        [u for line in s.split("\n") for u in _split_line(line)[1] if len(u.split()) >= 3] for s in secs
+    ]
+    flat = [u for units in per_section for u in units]
+    vecs = embed([question] + flat)  # one call: batches share padding work
+    rel_all = vecs[1:] @ vecs[0]
     scores = []
-    for s in secs:
-        units = [u for line in s.split("\n") for u in _split_line(line)[1] if len(u.split()) >= 3]
+    pos = 0
+    for units in per_section:
         if not units:
             scores.append(float("inf"))  # headings alone cost nothing to keep
             continue
-        rel = embed(units) @ q
+        rel = rel_all[pos : pos + len(units)]
+        pos += len(units)
         scores.append(float(rel.max() + 0.3 * rel.mean()))
     keep = [False] * len(secs)
     kept, budget = 0, total * (1 - remove_fraction)
@@ -249,3 +259,110 @@ def prune_sections(
             heading = s.split("\n", 1)[0]
             out.append(heading + "\n" + SECTION_OMITTED + "\n" if _MD_HEADING_RE.match(heading) else SECTION_OMITTED + "\n")
     return "\n".join(out), total, kept
+
+
+# ── Sentence embedder for the proxy ────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+EMBED_REPO = "Qdrant/all-MiniLM-L6-v2-onnx"
+
+
+class PruneDeadline(Exception):
+    """Embedding ran past its time budget; the caller leaves the document alone."""
+
+
+class SentenceEmbedder:
+    """all-MiniLM-L6-v2 over ONNX Runtime, loaded once in the background.
+
+    Batches are padded to their longest sentence (not a fixed length), which is
+    3-4x faster on short sentences. ``embed`` raises :class:`PruneDeadline` once
+    ``deadline`` (a ``time.monotonic()`` value) has passed.
+    """
+
+    def __init__(self, threads: int = 2, max_tokens: int = 128, batch: int = 32) -> None:
+        self._threads, self._max_tokens, self._batch = threads, max_tokens, batch
+        self._session: object | None = None
+        self._tokenizer: object | None = None
+        self._inputs: list[str] = []
+        self._loading = threading.Lock()
+        self._failed = False
+
+    @property
+    def ready(self) -> bool:
+        return self._session is not None
+
+    def warm(self) -> None:
+        """Start loading in a background thread (no-op once loaded or loading)."""
+        if self._session is not None or self._failed or self._loading.locked():
+            return
+        threading.Thread(target=self._load, name="doc-embedder-load", daemon=True).start()
+
+    def _load(self) -> None:
+        if not self._loading.acquire(blocking=False):
+            return
+        try:
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
+
+            from horizon.onnx_runtime import create_cpu_session_options, hf_hub_download_local_first
+
+            model = hf_hub_download_local_first(EMBED_REPO, "model.onnx")
+            tok = Tokenizer.from_file(hf_hub_download_local_first(EMBED_REPO, "tokenizer.json"))
+            tok.enable_truncation(max_length=self._max_tokens)
+            tok.no_padding()
+            opts = create_cpu_session_options(
+                ort, intra_op_num_threads=self._threads, inter_op_num_threads=1
+            )
+            session = ort.InferenceSession(model, opts, providers=["CPUExecutionProvider"])
+            self._inputs = [i.name for i in session.get_inputs()]
+            self._tokenizer, self._session = tok, session
+        except Exception as exc:  # noqa: BLE001 - never break the proxy
+            self._failed = True
+            logger.warning("Document embedder unavailable; query pruning off: %s", exc)
+        finally:
+            self._loading.release()
+
+    def embed(self, texts: list[str], deadline: float | None = None) -> np.ndarray:
+        assert self._session is not None and self._tokenizer is not None
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        rows: list[np.ndarray | None] = [None] * len(texts)
+        for start in range(0, len(order), self._batch):
+            if deadline is not None and time.monotonic() > deadline:
+                raise PruneDeadline
+            idx = order[start : start + self._batch]
+            encs = self._tokenizer.encode_batch([texts[i] for i in idx])  # type: ignore[attr-defined]
+            width = max(1, max(len(e.ids) for e in encs))
+            ids = np.zeros((len(idx), width), np.int64)
+            mask = np.zeros((len(idx), width), np.int64)
+            for r, e in enumerate(encs):
+                ids[r, : len(e.ids)] = e.ids
+                mask[r, : len(e.ids)] = 1
+            feeds = {}
+            for name in self._inputs:
+                if "input_ids" in name:
+                    feeds[name] = ids
+                elif "attention_mask" in name:
+                    feeds[name] = mask
+                elif "token_type_ids" in name:
+                    feeds[name] = np.zeros_like(ids)
+            out = self._session.run(None, feeds)[0]  # type: ignore[attr-defined]
+            m = mask[:, :, None].astype(np.float32)
+            vecs = (out * m).sum(axis=1) / np.clip(m.sum(axis=1), 1e-9, None)
+            vecs /= np.clip(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-9, None)
+            for r, i in enumerate(idx):
+                rows[i] = vecs[r]
+        return np.vstack(rows) if rows else np.zeros((0, 384), np.float32)
+
+
+_EMBEDDER: SentenceEmbedder | None = None
+_EMBEDDER_LOCK = threading.Lock()
+
+
+def shared_embedder() -> SentenceEmbedder:
+    global _EMBEDDER
+    with _EMBEDDER_LOCK:
+        if _EMBEDDER is None:
+            _EMBEDDER = SentenceEmbedder(
+                threads=max(1, int(os.environ.get("HORIZON_PROMPT_DOCUMENTS_QUERY_THREADS", "2") or 2))
+            )
+        return _EMBEDDER

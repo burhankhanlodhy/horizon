@@ -278,3 +278,102 @@ def test_documents_use_kompress_and_stay_verbatim_without_it(router, monkeypatch
     monkeypatch.setattr(ContentRouter, "_force_kompress_ready", lambda self: False)
     result = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
     assert result.messages[0]["content"] == text
+
+
+# ── Query-aware pruning (HORIZON_PROMPT_DOCUMENTS_QUERY) ──────────────────
+
+def _sectioned_doc() -> str:
+    topics = {
+        "Risk check": "The risk check rejects an order when exposure exceeds the limit. "
+        "Exposure is measured against account equity before every order.",
+        "Lunch": "Lunch is served at noon on Fridays and the weather is pleasant in spring.",
+        "Office": "The office has plants and a kitchen; coffee is free and the chairs are new.",
+        "Holidays": "Holidays follow the calendar and the team takes two weeks in summer off.",
+    }
+    parts = ["# Trading service"]
+    for title, body in topics.items():
+        parts.append(f"## {title}\n\n" + "\n\n".join(f"{body} Note {i}." for i in range(30)))
+    return "\n\n".join(parts)
+
+
+class _FakeEmbedder:
+    def __init__(self, ready=True):
+        self.ready = ready
+        self.warmed = 0
+
+    def warm(self):
+        self.warmed += 1
+
+    def embed(self, texts, deadline=None):
+        import numpy as np
+
+        vocab = ["risk", "order", "exposure", "limit", "lunch", "office", "holidays"]
+        rows = []
+        for t in texts:
+            low = t.lower()
+            v = np.array([low.count(w) for w in vocab], dtype=float) + 0.01
+            rows.append(v / np.linalg.norm(v))
+        return np.vstack(rows)
+
+
+@pytest.fixture
+def query_embedder(monkeypatch):
+    from horizon.transforms import query_prune
+
+    fake = _FakeEmbedder()
+    monkeypatch.setattr(query_prune, "shared_embedder", lambda: fake)
+    monkeypatch.setattr(cr, "_PROMPT_DOC_QUERY_CACHE", cr.OrderedDict())
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_QUERY", "1")
+    return fake
+
+
+NARROW_Q = "How does the risk check decide when to reject an order over the exposure limit?"
+
+
+def test_a_narrow_question_keeps_its_section_whole(router, query_embedder):
+    text = NARROW_Q + "\n\n" + _sectioned_doc()
+    result = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    out = result.messages[0]["content"]
+    assert out.startswith(NARROW_Q)
+    assert cr.PROMPT_DOC_QUERY_NOTE in out
+    assert "The risk check rejects an order when exposure exceeds the limit." in out
+    # The last 1500 chars are edge (kept as typed), so one of three eligible sections goes.
+    assert out.count("[Section omitted") >= 1 and len(out) < len(text)
+    assert "router:prompt_document:query" in result.transforms_applied
+    assert router.calls == []  # no Kompress on top
+
+
+def test_a_whole_document_request_is_not_query_pruned(router, query_embedder):
+    text = "Review this document and list every risk.\n\n" + _sectioned_doc()
+    result = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    assert "router:prompt_document:query" not in result.transforms_applied
+    assert cr.PROMPT_DOC_QUERY_NOTE not in result.messages[0]["content"]
+
+
+def test_a_document_sent_whole_while_loading_stays_whole(router, query_embedder):
+    query_embedder.ready = False
+    text = NARROW_Q + "\n\n" + _sectioned_doc()
+    first = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    assert query_embedder.warmed == 1
+    query_embedder.ready = True
+    again = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    assert again.messages[0]["content"] == first.messages[0]["content"]
+    assert cr.PROMPT_DOC_QUERY_NOTE not in again.messages[0]["content"]
+
+
+def test_the_question_can_come_from_its_own_block(router, query_embedder):
+    msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": NARROW_Q},
+            {"type": "text", "text": _sectioned_doc(), "cache_control": {"type": "ephemeral"}},
+        ],
+    }
+    out = router._process_content_blocks(
+        msg, msg["content"], "", [], set(), set(),
+        route_counts={}, messages_from_end=1, prefix_replay_guaranteed=True,
+        protect_prompt_text=True,
+    )["content"]
+    assert out[0]["text"] == NARROW_Q
+    assert out[1]["text"].count("[Section omitted") >= 2
