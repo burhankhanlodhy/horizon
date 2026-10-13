@@ -7651,8 +7651,15 @@ class ContentRouter(Transform):
         if span is None:
             return None
         start, end = span
+        # Prose goes to Kompress only: the detector reads specs full of IDs and
+        # status words as logs, and the log compressor drops whole lines. With
+        # no model ready the document stays verbatim.
+        if not self._force_kompress_ready():
+            return None
         keep = _prompt_document_keep()
         saved_ratio = getattr(self, "_runtime_target_ratio", None)
+        saved_force = getattr(self, "_runtime_force_kompress", False)
+        self._runtime_force_kompress = True
         if keep is not None:
             self._runtime_target_ratio = keep
         try:
@@ -7666,6 +7673,7 @@ class ContentRouter(Transform):
                 compressed_details=compressed_details,
             )
         finally:
+            self._runtime_force_kompress = saved_force
             if keep is not None:
                 self._runtime_target_ratio = saved_ratio
         if not changed:

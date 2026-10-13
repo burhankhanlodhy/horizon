@@ -37,6 +37,11 @@ def _doc(paragraphs: int = 60) -> str:
     return "\n\n".join(out)
 
 
+@pytest.fixture(autouse=True)
+def _model_ready(monkeypatch):
+    monkeypatch.setattr(ContentRouter, "_force_kompress_ready", lambda self: True)
+
+
 class _Tokenizer:
     def count_text(self, content: str) -> int:
         return len(content.split())
@@ -254,3 +259,22 @@ def test_keep_setting_applies_to_documents_only(monkeypatch):
     for bad in ("", "abc", "1.5", "0"):
         monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_KEEP", bad)
         assert cr._prompt_document_keep() is None
+
+
+def test_documents_use_kompress_and_stay_verbatim_without_it(router, monkeypatch):
+    """Specs read as logs to the detector; the log compressor would drop lines."""
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    forced: list = []
+    original = ContentRouter._compress_block_content
+
+    def record(self, *a, **k):
+        forced.append(getattr(self, "_runtime_force_kompress", False))
+        return original(self, *a, **k)
+
+    monkeypatch.setattr(ContentRouter, "_compress_block_content", record)
+    text = QUESTION + "\n\n" + _doc() + "\n\n" + QUESTION
+    router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    assert forced and all(forced)
+    monkeypatch.setattr(ContentRouter, "_force_kompress_ready", lambda self: False)
+    result = router.apply([{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True)
+    assert result.messages[0]["content"] == text
