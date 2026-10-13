@@ -132,6 +132,66 @@ def prune_pieces(
     return out, total, after
 
 
+# ── Is the request about one part of the document, or all of it? ──────────
+#
+# Pruning a whole-document request (review, summarize, plan, find every gap)
+# loses the specific findings that make the answer useful, so only a question
+# that clearly targets one part is pruned. Anything unclear stays verbatim.
+_WHOLE_DOC_RE = re.compile(
+    r"\b(review|summari[sz]e|summary|overview|tl;?dr|critique|audit|proofread|"
+    r"feedback|improve|rewrite|refactor|translate|convert|reformat|edit|polish|"
+    r"go (?:through|over)|walk me through|read (?:it|this|the)|analy[sz]e|assess|evaluate|"
+    r"(?:a|me a|make a|write a|draft a) plan|plan (?:for|out)|roadmap|"
+    r"build (?:it|this)|implement (?:it|this)|"
+    r"gaps|(?:any|the|all|main|biggest|key|major|top|open) (?:gaps?|risks?)(?! (?:section|part|chapter))|risky|"
+    r"look (?:over|at|into) (?:it|this)|makes? sense|(?:score|rate|grade|judge) (?:it|this)|out of 10|"
+    r"ready to (?:ship|go|merge|launch|publish)|good enough|sound|"
+    r"would you|should (?:i|we)|reasonable|sensible|better|worse|recommend\w*|suggest\w*|"
+    r"issues|problems|weakness(?:es)?|inconsisten\w*|conflicts?|contradict\w*|"
+    r"missing|everything|all of|whole|entire|every|each|overall|"
+    r"what do you think|thoughts|opinion|explain (?:it|this|the (?:doc|document|file|spec|readme))|"
+    r"key (?:points|takeaways)|main (?:points|ideas|limitations)|takeaways|highlights|"
+    r"checklist|action items|next steps|compare)\b",
+    re.I,
+)
+_ASK_RE = re.compile(
+    r"(^|[.!?,;:]\s+|\n)\s*(what|which|how|when|where|why|who|does|do|is|are|can|should|"
+    r"according to|find|show me|tell me|list the \w+ (?:for|of|in)|give me the)\b",
+    re.I,
+)
+_GENERIC_WORDS = frozenset(
+    "a an the this that these those it its in on of for to from about and or with by is are "
+    "does do what which how when where why who can should according say says said tell me "
+    "document doc file spec specification readme plan page text here above below there "
+    "show give find you your please i my we our".split()
+)
+
+
+def question_scope(question: str, document: str | None = None) -> str | None:
+    """'narrow' for a question about one part of a document, 'broad' for the whole
+    document, None when unclear (callers treat None like 'broad').
+
+    With ``document``, a narrow question must name at least two things the
+    document itself mentions: "is this ready to ship?" names nothing in it.
+    """
+    q = " ".join(question.split())
+    if not q:
+        return None
+    if _WHOLE_DOC_RE.search(q):
+        return "broad"
+    content = {
+        w.strip(".-")
+        for w in re.findall(r"[A-Za-z0-9][\w.-]*", q.lower())
+        if w not in _GENERIC_WORDS and len(w.strip(".-")) >= 3
+    }
+    if document is not None:
+        doc_words = set(re.findall(r"[a-z0-9][\w-]*", document.lower()))
+        content = {w for w in content if w in doc_words or w.rstrip("s") in doc_words}
+    if _ASK_RE.search(q) and len(content) >= 2:
+        return "narrow"
+    return None
+
+
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 SECTION_OMITTED = "[Section omitted: not relevant to this request.]"
