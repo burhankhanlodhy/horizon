@@ -389,3 +389,21 @@ def test_keyword_scoring_needs_no_model(router, query_embedder, monkeypatch):
     assert "router:prompt_document:query" in result.transforms_applied
     assert "The risk check rejects an order when exposure exceeds the limit." in out
     assert query_embedder.warmed == 0
+
+
+def test_harness_reminders_are_not_taken_as_the_question(router, query_embedder):
+    """Claude Code -p: [reminder block, stdin document + typed prompt at its end]."""
+    msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "<system-reminder>\nReview everything carefully.\n</system-reminder>"},
+            {"type": "text", "text": _sectioned_doc() + "\n\n" + NARROW_Q},
+        ],
+    }
+    out = router._process_content_blocks(
+        msg, msg["content"], "", [], set(), set(),
+        route_counts={}, messages_from_end=1, prefix_replay_guaranteed=True,
+        protect_prompt_text=True,
+    )["content"]
+    assert out[0] == msg["content"][0]
+    assert "[Section omitted" in out[1]["text"] and out[1]["text"].endswith(NARROW_Q)

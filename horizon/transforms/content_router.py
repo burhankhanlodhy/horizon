@@ -7592,6 +7592,8 @@ class ContentRouter(Transform):
                     and isinstance(b, dict)
                     and b.get("type") == "text"
                     and len(b.get("text", "")) <= PROMPT_DOC_QUESTION_MAX_CHARS
+                    # Harness context (<system-reminder>, <command-…>) is not the ask.
+                    and not b.get("text", "").lstrip().startswith("<")
                 )
                 _doc = self._compress_prompt_document(
                     block["source"].get("data") if is_doc_block else block.get("text"),
