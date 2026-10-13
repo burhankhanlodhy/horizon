@@ -222,3 +222,35 @@ def test_markdown_tables_stay_exact_and_specs_count_as_prose():
     )
     assert cr._looks_like_prose(spec)
     assert not cr._looks_like_prose("\n".join(f"ERROR {i} at 0x{i:04x}" for i in range(40)))
+
+
+def test_keep_setting_applies_to_documents_only(monkeypatch):
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS", "1")
+    monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_KEEP", "0.9")
+    r = ContentRouter()
+    seen: list = []
+
+    def record(self, content, content_key, *a, **k):
+        seen.append(getattr(self, "_runtime_target_ratio", None))
+        return content[: len(content) // 2], True
+
+    after: list = []
+    doc = ContentRouter._compress_prompt_document
+
+    def wrapped(self, *a, **k):
+        out = doc(self, *a, **k)
+        after.append(getattr(self, "_runtime_target_ratio", None))
+        return out
+
+    monkeypatch.setattr(ContentRouter, "_compress_block_content", record)
+    monkeypatch.setattr(ContentRouter, "_compress_prompt_document", wrapped)
+    text = QUESTION + "\n\n" + _doc() + "\n\n" + QUESTION
+    r.apply(
+        [{"role": "user", "content": text}], _Tokenizer(), prefix_replay_guaranteed=True, target_ratio=0.5
+    )
+    assert seen and set(seen) == {0.9}
+    # The caller's own ratio is back for everything after the document.
+    assert after == [0.5]
+    for bad in ("", "abc", "1.5", "0"):
+        monkeypatch.setenv("HORIZON_PROMPT_DOCUMENTS_KEEP", bad)
+        assert cr._prompt_document_keep() is None

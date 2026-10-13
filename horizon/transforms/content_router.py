@@ -281,6 +281,18 @@ def _prompt_documents_enabled() -> bool:
     )
 
 
+def _prompt_document_keep() -> float | None:
+    """Fraction of a document's words to keep (HORIZON_PROMPT_DOCUMENTS_KEEP).
+
+    Unset or invalid leaves the compressor to decide, as for everything else.
+    """
+    try:
+        keep = float(os.environ.get("HORIZON_PROMPT_DOCUMENTS_KEEP", ""))
+    except ValueError:
+        return None
+    return keep if 0.0 < keep < 1.0 else None
+
+
 def _prompt_document_span(text: str, edge_chars: int) -> tuple[int, int] | None:
     """Character span of the compressible document inside a prompt, or None.
 
@@ -7639,9 +7651,44 @@ class ContentRouter(Transform):
         if span is None:
             return None
         start, end = span
+        keep = _prompt_document_keep()
+        saved_ratio = getattr(self, "_runtime_target_ratio", None)
+        if keep is not None:
+            self._runtime_target_ratio = keep
+        try:
+            out, changed = self._compress_prompt_document_pieces(
+                text[start:end],
+                context=context,
+                min_ratio=min_ratio,
+                compressor_timing=compressor_timing,
+                transforms_applied=transforms_applied,
+                route_counts=route_counts,
+                compressed_details=compressed_details,
+            )
+        finally:
+            if keep is not None:
+                self._runtime_target_ratio = saved_ratio
+        if not changed:
+            return None
+        transforms_applied.append("router:prompt_document")
+        if route_counts is not None:
+            route_counts["prompt_document"] = route_counts.get("prompt_document", 0) + 1
+        return text[:start] + PROMPT_DOC_NOTE + "".join(out) + text[end:]
+
+    def _compress_prompt_document_pieces(
+        self,
+        middle: str,
+        *,
+        context: str,
+        min_ratio: float,
+        compressor_timing: dict[str, float] | None,
+        transforms_applied: list[str],
+        route_counts: dict[str, int] | None,
+        compressed_details: list[str] | None,
+    ) -> tuple[list[str], bool]:
         out: list[str] = []
         changed = False
-        for piece, compressible in _prompt_document_pieces(text[start:end]):
+        for piece, compressible in _prompt_document_pieces(middle):
             if compressible and not _is_already_compressed(piece):
                 body = piece.strip()
                 compressed, _ = self._compress_block_content(
@@ -7668,12 +7715,7 @@ class ContentRouter(Transform):
                     changed = True
                     continue
             out.append(piece)
-        if not changed:
-            return None
-        transforms_applied.append("router:prompt_document")
-        if route_counts is not None:
-            route_counts["prompt_document"] = route_counts.get("prompt_document", 0) + 1
-        return text[:start] + PROMPT_DOC_NOTE + "".join(out) + text[end:]
+        return out, changed
 
     def _compress_block_content(
         self,
