@@ -349,3 +349,35 @@ If an external item is unavailable, label the beta or milestone as pending and
 publish no claim that depends on it. Synthetic fixtures may validate software
 and reporting arithmetic, but cannot establish Claude Desktop compatibility,
 participant quality, Enterprise consumption, or financial savings.
+
+## Final integrated engineering verification
+
+The four stage pull requests remain separate and target `main`: M7 PR #9 at
+`202e6f01`, M6 PR #10 at `949bc4aa`, M14 PR #11 at `eff067e7`, and M13 PR #12
+at `e9043fb6`. Their merged validation was performed in a local integration
+worktree; the integration branch was not pushed and `main` was not changed.
+
+On Windows with Python 3.12.14 from the primary repository virtual environment,
+`python -m pytest tests/desktop_mcp -p no:cacheprovider` completed with 1,088
+passed and 2 skipped. Ruff passed for all changed Python source and test files.
+The M6 and M13 report CLIs each produced JSON semantically equal to their
+committed golden report. The checked-in reports use CRLF while CLI output uses
+LF, so byte-for-byte comparison differs only by line endings.
+
+Offline cross-stage checks verified that an M7-generated `P-XXXXXXXX` code is
+accepted by M6 assignment, consent and blinded worksheet flows, and that M6
+builds a pending report with no observed Enterprise usage or savings claim.
+The canonical M6 synthetic envelope also passes M6's strict validators and is
+accepted by M13. M13 correctly rejects a synthetic-evidence envelope containing
+a pseudonymous participant code; fabricated observations were not relabeled as
+consented study data to bypass that guard. These checks validate contract
+compatibility, not a live participant cohort or one end-to-end Enterprise run.
+
+The M14 frozen package smoke test used an isolated temporary profile and passed
+stdio discovery plus companion import, process termination, restart recovery,
+and cleanup. See the M14 stage report for its exact package and smoke metadata.
+Remaining external gates include fresh consented participants, fresh mapped
+Enterprise usage exports, independent blinded scoring, and manual Claude
+Desktop, second-user, clean-install, signing and distribution checks. Phase G
+engineering harnesses are validated; participant-quality, Enterprise usage,
+Desktop compatibility and financial claims remain pending those gates.
