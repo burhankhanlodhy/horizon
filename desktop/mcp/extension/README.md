@@ -60,10 +60,10 @@ Run on 2026-10-14 on Windows 11 with PyInstaller 6.22.3, Python 3.12.14, mcp
 
 - Build: `build\dist\contextshrink-desktop\` is 59.1 MiB (61,925,660 bytes, 178
   files). The executable is `contextshrink-desktop.exe`, about 20 MB.
-- Pack: `dist\contextshrink-desktop-0.1.0.mcpb` is 31,571,251 bytes, with 179
+- Pack: `dist\contextshrink-desktop-0.1.0.mcpb` is 31,594,852 bytes, with 179
   entries (`manifest.json` plus 178 `server/` files). sha256
-  `6d19686dc9147c818ee9e2ccfd86013cd0758781e41e5c1dc5cd1acd217aca45` (after
-  the manifest tool-list fix below).
+  `94551b8d1594b624057f8a0319d837f84c00fd4faf17b7eaa96789f30e3b9d31` (after
+  the persistent usage stats and package-metadata changes).
   Determinism (same inputs, same bytes) is covered by a unit test on a fake
   onedir; the real build was packed once.
 - Step 1, `contextshrink-desktop.exe --help`: exit 0, usage text printed.
