@@ -374,8 +374,9 @@ consented study data to bypass that guard. These checks validate contract
 compatibility, not a live participant cohort or one end-to-end Enterprise run.
 
 The M14 frozen package smoke test used an isolated temporary profile and passed
-stdio discovery plus companion import, process termination, restart recovery,
-and cleanup. See the M14 stage report for its exact package and smoke metadata.
+stdio discovery plus companion import, process termination, expired-session
+recovery, close and cleanup. See M14 PR #11's stage report for its exact package
+and smoke metadata.
 Remaining external gates include fresh consented participants, fresh mapped
 Enterprise usage exports, independent blinded scoring, and manual Claude
 Desktop, second-user, clean-install, signing and distribution checks. Phase G
