@@ -43,6 +43,9 @@ class DesktopSettings(BaseModel):
     max_snapshots: int = Field(default=64, ge=1, le=4096)
     max_broker_clients: int = Field(default=8, ge=1, le=64)
     broker_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    # 0 keeps the broker running until stopped; otherwise it stops after this many
+    # idle seconds (validated below).
+    broker_idle_seconds: int = Field(default=0)
     snapshot_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     counting_model: str | None = None
     eval_arm: Literal["raw", "optimized"] = "optimized"
@@ -102,6 +105,13 @@ class DesktopSettings(BaseModel):
             raise ValueError("must be 1 to 32 ASCII letters, digits, underscores, or hyphens")
         return value
 
+    @field_validator("broker_idle_seconds")
+    @classmethod
+    def broker_idle_seconds_is_bounded(cls, value: int) -> int:
+        if value != 0 and not 60 <= value <= 86400:
+            raise ValueError("must be 0 or between 60 and 86400 seconds")
+        return value
+
     @model_validator(mode="after")
     def source_limits_are_consistent(self) -> DesktopSettings:
         if len(self.approved_roots) > 32:
@@ -148,6 +158,7 @@ _CONFIG_FIELDS = {
     "max_snapshots",
     "max_broker_clients",
     "broker_timeout_seconds",
+    "broker_idle_seconds",
     "snapshot_ttl_seconds",
     "counting_model",
     "eval_arm",

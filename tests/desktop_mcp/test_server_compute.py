@@ -305,3 +305,64 @@ def test_instructions_mention_compute_only_when_enabled() -> None:
     assert "manifest" in compute_text
     assert "outside the chat" in compute_text
     assert compute_text.startswith(source_text)
+
+
+class _FlakyBroker:
+    """Fails the first render with a given broker code, then succeeds."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        self.render_calls = 0
+
+    def render(self, source_id: str, **kwargs: Any) -> dict[str, Any]:
+        self.render_calls += 1
+        if self.render_calls == 1:
+            raise BrokerError(self.code)
+        return {"tool": "render", "artifact": {"artifact_id": "a" * 32}}
+
+
+async def _render_once(backend: Any, recover: Any) -> Any:
+    server = create_server(_compute_settings(), backend=backend, recover_broker=recover)
+    async with create_connected_server_and_client_session(server) as client:
+        return await client.call_tool("contextshrink_render", _render_args())
+
+
+@pytest.mark.anyio
+async def test_unsent_request_recovers_the_broker_and_retries_once() -> None:
+    backend = _FlakyBroker("broker_unavailable")
+    recoveries: list[int] = []
+    result = await _render_once(backend, lambda: recoveries.append(1))
+    assert result.isError is False
+    assert recoveries == [1]
+    assert backend.render_calls == 2
+
+
+@pytest.mark.anyio
+async def test_possibly_sent_request_is_never_retried() -> None:
+    # broker_disconnected means the render may already have run.
+    backend = _FlakyBroker("broker_disconnected")
+    recoveries: list[int] = []
+    result = await _render_once(backend, lambda: recoveries.append(1))
+    assert _error_payload(result)["code"] == "broker_disconnected"
+    assert recoveries == []
+    assert backend.render_calls == 1
+
+
+@pytest.mark.anyio
+async def test_without_a_recovery_hook_unavailable_is_reported() -> None:
+    backend = _FlakyBroker("broker_unavailable")
+    result = await _render_once(backend, None)
+    assert _error_payload(result)["code"] == "broker_unavailable"
+    assert backend.render_calls == 1
+
+
+@pytest.mark.anyio
+async def test_failed_recovery_reports_its_code_without_a_second_call() -> None:
+    backend = _FlakyBroker("broker_unavailable")
+
+    def recover() -> None:
+        raise BrokerError("broker_start_failed")
+
+    result = await _render_once(backend, recover)
+    assert _error_payload(result)["code"] == "broker_start_failed"
+    assert backend.render_calls == 1

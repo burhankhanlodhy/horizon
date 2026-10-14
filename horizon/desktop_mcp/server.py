@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 import anyio
@@ -56,8 +57,16 @@ def _result(payload: dict[str, Any], settings: DesktopSettings) -> CallToolResul
 def create_server(
     settings: DesktopSettings | None = None,
     backend: Any | None = None,
+    recover_broker: Any | None = None,
 ) -> Server:
-    """Create a lightweight server without starting proxy or model services."""
+    """Create a lightweight server without starting proxy or model services.
+
+    ``recover_broker`` (extension mode) restarts a broker that has gone away.
+    A call is retried once only for ``broker_unavailable``, which means the
+    request was never sent, so non-idempotent tools such as render cannot run
+    twice. Handles from the lost broker stay unknown and need a fresh search.
+    """
+    recovery_lock = threading.Lock()
     effective_settings = settings or DesktopSettings()
     if backend is not None:
         selected_backend = backend
@@ -116,6 +125,19 @@ def create_server(
 
         async def call_backend(function: Any, *args: Any, **kwargs: Any) -> Any:
             if local_profile:
+                try:
+                    return await anyio.to_thread.run_sync(
+                        lambda: run_backend(function, *args, **kwargs)
+                    )
+                except BrokerError as exc:
+                    if recover_broker is None or exc.code != "broker_unavailable":
+                        raise
+
+                def recover() -> None:
+                    with recovery_lock:
+                        recover_broker()
+
+                await anyio.to_thread.run_sync(recover)
                 return await anyio.to_thread.run_sync(
                     lambda: run_backend(function, *args, **kwargs)
                 )
@@ -285,9 +307,11 @@ def create_server(
     return server
 
 
-async def serve_stdio(settings: DesktopSettings | None = None) -> None:
+async def serve_stdio(
+    settings: DesktopSettings | None = None, recover_broker: Any | None = None
+) -> None:
     """Run MCP over stdin/stdout; protocol output is kept off stderr/stdout logs."""
-    server = create_server(settings=settings)
+    server = create_server(settings=settings, recover_broker=recover_broker)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
