@@ -71,3 +71,26 @@ Windows SIDs. These are manual release checks and remain pending:
 No external study participants, beta uptake, or economy is represented by this
 suite report. Any M6/M13 measurements remain local harness evidence until
 separately collected and reported under their approved contracts.
+
+## Local frozen MCPB smoke (2026-10-14)
+
+The final `.mcpb` was extracted to a fresh temporary directory and run only with
+synthetic files and a temporary approved root. The packaged executable printed
+CLI help; there is no `--version` CLI switch, while the MCPB manifest and runtime
+metadata report version `0.1.1`. A frozen `serve --extension` stdio session
+listed the four fixed source tools and found a synthetic fixture. The packaged
+companion also imported synthetic text (HTTP 201), then was terminated abruptly.
+After the signed fixture expiry was advanced with the temporary DPAPI key, a
+second packaged launch reloaded that key, removed the expired orphan, and an
+authenticated close removed the new session. All temporary processes and
+synthetic roots were cleaned up. This local package smoke does not substitute
+for the pending clean-machine Claude Desktop install/UI, Cross-SID, or rollback
+checks above.
+
+During an intermediate smoke-harness attempt, the parent harness called the
+key loader without first overriding its own `LOCALAPPDATA`; it may have read or
+created the default current-user recovery-key file at the sanitized location
+`%LOCALAPPDATA%\ContextShrink\recovery-keys\protectedsecret.bin`. No key
+bytes were printed or transmitted, and I did not inspect or delete that file.
+The passing retry set both parent and frozen-child `LOCALAPPDATA` to a new
+synthetic temporary profile before importing or calling the key loader.
