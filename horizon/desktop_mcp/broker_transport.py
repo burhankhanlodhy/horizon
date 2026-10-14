@@ -268,8 +268,67 @@ def _validate_selector(selector: Any) -> None:
         raise BrokerTransportError("invalid_arguments")
 
 
+_COMPUTE_OPERATIONS = frozenset({"analyze", "render", "retrieve_batch"})
+_RENDER_FORMATS = frozenset({"csv", "json", "markdown", "text"})
+_FORMULA_POLICIES = frozenset({"escape", "reject"})
+_BATCH_REQUEST_KEYS = frozenset({"source_id", "selector"})
+
+
+def _validate_source_id(value: Any) -> None:
+    if not isinstance(value, str) or not 1 <= len(value) <= 4096 or not value.startswith("cs1_"):
+        raise BrokerTransportError("invalid_arguments")
+
+
+def _validate_compute_args(operation: str, args: Any) -> None:
+    """Closed envelopes for analyze, render and retrieve_batch (Phase E2)."""
+    if not isinstance(args, dict):
+        raise BrokerTransportError("invalid_arguments")
+    required, optional = {
+        "analyze": ({"source_id", "operation"}, {"result_token_budget"}),
+        "render": ({"source_id", "format", "title"}, {"operation", "formula_policy"}),
+        "retrieve_batch": ({"requests"}, {"result_token_budget"}),
+    }[operation]
+    keys = set(args)
+    if not required <= keys or keys - required - optional:
+        raise BrokerTransportError("invalid_arguments")
+    if operation == "retrieve_batch":
+        requests = args["requests"]
+        if not isinstance(requests, list) or not 1 <= len(requests) <= 16:
+            raise BrokerTransportError("invalid_arguments")
+        for item in requests:
+            if not isinstance(item, dict) or set(item) != _BATCH_REQUEST_KEYS:
+                raise BrokerTransportError("invalid_arguments")
+            _validate_source_id(item["source_id"])
+            _validate_selector(item["selector"])
+    else:
+        _validate_source_id(args["source_id"])
+    if "result_token_budget" in args:
+        budget = args["result_token_budget"]
+        if isinstance(budget, bool) or not isinstance(budget, int) or not 128 <= budget <= 8000:
+            raise BrokerTransportError("invalid_arguments")
+    if operation == "analyze":
+        if not isinstance(args["operation"], dict):
+            raise BrokerTransportError("invalid_arguments")
+    elif operation == "render":
+        fmt = args["format"]
+        if not isinstance(fmt, str) or fmt not in _RENDER_FORMATS:
+            raise BrokerTransportError("invalid_arguments")
+        title = args["title"]
+        if not isinstance(title, str) or not 1 <= len(title) <= 120:
+            raise BrokerTransportError("invalid_arguments")
+        if "operation" in args and not isinstance(args["operation"], dict):
+            raise BrokerTransportError("invalid_arguments")
+        if "formula_policy" in args:
+            policy = args["formula_policy"]
+            if not isinstance(policy, str) or policy not in _FORMULA_POLICIES:
+                raise BrokerTransportError("invalid_arguments")
+
+
 def _validate_operation_args(operation: str, args: Any) -> None:
     """Validate the closed broker operation envelope, including legacy shapes."""
+    if operation in _COMPUTE_OPERATIONS:
+        _validate_compute_args(operation, args)
+        return
     base_keys = {
         "search": {"query", "limit"},
         "open": {"source", "start_line", "end_line"},
@@ -489,7 +548,7 @@ def _serve_request(
         request_id = request["request_id"]
         operation = request["operation"]
         args = request["args"]
-        if operation not in {"search", "open", "retrieve", "stats"}:
+        if operation not in {"search", "open", "retrieve", "stats"} | _COMPUTE_OPERATIONS:
             raise BrokerTransportError("operation_unavailable")
         _validate_operation_args(operation, args)
         result = handler(operation, args)

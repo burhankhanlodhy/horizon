@@ -161,14 +161,24 @@ class _BackendWorker:
             name="contextshrink-backend-reader",
         ).start()
 
-    def _stop(self) -> None:
+    def _stop(self, *, graceful: bool = False) -> None:
         process = self._process
         self._process = None
         self._responses = None
         if process is None:
             return
+        if graceful:
+            # End of input lets the worker leave its loop and run its own
+            # cleanup (artifact files, staged state) before any hard kill.
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         try:
-            process.kill()
+            if process.poll() is None:
+                process.kill()
         except OSError:
             pass
         try:
@@ -297,7 +307,7 @@ class BrokerService:
                 expected_sid=sid,
             )
         finally:
-            self.worker._stop()
+            self.worker._stop(graceful=True)
 
 
 class BrokerClient:
@@ -395,6 +405,44 @@ class BrokerClient:
             "retrieve",
             args,
         )
+
+    def analyze(
+        self,
+        source_id: str,
+        operation: dict[str, Any],
+        *,
+        result_token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"source_id": source_id, "operation": operation}
+        if result_token_budget is not None:
+            args["result_token_budget"] = result_token_budget
+        return self._request("analyze", args)
+
+    def render(
+        self,
+        source_id: str,
+        *,
+        fmt: str,
+        title: str,
+        operation: dict[str, Any] | None = None,
+        formula_policy: str = "escape",
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"source_id": source_id, "format": fmt, "title": title}
+        if operation is not None:
+            args["operation"] = operation
+        args["formula_policy"] = formula_policy
+        return self._request("render", args)
+
+    def retrieve_batch(
+        self,
+        requests: list[dict[str, Any]],
+        *,
+        result_token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"requests": requests}
+        if result_token_budget is not None:
+            args["result_token_budget"] = result_token_budget
+        return self._request("retrieve_batch", args)
 
     def stats(self) -> dict[str, Any]:
         return self._request("stats", {})

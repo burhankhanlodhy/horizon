@@ -621,3 +621,34 @@ def test_render_json_rejects_duplicate_columns_instead_of_dropping_values() -> N
     with pytest.raises(ArtifactError) as caught:
         render_json(table)
     assert caught.value.code == "artifact_columns_invalid"
+
+
+def test_new_store_sweeps_only_expired_generated_files_from_old_sessions(tmp_path: Path) -> None:
+    import os
+
+    from horizon.desktop_mcp.artifacts import STALE_ARTIFACT_SECONDS, sweep_stale_sessions
+
+    old_session = tmp_path / (".contextshrink-artifacts-" + "a" * 32)
+    old_session.mkdir()
+    stale = old_session / ("artifact-" + "b" * 32 + ".csv")
+    fresh = old_session / ("artifact-" + "c" * 32 + ".csv")
+    foreign = old_session / "notes.csv"
+    for path in (stale, fresh, foreign):
+        path.write_text("x", encoding="utf-8")
+    bystander = tmp_path / ("artifact-" + "d" * 32 + ".csv")
+    bystander.write_text("x", encoding="utf-8")
+    now = 10_000_000.0
+    old = now - STALE_ARTIFACT_SECONDS - 1
+    for path in (stale, foreign, bystander):
+        os.utime(path, (old, old))
+    os.utime(fresh, (now, now))
+
+    assert sweep_stale_sessions(tmp_path, now=now) == 1
+    assert not stale.exists()
+    assert fresh.exists() and foreign.exists() and bystander.exists()
+    assert old_session.exists()  # not empty, so never removed
+
+    fresh.unlink()
+    foreign.unlink()
+    sweep_stale_sessions(tmp_path, now=now)
+    assert not old_session.exists()
