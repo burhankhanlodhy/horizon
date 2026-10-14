@@ -297,6 +297,10 @@ def _select_rows(text: str, selector: dict[str, Any], kind: str) -> SelectedScop
         raise SelectorError("selector_format_unsupported")
     start, end = selector["start"], selector["end"]
     delimiter = "\t" if kind.lower().lstrip(".") == "tsv" else ","
+    # The csv module's default 128 KiB field cap would report a valid large
+    # cell as csv_invalid; no field can exceed the already-bounded source.
+    if csv.field_size_limit() < len(text):
+        csv.field_size_limit(len(text))
     stream = io.StringIO(text, newline="")
     reader = csv.reader(stream, delimiter=delimiter, strict=True)
     records: list[tuple[int, int]] = []

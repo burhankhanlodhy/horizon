@@ -252,9 +252,11 @@ def _cursor_payload(
     budget: int,
     selector: dict[str, Any],
     offset: int,
+    tool: str = "open",
 ) -> dict[str, Any]:
     return {
         "policy": POLICY_VERSION,
+        "tool": tool,
         "source_id": snapshot.source_id,
         "version": snapshot.version,
         "mode": mode,
@@ -276,11 +278,15 @@ def _check_cursor(
     query: str | None,
     budget: int,
     selector: dict[str, Any] | None,
+    tool: str = "open",
 ) -> tuple[dict[str, Any], int]:
     payload = cursor_signer.decode(cursor)
     bound_selector = payload.get("selector")
+    # open() offsets are line numbers and retrieve() offsets are unit
+    # indices, so a cursor is valid only for the tool that issued it.
     if (
         payload.get("policy") != POLICY_VERSION
+        or payload.get("tool") != tool
         or payload.get("source_id") != snapshot.source_id
         or payload.get("version") != snapshot.version
         or payload.get("mode") != mode
@@ -464,7 +470,7 @@ def present_selected_scope(
     except ValueError:
         raise PolicyError("invalid_arguments") from None
     offset = 0
-    if cursor:
+    if cursor is not None:
         _bound, offset = _check_cursor(
             cursor_signer,
             cursor,
@@ -474,6 +480,7 @@ def present_selected_scope(
             query=None,
             budget=limits.token_budget,
             selector=selected.selector,
+            tool="retrieve",
         )
     units = selected.units or ((selected.line_start, selected.line_end, selected.text),)
     if offset > len(units):
@@ -509,6 +516,7 @@ def present_selected_scope(
                     budget=limits.token_budget,
                     selector=selected.selector,
                     offset=next_offset,
+                    tool="retrieve",
                 )
             )
         raw_payload = _base_payload(snapshot, "exact", selected.text)
@@ -613,7 +621,7 @@ def present_snapshot(
     if mode == "focused" and (not isinstance(query, str) or not query.strip()):
         raise PolicyError("query_required")
 
-    if cursor:
+    if cursor is not None:
         requested_selector = (
             {"type": "lines", "start": scope[0], "end": scope[1]} if scope else None
         )
@@ -647,7 +655,7 @@ def present_snapshot(
 
     # Compact cursors are only issued by the exact-page fallback, so a
     # continuation resumes those exact pages under the same compact binding.
-    if mode == "exact" or (mode == "compact" and cursor):
+    if mode == "exact" or (mode == "compact" and cursor is not None):
         context = {
             "mode": mode,
             "requested_mode": requested_mode,
@@ -754,8 +762,8 @@ def present_snapshot(
 
     if mode == "focused":
         all_passages = rank_passages(snapshot.text, query or "", limit=100)
-        passage_offset = offset if cursor else 0
-        if cursor:
+        passage_offset = offset if cursor is not None else 0
+        if cursor is not None:
             if passage_offset > len(all_passages):
                 raise PolicyError("cursor_mismatch")
         passages = all_passages[passage_offset:]
@@ -920,7 +928,7 @@ def present_snapshot(
         {"line": number, "heading": title}
         for number, _level, title in markdown_headings(snapshot.text)
     ]
-    heading_offset = offset if cursor else 0
+    heading_offset = offset if cursor is not None else 0
     if heading_offset > len(headings):
         raise PolicyError("cursor_mismatch")
     all_headings = headings

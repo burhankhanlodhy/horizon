@@ -134,6 +134,18 @@ folds; the inflation-guard boundary; JSON null/escape/order/big-integer round
 trips; UNC/device paths; change between search/open/retrieve; and a log-capture
 check for source text and queries.
 
+Those gaps are now covered by `test_cursor_binding.py`,
+`test_source_hardening.py` and `test_format_fidelity.py`, which found and
+fixed three more defects: `open` and `retrieve` accepted each other's cursors
+(line-number vs unit-index offsets, so continuations skipped or escaped the
+bound scope); an empty cursor silently restarted at page one; and a valid CSV
+cell over 128 KiB was reported as `csv_invalid`. `pytest tests/desktop_mcp -q`
+reports **278 passed, 1 skipped, 1 xfailed**. Still open: cursor binding to
+caller/workspace; an explicit expired-version error (expiry returns
+`snapshot_unknown`); per-line, CSV-field and row-count source bounds; and a
+hard-link policy. A same-user hard link inside an approved root to an outside
+file is readable today, recorded as a strict xfail.
+
 A local in-process benchmark on a synthetic 7.65 MB / 150,000-line log
 returned the first bounded exact page in 1.176 seconds and a subsequent cursor
 page in 0.656 seconds. A separate synthetic 8.1 MB broker/SDK check using the

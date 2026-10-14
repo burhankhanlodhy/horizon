@@ -207,7 +207,7 @@ class LocalBackend:
         started = time.perf_counter()
         with self._lock:
             try:
-                if cursor:
+                if cursor is not None:
                     cursor_source = self._cursor_signer.decode(cursor).get("source_id")
                     if source != cursor_source or not isinstance(cursor_source, str):
                         raise LocalBackendError("cursor_mismatch")
