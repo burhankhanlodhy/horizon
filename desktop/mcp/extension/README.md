@@ -24,8 +24,8 @@ Run from the repository root with the project virtual environment:
 ```powershell
 .venv\Scripts\python.exe desktop\mcp\extension\build_extension.py build
 .venv\Scripts\python.exe desktop\mcp\extension\build_extension.py validate
-.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py pack --version 0.1.0
-.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py all --version 0.1.0
+.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py pack --version 0.1.1
+.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py all --version 0.1.1
 ```
 
 - `build` runs PyInstaller in `--onedir --console` mode and writes
@@ -44,7 +44,11 @@ Run from the repository root with the project virtual environment:
   timestamp 1980-01-01 with ZIP_DEFLATED, so the same inputs give the same
   bytes and sha256.
 
-The default version is `VERSION = "0.1.0"` in `build_extension.py`.
+The default version is `VERSION` in `horizon\desktop_mcp\version.py`, the same
+value the MCP server reports and the runtime build id uses. `--version` overrides
+it for `pack` and `all`. The checked-in `manifest.template.json` carries the
+placeholder `"version": "0.0.0"`; `pack` writes the real version into the
+manifest it packs and never edits the template.
 
 ## User configuration
 
@@ -103,6 +107,39 @@ stdio client pattern as `tests/desktop_mcp/test_extension_runtime.py`.
 Not covered by the smoke: the companion UI. It is bundled as data but was not
 opened.
 
+## Broker lifecycle
+
+The installed extension runs its broker from a copy of the build, so the
+extension folder is never held open:
+
+- Runtime copy. In a frozen build, `serve --extension` copies the one-folder
+  bundle to `%LOCALAPPDATA%\ContextShrink\runtime\<build_id>\` (or the parent of
+  `CONTEXTSHRINK_EXTENSION_HOME`, when set) and starts the broker from there.
+  `build_id` is `<version>-<first 12 hex of sha256(executable)>`. The copy is
+  made beside its final name, gets a `.complete` marker, and is renamed into
+  place, so a half-copied runtime is never used. Development runs (not frozen)
+  use the source tree as before.
+- Cleanup. A broker started from a frozen build removes other `<build_id>`
+  folders and stale `*.tmp-*` copies older than an hour. It never follows links
+  or junctions. A folder still in use (a DLL in it is loaded) cannot be renamed,
+  so it is left alone and removed by a later start.
+- Idle. The broker stops after 120 seconds with no requests (it was 30 minutes).
+- Heartbeat. While a chat is open, its `serve` process sends a heartbeat to the
+  broker every 30 seconds. Heartbeats count as activity and never reach the
+  backend. When the chat closes, the heartbeats stop and the broker idles out.
+- Upgrade handover. When a new build starts and finds a broker reporting an
+  older version (or none), it asks that broker to retire. The broker stops
+  through its normal stop path, so capabilities are revoked and the worker is
+  stopped. The new build then starts its own broker. An equal or newer broker is
+  kept. A broker from 0.1.0 does not know `retire`, so it is kept and idles out
+  after its old 30-minute limit.
+- Uninstall. Removing the extension in Claude Desktop removes its server folder.
+  Heartbeats stop when the chat closes, so the broker stops about 2 minutes
+  later. The runtime copy under `%LOCALAPPDATA%\ContextShrink\runtime\` is not
+  removed by the uninstall. Delete that folder by hand once no
+  `contextshrink-desktop.exe` process is running. A running install removes
+  stale copies itself on its next broker start.
+
 ## Usage stats
 
 Ask Claude "show ContextShrink stats" to see the counters. The stats result
@@ -130,8 +167,8 @@ file is not written and `cumulative` reads `persistence: off`.
 The file is a plain local file. Anyone with access to it can edit it, so it is
 not evidence.
 
-To reset, stop the running broker first: it ends when the chat that started
-it closes, or after 30 minutes idle. Then delete the stats file. A running
+To reset, stop the running broker first: it ends about 2 minutes after the
+chat that started it closes (see Broker lifecycle). Then delete the stats file. A running
 broker keeps its totals in memory and rewrites the file on its next call.
 
 ## Known gaps

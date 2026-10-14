@@ -312,6 +312,21 @@ def _finalize(
         return payload
 
 
+_EXACT_RAW_EXCLUDED_KEYS = frozenset({"accounting", "next_cursor", "result_token_budget_applied"})
+
+
+def _exact_raw_equivalent(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the delivered exact content without ContextShrink additions.
+
+    An exact page is not compared with the unread remainder of its scope: its
+    raw-equivalent is the same text, line selection and line ranges it returns,
+    minus only the pagination and budget fields that ContextShrink adds. The
+    delivered payload therefore never shows tokens avoided, and the difference
+    is metadata overhead.
+    """
+    return {key: value for key, value in payload.items() if key not in _EXACT_RAW_EXCLUDED_KEYS}
+
+
 def _cursor_payload(
     snapshot: SourceSnapshot,
     *,
@@ -383,7 +398,6 @@ def _fit_exact_page(
     estimator: Any | None,
     cursor_signer: CursorSigner,
     cursor_context: dict[str, Any],
-    raw_scope_text: str,
 ) -> dict[str, Any]:
     lines = split_physical_lines(snapshot.text)
     if not lines:
@@ -412,27 +426,16 @@ def _fit_exact_page(
                 offset=candidate_end + 1,
             )
             payload["next_cursor"] = cursor_signer.encode(token_data)
-        raw_payload = _base_payload(snapshot, "exact", raw_scope_text)
-        raw_payload["selected_lines"] = {
-            "start": cursor_context["scope_lines"][0],
-            "end": cursor_context["scope_lines"][1],
-        }
-        raw_payload["coverage"] = _document_coverage(
-            snapshot, "exact selected lines at immutable snapshot version"
-        )
         requested_mode = cursor_context.get("requested_mode", cursor_context["mode"])
         if requested_mode != "exact":
-            raw_payload["requested_mode"] = requested_mode
             payload["requested_mode"] = requested_mode
-            raw_payload["compression_applied"] = False
             payload["compression_applied"] = False
         if cursor_context.get("eval_arm") == "raw":
-            raw_payload["eval_arm"] = "raw"
             payload["eval_arm"] = "raw"
         return _finalize(
             payload,
-            raw_payload,
-            raw_text=raw_scope_text,
+            _exact_raw_equivalent(payload),
+            raw_text=text,
             rendered_text=text,
             estimator=estimator,
         )
@@ -592,23 +595,10 @@ def present_selected_scope(
                     tool="retrieve",
                 )
             )
-        raw_payload = _base_payload(snapshot, "exact", selected.text)
-        raw_payload.update(
-            {
-                "coverage": _document_coverage(snapshot, selected.coverage),
-                "selected_lines": {
-                    "start": selected.line_start,
-                    "end": selected.line_end,
-                },
-                "selector": selected.selector,
-                "fidelity": "byte_exact",
-                "tool": "retrieve",
-            }
-        )
         return _finalize(
             payload,
-            raw_payload,
-            raw_text=selected.text,
+            _exact_raw_equivalent(payload),
+            raw_text=excerpt,
             rendered_text=excerpt,
             estimator=estimator,
         )
@@ -745,7 +735,6 @@ def present_snapshot(
             estimator=estimator,
             cursor_signer=signer,
             cursor_context=context,
-            raw_scope_text="".join(lines[resolved_scope[0] - 1 : resolved_scope[1]]),
         )
 
     raw_scope = "".join(lines[resolved_scope[0] - 1 : resolved_scope[1]])
@@ -831,7 +820,6 @@ def present_snapshot(
             estimator=estimator,
             cursor_signer=signer,
             cursor_context=context,
-            raw_scope_text=raw_scope,
         )
         return page_result
 

@@ -24,6 +24,9 @@ MAX_FRAME_BYTES = 1024 * 1024
 # One artifact chunk: 384 KiB raw, about 512 KiB as base64, inside one frame.
 ARTIFACT_CHUNK_BYTES = 393216
 COMPANION_OPERATIONS = frozenset({"artifact_list", "artifact_read", "artifact_delete"})
+# Broker lifecycle operations: answered by BrokerService itself, never by the
+# worker, and never capability-gated (see BrokerService.handle).
+LIFECYCLE_OPERATIONS = frozenset({"heartbeat", "retire"})
 _PIPE_PREFIX = r"\\.\pipe\ContextShrink-"
 _RETRYABLE_PIPE_ERRORS = {231, 232, 536}  # busy, no data, pipe still listening
 _REQUEST_KEYS = frozenset({"operation", "args", "request_id"})
@@ -372,10 +375,14 @@ def _validate_operation_args(operation: str, args: Any) -> None:
         "artifact_list": set(),
         "artifact_read": {"artifact_id", "offset", "length"},
         "artifact_delete": {"artifact_id"},
+        "heartbeat": set(),
+        "retire": {"reason"},
     }.get(operation)
     if base_keys is None or not isinstance(args, dict):
         raise BrokerTransportError("invalid_arguments")
     keys = set(args)
+    if operation == "retire" and args.get("reason") != "upgrade":
+        raise BrokerTransportError("invalid_arguments")
     if operation == "retrieve":
         legacy = {"source_id", "start_line", "end_line"}
         selected = {"source_id", "selector"}
@@ -659,7 +666,7 @@ def _serve_request(
         operation = request["operation"]
         args = request["args"]
         allowed = {"search", "open", "retrieve", "stats"} | _COMPUTE_OPERATIONS
-        if operation not in allowed | COMPANION_OPERATIONS:
+        if operation not in allowed | COMPANION_OPERATIONS | LIFECYCLE_OPERATIONS:
             raise BrokerTransportError("operation_unavailable")
         _authorize_operation(request, operation, companion_capability)
         _validate_operation_args(operation, args)

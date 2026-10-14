@@ -635,7 +635,9 @@ def _cumulative_bucket(counts: dict[str, Any], key: str) -> str:
 def _cumulative_basis_key(event: dict[str, Any]) -> str:
     tokenizer = _cumulative_key(event.get("tokenizer_name"))
     counter = _cumulative_key(event.get("counter_version"))
-    flavor = "fallback" if event.get("fallback") is True else "exact"
+    # "tokenizer" means a real token counter; "byte_estimate" means the
+    # UTF-8 byte heuristic. Not to be confused with the exact read mode.
+    flavor = "byte_estimate" if event.get("fallback") is True else "tokenizer"
     return f"{tokenizer}:{counter}:{flavor}"[:_CUMULATIVE_BASIS_MAX]
 
 

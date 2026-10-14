@@ -27,6 +27,7 @@ from horizon.desktop_mcp.settings import (
     DesktopSettings,
     load_settings,
 )
+from horizon.desktop_mcp.version import VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -292,7 +293,7 @@ def test_extension_settings_map_empty_artifact_root_to_none(tmp_path) -> None:
     assert settings.profile == "local"
     assert settings.broker_id == "desktop-ext"
     assert settings.tool_profile == "source"
-    assert settings.broker_idle_seconds == 1800
+    assert settings.broker_idle_seconds == 120
     assert settings.approved_roots == (root,)
 
 
@@ -382,6 +383,10 @@ class _FakeClient:
             raise outcome
         return {"ok": True}
 
+    def heartbeat(self) -> dict[str, Any]:
+        # Same build as this process, so ensure_broker never hands over.
+        return {"build_id": "dev", "version": VERSION}
+
 
 class _Timeline:
     def __init__(self) -> None:
@@ -459,8 +464,15 @@ def test_ensure_broker_surfaces_local_transport_failures_without_spawning(
 
 def test_broker_command_matches_frozen_and_source_layouts(monkeypatch, tmp_path) -> None:
     config = tmp_path / "unit.json"
+    runtime_exe = tmp_path / "runtime" / "contextshrink-desktop.exe"
+    monkeypatch.setattr(extension, "ensure_runtime_copy", lambda: runtime_exe)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    assert extension.broker_command(config) == [sys.executable, "broker", "--config", str(config)]
+    assert extension.broker_command(config) == [
+        str(runtime_exe),
+        "broker",
+        "--config",
+        str(config),
+    ]
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     assert extension.broker_command(config) == [
         sys.executable,

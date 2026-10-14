@@ -15,9 +15,22 @@ from .backend import FixtureBackend, FixtureRangeError
 from .broker import BrokerClient, BrokerError
 from .contracts import ToolInputError, json_text, tool_specs, validate_tool_arguments
 from .settings import DesktopSettings
+from .version import VERSION as SERVER_VERSION
 
 SERVER_NAME = "contextshrink-desktop"
-SERVER_VERSION = "0.1.0"
+_STALE_HANDLE_CODES = frozenset(
+    {"snapshot_unknown", "snapshot_expired", "cursor_invalid", "cursor_mismatch"}
+)
+_STALE_HANDLE_MESSAGE = (
+    "This source handle or cursor is no longer available (it may have expired, or the "
+    "local service restarted). Search again or open the file by its path to get a fresh handle."
+)
+
+
+def _broker_error_message(code: str) -> str:
+    if code in _STALE_HANDLE_CODES:
+        return _STALE_HANDLE_MESSAGE
+    return "The broker could not complete the source operation."
 
 
 def _error(
@@ -156,7 +169,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             total_hits = payload["hit_count"]
@@ -193,7 +206,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             if payload is None:
@@ -231,7 +244,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             if payload is None:
@@ -246,7 +259,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             return _result(payload, effective_settings)
@@ -263,7 +276,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             return _result(payload, effective_settings)
@@ -281,7 +294,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             return _result(payload, effective_settings)
@@ -296,7 +309,7 @@ def create_server(
             except BrokerError as exc:
                 return _error(
                     exc.code,
-                    "The broker could not complete the source operation.",
+                    _broker_error_message(exc.code),
                     metadata=exc.metadata,
                 )
             return _result(payload, effective_settings)
