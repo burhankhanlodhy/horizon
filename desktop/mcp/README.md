@@ -255,3 +255,47 @@ limitations. Browser review does not establish Claude Desktop compatibility,
 MCP Apps support, reduced Claude usage, or Enterprise billing savings. Native
 Tauri integration, app packaging, and clean-machine installation remain
 separate later work.
+
+## Phase G pilot metadata collection
+
+Pilot metadata is stored separately from ContextShrink's ordinary usage
+counters, and collection stays off until an operator explicitly consents.
+Review the fields and retention terms, then run:
+
+```powershell
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py status
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py participant-code
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py consent --retention-days 30 --confirm
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py record --input .\pilot-record.json
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py preview
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py export --output .\pilot-metadata-export.json
+.venv\Scripts\python.exe desktop\mcp\pilot_metadata.py delete --confirm
+```
+
+Consent is local to this pilot store and expires after 1–90 configured days
+(30 by default). Thirty days gives a small cohort time for delayed usage
+refresh and scoring; choose a shorter period when it meets the study schedule.
+Each captured record must use a generated pseudonymous study
+code and the bounded allowlist in `horizon.desktop_mcp.pilot_metadata`; missing
+numeric measurements remain null with a reason code. Prompts, source contents,
+paths, credentials, clipboard contents, and arbitrary tool arguments are
+rejected. The `record` command reads one strict JSON object no larger than 64
+KiB, and works only after consent. Its `arm` values are `A`, `B`, `C_normal`,
+and `C_tuned`. Generate participant codes with the `participant-code` command;
+keep the identity
+mapping outside the extension and store. The preview shows the complete stored metadata before export. Export
+is a separate explicit action and refuses to overwrite an existing file unless
+`--overwrite` is supplied. Delete removes both records and consent. The store
+uses a per-user local application-data directory and restrictive file
+permissions. Keep the participant identity mapping with the study owner and
+outside this store and all exports.
+
+Collection is not connected to ordinary extension calls. The API is intended
+for a separately reviewed pilot runner; no Claude Desktop call or inference is
+intercepted by the store. A synthetic readiness report does not represent
+Enterprise consumption or a savings result. M7 release remains pending on the
+owner's consent/privacy review, signed distribution, clean-machine install,
+target-app and multi-user checks, and refreshed Enterprise task-window data
+with blinded scoring. See
+[`phase-g-beta-readiness.json`](phase-g-beta-readiness.json) for gate owners
+and evidence status.
