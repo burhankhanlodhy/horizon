@@ -289,3 +289,59 @@ certificate and a second machine.
 - Publish only to the private release bucket, as a separate approved step.
 - Decide where the companion is launched from for extension users. Today it is
   `contextshrink-desktop.exe companion --config <extension settings path>`.
+
+## Extension 0.1.1: broker lifetime, upgrades and honest accounting
+
+Installing 0.1.0 in Claude Desktop (Microsoft Store build) produced two
+findings:
+
+- **The broker survives its chat.** Claude Desktop does not end a detached
+  broker when the chat that started it closes, unlike the MCP SDK's client, so
+  the broker lived for its full 30-minute idle time. It ran from the extension
+  folder, which kept the bundled DLLs open, so reinstalling failed with
+  `EBUSY ... server\_internal`.
+- **Exact reads overstated savings.** Each exact page's raw-equivalent was the
+  whole requested scope. A 150-line file read as lines 1-89 reported about
+  3,767 tokens "avoided", and a file read in two pages counted its raw cost
+  twice. Retrieve selector pages had the same problem.
+
+Version 0.1.1 changes:
+
+1. **Runtime copy.** In a frozen build, `ensure_broker` launches the broker
+   from a per-build copy of the one-folder bundle at
+   `%LOCALAPPDATA%\ContextShrink\runtime\<build_id>\`, never from the
+   extension folder. `build_id = f"{VERSION}-{sha256(exe)[:12]}"`.
+   - The copy is made into a temporary sibling folder, gets a `.complete`
+     marker, and is then renamed into place, so a half-copied runtime is never
+     used.
+   - Other runtime folders are removed opportunistically: only generated
+     names, never following links, and skipping any folder that is in use.
+   - Development (non-frozen) mode is unchanged.
+2. **Heartbeat and short idle.** In extension mode each `serve` process sends
+   a broker-level `heartbeat` every 30 seconds, and the broker idles out after
+   120 seconds instead of 1,800. `heartbeat` is handled by `BrokerService`
+   itself, never reaches the worker or the usage ledger, and returns
+   `{"build_id", "version"}`.
+3. **Version handover.** On startup, `serve` sends a heartbeat. If the running
+   broker reports an older `VERSION`, it sends `retire`, waits for the broker
+   to stop, then starts its own.
+   - `retire` stops the broker through the normal stop path, so cleanup and
+     capability revocation still run.
+   - It never retires an equal or newer broker, so two versions cannot keep
+     replacing each other.
+   - `retire` needs no capability. It can only end the broker, which any
+     same-user process could already do by ending the process, and the
+     broker restarts on demand.
+   - Both new operations have closed, empty-or-fixed argument envelopes.
+4. **Honest per-page accounting.** For exact pages and retrieve selector
+   pages, the raw-equivalent payload is the same exact content the page
+   delivers, without the ContextShrink metadata. Exact reads therefore never
+   report tokens avoided; the difference is the metadata overhead and is
+   usually negative. Compact, focused and overview results keep their
+   scope-level comparison, because selecting less than the source is their
+   purpose.
+5. **Actionable errors.** `snapshot_unknown`, `snapshot_expired`,
+   `cursor_invalid` and `cursor_mismatch` results tell Claude to search again
+   or open the file by its path to get a fresh handle.
+6. **One version source.** `horizon/desktop_mcp/version.py` (`VERSION =
+   "0.1.1"`) feeds the MCP server version, the manifest and the build id.
