@@ -9,7 +9,9 @@ roles are never accepted.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import re
 import sys
 import threading
 import time
@@ -19,8 +21,20 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 1024 * 1024
+# One artifact chunk: 384 KiB raw, about 512 KiB as base64, inside one frame.
+ARTIFACT_CHUNK_BYTES = 393216
+COMPANION_OPERATIONS = frozenset({"artifact_list", "artifact_read", "artifact_delete"})
 _PIPE_PREFIX = r"\\.\pipe\ContextShrink-"
 _RETRYABLE_PIPE_ERRORS = {231, 232, 536}  # busy, no data, pipe still listening
+_REQUEST_KEYS = frozenset({"operation", "args", "request_id"})
+_CAPABILITY_KEY = "capability"
+_CAPABILITY = re.compile(r"[A-Za-z0-9_-]{43}")
+_ARTIFACT_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def is_valid_capability(value: object) -> bool:
+    """A broker-issued companion capability: 43 URL-safe base64 characters."""
+    return isinstance(value, str) and _CAPABILITY.fullmatch(value) is not None
 
 
 class BrokerTransportError(Exception):
@@ -334,6 +348,9 @@ def _validate_operation_args(operation: str, args: Any) -> None:
         "open": {"source", "start_line", "end_line"},
         "retrieve": {"source_id", "start_line", "end_line"},
         "stats": set(),
+        "artifact_list": set(),
+        "artifact_read": {"artifact_id", "offset", "length"},
+        "artifact_delete": {"artifact_id"},
     }.get(operation)
     if base_keys is None or not isinstance(args, dict):
         raise BrokerTransportError("invalid_arguments")
@@ -359,6 +376,9 @@ def _validate_operation_args(operation: str, args: Any) -> None:
         limit = args["limit"]
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise BrokerTransportError("invalid_arguments")
+        return
+    if operation in COMPANION_OPERATIONS:
+        _validate_artifact_args(operation, args)
         return
     if operation not in {"open", "retrieve"}:
         return
@@ -416,24 +436,53 @@ def _validate_operation_args(operation: str, args: Any) -> None:
         raise BrokerTransportError("invalid_arguments")
 
 
+def _validate_artifact_args(operation: str, args: dict[str, Any]) -> None:
+    """Closed envelopes for the companion-only artifact operations (Phase E3)."""
+    if operation == "artifact_list":
+        return
+    artifact_id = args["artifact_id"]
+    if not isinstance(artifact_id, str) or _ARTIFACT_ID.fullmatch(artifact_id) is None:
+        raise BrokerTransportError("invalid_arguments")
+    if operation != "artifact_read":
+        return
+    offset, length = args["offset"], args["length"]
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise BrokerTransportError("invalid_arguments")
+    if (
+        isinstance(length, bool)
+        or not isinstance(length, int)
+        or not 1 <= length <= ARTIFACT_CHUNK_BYTES
+    ):
+        raise BrokerTransportError("invalid_arguments")
+
+
 def _pipe_error_broken() -> int:
     return 232
 
 
 def decode_frame(frame: bytes) -> dict[str, Any]:
-    """Decode a complete JSON frame and enforce the closed request envelope."""
+    """Decode a complete JSON frame and enforce the closed request envelope.
+
+    The only optional key is ``capability``, a broker-issued secret. A
+    caller-asserted ``role`` or any other key is rejected.
+    """
     if len(frame) > MAX_FRAME_BYTES:
         raise BrokerTransportError("frame_too_large")
     try:
         value = json.loads(frame.decode("utf-8"), object_pairs_hook=_unique_json_object)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError):
         raise BrokerTransportError("invalid_json") from None
-    if not isinstance(value, dict) or set(value) != {"operation", "args", "request_id"}:
+    if not isinstance(value, dict):
+        raise BrokerTransportError("invalid_request")
+    keys = set(value)
+    if not _REQUEST_KEYS <= keys <= _REQUEST_KEYS | {_CAPABILITY_KEY}:
         raise BrokerTransportError("invalid_request")
     if not isinstance(value["operation"], str) or not isinstance(value["args"], dict):
         raise BrokerTransportError("invalid_request")
     request_id = value["request_id"]
     if not isinstance(request_id, str) or not (1 <= len(request_id) <= 64):
+        raise BrokerTransportError("invalid_request")
+    if _CAPABILITY_KEY in value and not is_valid_capability(value[_CAPABILITY_KEY]):
         raise BrokerTransportError("invalid_request")
     return value
 
@@ -454,12 +503,24 @@ def _read_request(pipe: Any, timeout_seconds: float, expected_sid: str) -> dict[
 
 
 def exchange(
-    pipe_name: str, operation: str, args: dict[str, Any], timeout_seconds: float = 10
+    pipe_name: str,
+    operation: str,
+    args: dict[str, Any],
+    timeout_seconds: float = 10,
+    capability: str | None = None,
 ) -> dict[str, Any]:
-    """Make one bounded request to the current user's local broker."""
+    """Make one bounded request to the current user's local broker.
+
+    The companion capability is sent only when given; callers without one never
+    put a capability on the wire.
+    """
     _, _, win32con, win32file, win32pipe, _ = _windows_modules()
     request_id = uuid.uuid4().hex
-    request = {"operation": operation, "args": args, "request_id": request_id}
+    request: dict[str, Any] = {"operation": operation, "args": args, "request_id": request_id}
+    if capability is not None:
+        if not is_valid_capability(capability):
+            raise BrokerTransportError("invalid_request")
+        request[_CAPABILITY_KEY] = capability
     try:
         payload = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
@@ -536,11 +597,34 @@ def exchange(
                 pass
 
 
+def _authorize_operation(
+    request: dict[str, Any], operation: str, companion_capability: str | None
+) -> None:
+    """Companion operations need the broker's capability; no other operation takes one.
+
+    Any capability on a non-companion operation is refused the same way, so the
+    key cannot be used to probe the surface.
+    """
+    presented = request.get(_CAPABILITY_KEY)
+    if operation in COMPANION_OPERATIONS:
+        if (
+            companion_capability is None
+            or not isinstance(presented, str)
+            or not hmac.compare_digest(
+                presented.encode("utf-8"), companion_capability.encode("utf-8")
+            )
+        ):
+            raise BrokerTransportError("operation_unauthorized")
+    elif _CAPABILITY_KEY in request:
+        raise BrokerTransportError("operation_unauthorized")
+
+
 def _serve_request(
     pipe: Any,
     handler: Callable[[str, dict[str, Any]], dict[str, Any]],
     sid: str,
     timeout_seconds: float,
+    companion_capability: str | None = None,
 ) -> None:
     request_id = "invalid"
     try:
@@ -548,8 +632,10 @@ def _serve_request(
         request_id = request["request_id"]
         operation = request["operation"]
         args = request["args"]
-        if operation not in {"search", "open", "retrieve", "stats"} | _COMPUTE_OPERATIONS:
+        allowed = {"search", "open", "retrieve", "stats"} | _COMPUTE_OPERATIONS
+        if operation not in allowed | COMPANION_OPERATIONS:
             raise BrokerTransportError("operation_unavailable")
+        _authorize_operation(request, operation, companion_capability)
         _validate_operation_args(operation, args)
         result = handler(operation, args)
         response = {"request_id": request_id, "result": result}
@@ -596,18 +682,30 @@ def serve_pipe(
     max_clients: int = 8,
     timeout_seconds: float = 10,
     expected_sid: str | None = None,
+    companion_capability: str | None = None,
+    capability_factory: Callable[[], str] | None = None,
 ) -> None:
     """Serve serialized bounded requests on one exclusively owned pipe.
 
     Reusing the first pipe instance keeps exclusive ownership for the service
     lifetime. There is one active request and no in-process work queue.
+    ``companion_capability`` gates the companion-only operations; None disables them.
     """
     _windows_modules()
+    if companion_capability is not None and not is_valid_capability(companion_capability):
+        raise BrokerTransportError("invalid_request")
     stop = stop_event or threading.Event()
     sid = expected_sid or current_user_sid()
     pipe = _new_pipe(pipe_name, sid, max_clients)
     _, _, _, _, win32pipe, _ = _windows_modules()
     try:
+        if capability_factory is not None:
+            # Issued only once this process exclusively owns the pipe, so a
+            # second broker with the same ID can never replace the live
+            # broker's capability before failing to start.
+            companion_capability = capability_factory()
+            if not is_valid_capability(companion_capability):
+                raise BrokerTransportError("invalid_request")
         while not stop.is_set():
             connected = False
             try:
@@ -625,7 +723,7 @@ def serve_pipe(
                             continue
                         raise BrokerTransportError("pipe_accept_failed") from None
                 if connected:
-                    _serve_request(pipe, handler, sid, timeout_seconds)
+                    _serve_request(pipe, handler, sid, timeout_seconds, companion_capability)
             finally:
                 if connected:
                     try:

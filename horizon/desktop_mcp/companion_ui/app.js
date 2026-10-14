@@ -98,7 +98,12 @@
       request_too_large: "The input is above the local size limit.",
       preparation_failed: "The local preview could not be prepared. Check your inputs and try again.",
       source_id_and_config_required: "Enter an existing source handle and check the local broker configuration.",
-      broker_unavailable: "The local source broker is unavailable. Keep its launcher running and try again."
+      broker_unavailable: "The local source broker is unavailable. Keep its launcher running and try again.",
+      artifacts_unavailable: "Artifact browsing needs the local broker. Start the companion with an approved local config to list artifacts.",
+      artifact_revoked: "That artifact was revoked and is no longer available. Refresh the list.",
+      artifact_unknown: "That artifact has expired or no longer exists. Refresh the list.",
+      artifact_unavailable: "The artifact could not be verified, so it was not returned. Refresh the list and try again.",
+      invalid_artifact_id: "That artifact identifier is not valid."
     };
     return messages[code] || "The local companion could not complete that action. Check its terminal for service status, then try again.";
   }
@@ -422,6 +427,213 @@
     }
   }
 
+  function showArtifactError(code) {
+    const node = byId("artifacts-error");
+    node.textContent = code ? `${publicError(code)} (${code})` : "";
+    node.hidden = !code;
+  }
+
+  function isArtifactId(value) {
+    return typeof value === "string" && /^[0-9a-f]{32}$/.test(value);
+  }
+
+  function artifactTitle(item) {
+    return typeof item.title === "string" && item.title ? item.title : "Untitled artifact";
+  }
+
+  function downloadName(disposition) {
+    const match = typeof disposition === "string" ? /filename="([A-Za-z0-9 ._-]{1,100})"/.exec(disposition) : null;
+    return match ? match[1] : "artifact.txt";
+  }
+
+  function createPreviewTable(item) {
+    const columns = Array.isArray(item.columns) ? item.columns : [];
+    const rows = Array.isArray(item.preview_rows) ? item.preview_rows : [];
+    const wrap = document.createElement("div");
+    wrap.className = "artifact-table-wrap";
+    if (!columns.length) {
+      const note = document.createElement("p");
+      note.className = "muted small";
+      note.textContent = "This artifact has no columns to preview.";
+      wrap.append(note);
+      return wrap;
+    }
+    const table = document.createElement("table");
+    table.className = "artifact-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const column of columns) {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = String(column);
+      headRow.append(th);
+    }
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      const cells = Array.isArray(row) ? row : [];
+      columns.forEach((_, index) => {
+        const td = document.createElement("td");
+        const value = cells[index];
+        td.textContent = value == null ? "" : String(value);
+        tr.append(td);
+      });
+      body.append(tr);
+    }
+    table.append(head, body);
+    wrap.append(table);
+    const note = document.createElement("p");
+    note.className = "muted small";
+    const total = Number(item.row_count);
+    note.textContent = Number.isFinite(total)
+      ? `Showing ${rows.length.toLocaleString()} of ${total.toLocaleString()} rows. Download the artifact for the full result.`
+      : "Download the artifact for the full result.";
+    wrap.append(note);
+    return wrap;
+  }
+
+  async function downloadArtifact(id, button) {
+    if (!isArtifactId(id)) return;
+    showArtifactError("");
+    setText("artifacts-status", "Preparing download…");
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = "Downloading…";
+    let url = "";
+    try {
+      if (!token) throw new Error("unauthorized");
+      const headers = new Headers();
+      headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch(`/api/artifacts/${id}/download`, {
+        method: "GET",
+        headers,
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer"
+      });
+      if (!response.ok) {
+        let code = "request_failed";
+        try {
+          const data = await response.json();
+          if (typeof data?.error === "string") code = data.error;
+        } catch {
+          code = "request_failed";
+        }
+        if (response.status === 401 || response.status === 403) {
+          lockPage(publicError(code));
+          return;
+        }
+        throw new Error(code);
+      }
+      const blob = await response.blob();
+      url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = downloadName(response.headers.get("Content-Disposition"));
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setText("artifacts-status", "Download started. Choose where to save it in your browser's Save dialog.");
+    } catch (e) {
+      setText("artifacts-status", "");
+      showArtifactError(e instanceof Error ? e.message : "request_failed");
+    } finally {
+      if (url) window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
+  async function deleteArtifact(id, item, button) {
+    if (!isArtifactId(id)) return;
+    if (!window.confirm(`Delete "${artifactTitle(item)}" now? Its download will stop working.`)) return;
+    showArtifactError("");
+    setText("artifacts-status", "");
+    button.disabled = true;
+    try {
+      await api(`/api/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setText("artifacts-status", "Artifact deleted.");
+      await refreshArtifacts();
+    } catch (e) {
+      button.disabled = false;
+      showArtifactError(e instanceof Error ? e.message : "request_failed");
+    }
+  }
+
+  function createArtifactCard(item) {
+    const id = typeof item.artifact_id === "string" ? item.artifact_id : "";
+    const valid = isArtifactId(id);
+    const card = document.createElement("article");
+    card.className = "artifact-item";
+    const info = document.createElement("div");
+    info.className = "artifact-info";
+    const title = document.createElement("strong");
+    title.textContent = artifactTitle(item);
+    const meta = document.createElement("span");
+    meta.className = "muted small";
+    meta.textContent = `${String(item.format || "unknown")} · ${Number.isFinite(Number(item.row_count)) ? Number(item.row_count).toLocaleString() : "—"} rows · ${formatBytes(item.utf8_bytes)} · expires ${formatExpiry(item.expires_at)}`;
+    info.append(title, meta);
+
+    const controls = document.createElement("div");
+    controls.className = "staged-controls";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.textContent = "Preview";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.textContent = "Download";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "Delete";
+    controls.append(preview, download, remove);
+    download.disabled = !valid;
+    remove.disabled = !valid;
+
+    const panel = document.createElement("div");
+    panel.className = "artifact-preview";
+    panel.hidden = true;
+    preview.addEventListener("click", () => {
+      if (!panel.hidden) {
+        panel.hidden = true;
+        preview.textContent = "Preview";
+        return;
+      }
+      panel.replaceChildren(createPreviewTable(item));
+      panel.hidden = false;
+      preview.textContent = "Hide preview";
+    });
+    download.addEventListener("click", () => void downloadArtifact(id, download));
+    remove.addEventListener("click", () => void deleteArtifact(id, item, remove));
+
+    card.append(info, controls, panel);
+    return card;
+  }
+
+  async function refreshArtifacts() {
+    const target = byId("artifacts-list");
+    target.replaceChildren();
+    showArtifactError("");
+    if (!state.session) return;
+    try {
+      const data = await api("/api/artifacts", { method: "GET" });
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (!items.length) {
+        const note = document.createElement("p");
+        note.className = "muted small";
+        note.textContent = "No artifacts are available in this session.";
+        target.append(note);
+        return;
+      }
+      for (const item of items) target.append(createArtifactCard(item));
+    } catch (e) {
+      showArtifactError(e instanceof Error ? e.message : "request_failed");
+    }
+  }
+
   async function boot() {
     if (!token) {
       byId("boot-panel").replaceChildren();
@@ -450,6 +662,7 @@
       setText("staging-root", allowed ? state.staging.display_root : "No approved staging folder is enabled for this session.");
       if (state.staging.enabled && !allowed) setText("import-status", "The configured staging folder path is unavailable; saving remains disabled.");
       await refreshStaged();
+      await refreshArtifacts();
       modeChanged();
     } catch (e) {
       byId("boot-panel").replaceChildren();
@@ -471,6 +684,7 @@
   byId("prepare").addEventListener("click", () => void prepare());
   byId("copy-packet").addEventListener("click", () => void copyText(state.packet, "Packet"));
   byId("save-source").addEventListener("click", () => void saveContext());
+  byId("artifacts-refresh").addEventListener("click", () => void refreshArtifacts());
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && state.session) void refreshStaged();
   });

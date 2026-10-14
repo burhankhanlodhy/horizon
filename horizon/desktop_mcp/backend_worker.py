@@ -189,6 +189,16 @@ class Runtime:
                     result_token_budget=args.get("result_token_budget"),
                     cursor=args.get("cursor"),
                 )
+            # Companion-only: the broker has already checked the capability, and
+            # _validate above checked the arguments.
+            elif operation == "artifact_list":
+                result = self.backend.artifact_list()
+            elif operation == "artifact_read":
+                result = self.backend.artifact_read(
+                    args["artifact_id"], args["offset"], args["length"]
+                )
+            elif operation == "artifact_delete":
+                result = self.backend.artifact_delete(args["artifact_id"])
             else:
                 result = self.backend.stats()
         except Exception as exc:

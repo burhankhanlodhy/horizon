@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -13,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .broker_transport import (
+    ARTIFACT_CHUNK_BYTES,
     MAX_FRAME_BYTES,
     BrokerTransportError,
     current_user_sid,
@@ -21,7 +26,11 @@ from .broker_transport import (
     serve_pipe,
     wake_server,
 )
+from .roles import issue_capability, load_capability, revoke_capability
 from .settings import ConfigurationError, DesktopSettings, load_settings
+
+_ARTIFACT_ID = re.compile(r"[0-9a-f]{32}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class BrokerError(Exception):
@@ -294,9 +303,20 @@ class BrokerService:
                 raise BrokerError(code, metadata if isinstance(metadata, dict) else None)
             return result
 
-    def serve(self, *, stop_event: threading.Event | None = None) -> None:
+    def serve(
+        self,
+        *,
+        stop_event: threading.Event | None = None,
+        capability_base_dir: Path | None = None,
+    ) -> None:
         sid = current_user_sid()
         pipe_name = pipe_name_for(sid, self.settings.broker_id)
+        issued: list[str] = []
+
+        def issue() -> str:
+            issued.append(issue_capability(self.settings, base_dir=capability_base_dir))
+            return issued[-1]
+
         try:
             serve_pipe(
                 pipe_name,
@@ -305,9 +325,18 @@ class BrokerService:
                 max_clients=self.settings.max_broker_clients,
                 timeout_seconds=self.settings.broker_timeout_seconds,
                 expected_sid=sid,
+                capability_factory=issue,
             )
         finally:
-            self.worker._stop(graceful=True)
+            try:
+                self.worker._stop(graceful=True)
+            finally:
+                for capability in issued:
+                    try:
+                        revoke_capability(self.settings, capability, base_dir=capability_base_dir)
+                    except OSError:
+                        # Cleanup must not mask the error that ended serving.
+                        pass
 
 
 class BrokerClient:
@@ -446,6 +475,118 @@ class BrokerClient:
 
     def stats(self) -> dict[str, Any]:
         return self._request("stats", {})
+
+
+def _parse_artifact_chunk(
+    result: dict[str, Any], artifact_id: str, offset: int
+) -> tuple[bytes, int, str, bool]:
+    """Validate one artifact_read reply; any shape problem is artifact_unavailable."""
+    unavailable = BrokerError("artifact_unavailable")
+    try:
+        total = result["total_bytes"]
+        digest = result["sha256"]
+        eof = result["eof"]
+        if (
+            result.get("artifact_id") != artifact_id
+            or result.get("offset") != offset
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or total < 0
+            or not isinstance(digest, str)
+            or _SHA256.fullmatch(digest) is None
+            or not isinstance(eof, bool)
+            or not isinstance(result["data_base64"], str)
+        ):
+            raise unavailable
+        chunk = base64.b64decode(result["data_base64"], validate=True)
+    except (KeyError, TypeError, ValueError, binascii.Error):
+        raise unavailable from None
+    if len(chunk) > ARTIFACT_CHUNK_BYTES:
+        raise unavailable
+    return chunk, total, digest, eof
+
+
+def _check_artifact_id(artifact_id: object) -> str:
+    if not isinstance(artifact_id, str) or _ARTIFACT_ID.fullmatch(artifact_id) is None:
+        raise BrokerError("invalid_arguments")
+    return artifact_id
+
+
+class CompanionBrokerClient:
+    """Companion-only client for the artifact operations.
+
+    The capability is loaded for each request, so a broker restart that issues
+    a new capability is picked up without restarting the companion.
+    """
+
+    def __init__(self, settings: DesktopSettings, *, base_dir: Path | None = None) -> None:
+        self.settings = settings
+        self.sid = current_user_sid()
+        self.pipe_name = pipe_name_for(self.sid, settings.broker_id)
+        self._base_dir = None if base_dir is None else Path(base_dir)
+
+    def _request(self, operation: str, args: dict[str, Any]) -> dict[str, Any]:
+        capability = load_capability(self.settings, base_dir=self._base_dir)
+        try:
+            result = exchange(
+                self.pipe_name,
+                operation,
+                args,
+                timeout_seconds=self.settings.broker_timeout_seconds,
+                capability=capability,
+            )
+        except BrokerTransportError as exc:
+            raise BrokerError(exc.code) from None
+        error = result.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            raise BrokerError(error["code"])
+        return result
+
+    def list_artifacts(self) -> list[dict[str, Any]]:
+        artifacts = self._request("artifact_list", {}).get("artifacts")
+        if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
+            raise BrokerError("artifact_unavailable")
+        return artifacts
+
+    def read_artifact(self, artifact_id: str) -> bytes:
+        """Read every chunk and verify the total length and SHA-256 end to end."""
+        _check_artifact_id(artifact_id)
+        unavailable = BrokerError("artifact_unavailable")
+        data = bytearray()
+        offset = 0
+        total: int | None = None
+        digest: str | None = None
+        while True:
+            result = self._request(
+                "artifact_read",
+                {"artifact_id": artifact_id, "offset": offset, "length": ARTIFACT_CHUNK_BYTES},
+            )
+            chunk, chunk_total, chunk_digest, eof = _parse_artifact_chunk(
+                result, artifact_id, offset
+            )
+            if total is None:
+                total, digest = chunk_total, chunk_digest
+            elif chunk_total != total or chunk_digest != digest:
+                # The artifact changed between chunks; never splice versions.
+                raise unavailable
+            data.extend(chunk)
+            offset += len(chunk)
+            if offset > total or (eof and offset != total):
+                raise unavailable
+            if eof:
+                break
+            if not chunk:
+                raise unavailable
+        if len(data) != total or hashlib.sha256(data).hexdigest() != digest:
+            raise unavailable
+        return bytes(data)
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        _check_artifact_id(artifact_id)
+        deleted = self._request("artifact_delete", {"artifact_id": artifact_id}).get("deleted")
+        if not isinstance(deleted, bool):
+            raise BrokerError("artifact_unavailable")
+        return deleted
 
 
 def stop_broker(pipe_name: str, stop_event: threading.Event) -> None:

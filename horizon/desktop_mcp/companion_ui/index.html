@@ -141,6 +141,20 @@
           <p class="muted small">Saved records expire automatically as shown. Delete a record here to remove its staged source and invalidate that recovery handle.</p>
         </section>
 
+        <section id="artifacts-card" class="card artifacts-card" aria-labelledby="artifacts-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Generated results</p>
+              <h2 id="artifacts-heading">Artifacts</h2>
+            </div>
+            <button id="artifacts-refresh" type="button">Refresh</button>
+          </div>
+          <p class="muted">Results the local broker has generated for this session. Download saves a copy through your browser's Save dialog; the companion never chooses a destination. Artifacts expire automatically and disappear when revoked.</p>
+          <p id="artifacts-status" class="muted small" role="status"></p>
+          <p id="artifacts-error" class="error" role="alert" hidden></p>
+          <div id="artifacts-list" class="artifacts-list" aria-live="polite"></div>
+        </section>
+
         <footer>
           <span id="connection-state"><span class="state-dot"></span> Connected to local companion</span>
           <button id="clear-session" class="text-button" type="button">Clear session and quit</button>

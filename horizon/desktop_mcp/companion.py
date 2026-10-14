@@ -44,6 +44,26 @@ _STATIC = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
+_SAFE_ARTIFACT_ID = re.compile(r"[0-9a-f]{32}")
+_ARTIFACT_DOWNLOAD = re.compile(r"/api/artifacts/([^/]+)/download")
+_ARTIFACT_ITEM = re.compile(r"/api/artifacts/([^/]+)")
+_ARTIFACT_FORMATS = {
+    "csv": ("text/csv; charset=utf-8", "csv"),
+    "json": ("application/json; charset=utf-8", "json"),
+    "markdown": ("text/markdown; charset=utf-8", "md"),
+    "text": ("text/plain; charset=utf-8", "txt"),
+}
+_ARTIFACT_ERROR_STATUS = {
+    "invalid_artifact_id": 400,
+    "artifact_revoked": 404,
+    "artifact_unknown": 404,
+    "artifact_unavailable": 503,
+    "artifacts_unavailable": 503,
+    "broker_unavailable": 503,
+}
+_PASSTHROUGH_BROKER_CODES = frozenset(
+    {"artifact_revoked", "artifact_unknown", "artifact_unavailable"}
+)
 
 
 class CompanionError(ValueError):
@@ -84,6 +104,22 @@ def _json_bytes(value: Any) -> bytes:
 
 def _utc(value: float) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _artifact_file_name(title: Any, extension: str) -> str:
+    """Return an ASCII-only download name; the title is untrusted model/user text."""
+    raw = re.sub(r"\s+", " ", title if isinstance(title, str) else "")
+    stem = re.sub(r"[^A-Za-z0-9 ._-]", "", raw)
+    stem = re.sub(r" +", " ", stem).strip(" ._-")
+    if stem.lower().endswith(f".{extension}"):
+        stem = stem[: -(len(extension) + 1)].strip(" ._-")
+    stem = stem[:80].strip(" ._-")
+    return f"{stem or 'artifact'}.{extension}"
+
+
+def _artifact_broker_error(error: BrokerError) -> CompanionError:
+    code = error.code if error.code in _PASSTHROUGH_BROKER_CODES else "broker_unavailable"
+    return CompanionError(code)
 
 
 class SessionVault:
@@ -365,10 +401,19 @@ class SessionVault:
 class PreparationCompanion:
     """Small owner for local preparation, broker reads, and stage lifecycle."""
 
-    def __init__(self, config: Path | None, staging_root: Path | None) -> None:
+    def __init__(
+        self,
+        config: Path | None,
+        staging_root: Path | None,
+        *,
+        artifact_client: Any | None = None,
+    ) -> None:
         self.config_path = Path(config).resolve(strict=True) if config is not None else None
         self.settings: DesktopSettings | None = None
         self.vault: SessionVault | None = None
+        # Injected clients (tests) bypass the config requirement. Otherwise the
+        # broker client is built lazily from settings on first artifact request.
+        self.artifact_client: Any | None = artifact_client
         if self.config_path is not None:
             self.settings = load_settings(self.config_path)
             if self.settings.profile != "local":
@@ -485,6 +530,76 @@ class PreparationCompanion:
         except (PreparationError, KeyError, TypeError):
             raise CompanionError("source_unavailable") from None
 
+    def _artifact_broker(self) -> Any:
+        if self.artifact_client is None:
+            if self.settings is None:
+                raise CompanionError("artifacts_unavailable")
+            try:
+                # Imported here so the companion still loads if the broker
+                # client is absent or the broker module is unavailable.
+                from .broker import CompanionBrokerClient
+
+                self.artifact_client = CompanionBrokerClient(self.settings)
+            except (
+                ImportError,
+                AttributeError,
+                ConfigurationError,
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+            ):
+                raise CompanionError("artifacts_unavailable") from None
+        return self.artifact_client
+
+    def artifact_manifests(self) -> list[dict[str, Any]]:
+        client = self._artifact_broker()
+        try:
+            manifests = client.list_artifacts()
+        except BrokerError as error:
+            raise _artifact_broker_error(error) from None
+        except (OSError, RuntimeError, ValueError, TypeError):
+            raise CompanionError("broker_unavailable") from None
+        if not isinstance(manifests, list) or not all(isinstance(item, dict) for item in manifests):
+            raise CompanionError("broker_unavailable")
+        return manifests
+
+    def artifact_download(self, artifact_id: str) -> tuple[bytes, str, str]:
+        client = self._artifact_broker()
+        if not _SAFE_ARTIFACT_ID.fullmatch(artifact_id):
+            raise CompanionError("invalid_artifact_id")
+        manifest = next(
+            (item for item in self.artifact_manifests() if item.get("artifact_id") == artifact_id),
+            None,
+        )
+        if manifest is None:
+            raise CompanionError("artifact_unknown")
+        try:
+            data = client.read_artifact(artifact_id)
+        except BrokerError as error:
+            raise _artifact_broker_error(error) from None
+        except (OSError, RuntimeError, ValueError, TypeError):
+            raise CompanionError("broker_unavailable") from None
+        if not isinstance(data, bytes):
+            raise CompanionError("broker_unavailable")
+        content_type, extension = _ARTIFACT_FORMATS.get(
+            manifest.get("format"), ("application/octet-stream", "bin")
+        )
+        return data, content_type, _artifact_file_name(manifest.get("title"), extension)
+
+    def artifact_delete(self, artifact_id: str) -> None:
+        client = self._artifact_broker()
+        if not _SAFE_ARTIFACT_ID.fullmatch(artifact_id):
+            raise CompanionError("invalid_artifact_id")
+        try:
+            deleted = client.delete_artifact(artifact_id)
+        except BrokerError as error:
+            raise _artifact_broker_error(error) from None
+        except (OSError, RuntimeError, ValueError, TypeError):
+            raise CompanionError("broker_unavailable") from None
+        if not deleted:
+            raise CompanionError("artifact_unknown")
+
     def session_info(self) -> dict[str, Any]:
         return {
             "status": "ready",
@@ -537,9 +652,10 @@ def serve_companion(
     open_browser: bool = True,
     port: int = 0,
     on_ready: Callable[[str, str], None] | None = None,
+    artifact_client: Any | None = None,
 ) -> int:
     """Run until Ctrl+C or the authenticated explicit quit endpoint."""
-    companion = PreparationCompanion(config, staging_root)
+    companion = PreparationCompanion(config, staging_root, artifact_client=artifact_client)
     token = secrets.token_urlsafe(32)
     stopped = threading.Event()
     server_ref: dict[str, _QuietHttpServer] = {}
@@ -564,7 +680,11 @@ def serve_companion(
             return f"http://127.0.0.1:{self.server.server_port}"
 
         def _send(
-            self, status: int, value: Any, content_type: str = "application/json; charset=utf-8"
+            self,
+            status: int,
+            value: Any,
+            content_type: str = "application/json; charset=utf-8",
+            extra_headers: tuple[tuple[str, str], ...] = (),
         ) -> None:
             body = value if isinstance(value, bytes) else _json_bytes(value)
             self.send_response(status)
@@ -579,6 +699,9 @@ def serve_companion(
                 "Content-Security-Policy",
                 "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
             )
+            # Extra headers are additive only; the security headers above are never replaced.
+            for name, header_value in extra_headers:
+                self.send_header(name, header_value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -621,6 +744,9 @@ def serve_companion(
             if self.headers.get("Sec-Fetch-Site", "same-origin") not in {"same-origin", "none"}:
                 return 403
             return 401
+
+        def _artifact_error(self, error: CompanionError) -> None:
+            self._api_error(error, _ARTIFACT_ERROR_STATUS.get(error.code, 503))
 
         def _body(self) -> dict[str, Any]:
             if self.headers.get_content_type() != "application/json":
@@ -673,6 +799,7 @@ def serve_companion(
             if not path.startswith("/api/") or not self._authorized(mutate=False):
                 self._send(self._auth_status(), {"error": "unauthorized"})
                 return
+            download = _ARTIFACT_DOWNLOAD.fullmatch(path)
             if path == "/api/session":
                 try:
                     self._send(200, companion.session_info())
@@ -686,6 +813,23 @@ def serve_companion(
                         self._send(200, {"items": companion.vault.list_entries()})
                     except CompanionError as error:
                         self._api_error(error, 503)
+            elif path == "/api/artifacts":
+                try:
+                    self._send(200, {"items": companion.artifact_manifests()})
+                except CompanionError as error:
+                    self._artifact_error(error)
+            elif download is not None:
+                try:
+                    data, content_type, name = companion.artifact_download(download.group(1))
+                except CompanionError as error:
+                    self._artifact_error(error)
+                else:
+                    self._send(
+                        200,
+                        data,
+                        content_type,
+                        extra_headers=(("Content-Disposition", f'attachment; filename="{name}"'),),
+                    )
             else:
                 self._send(404, {"error": "not_found"})
 
@@ -753,6 +897,14 @@ def serve_companion(
                     server_ref["server"].shutdown()
 
                 threading.Thread(target=shutdown, daemon=True).start()
+                return
+            artifact = _ARTIFACT_ITEM.fullmatch(path)
+            if artifact is not None:
+                try:
+                    companion.artifact_delete(artifact.group(1))
+                    self._send(200, {"status": "deleted", "id": artifact.group(1)})
+                except CompanionError as error:
+                    self._artifact_error(error)
                 return
             prefix = "/api/staging/"
             if path.startswith(prefix) and companion.vault is not None:
