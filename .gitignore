@@ -289,3 +289,7 @@ horizon/_build_info.py
 desktop/mcp/local-settings.json
 desktop/mcp/companion-settings.json
 desktop/mcp/prepared-vault/
+
+# Desktop extension build output (never committed; installers are not hosted on GitHub)
+desktop/mcp/extension/build/
+desktop/mcp/extension/dist/

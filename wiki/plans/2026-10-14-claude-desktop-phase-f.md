@@ -141,3 +141,106 @@ profile's retrieve schema.
   kinds.
 - Table operations are not supported on PDF/DOCX
   (`table_kind_unsupported`).
+
+## F2 interfaces
+
+Claude Desktop launches only the MCP server process. Until now the broker was
+started by hand in a terminal, and it spawns its worker with
+`sys.executable -I -c <bootstrap>`, which a PyInstaller executable cannot run.
+F2 makes the runtime work as an installed extension without changing the
+developer flow.
+
+### Runtime (`__main__.py`, `broker.py`, `settings.py`, `extension.py`)
+
+- **Frozen worker.** A `worker` subcommand runs `backend_worker.main` with the
+  existing worker arguments. `BackendWorker._start` uses
+  `[sys.executable, "worker", ...]` when `getattr(sys, "frozen", False)`, and
+  keeps the current `-I -c` bootstrap otherwise.
+- **Idle shutdown.** `broker_idle_seconds: int = 0` (0 means never; otherwise
+  60-86400) is a config field. `BrokerService` records the time of the last
+  handled request, and while serving, a watchdog thread stops the broker (the
+  same path as Ctrl+C, so worker cleanup and capability revocation run) once
+  it has been idle that long.
+- **Extension mode.** `serve --extension` takes:
+  - `--approved-roots DIR ...` (zero or more; MCPB expands a multi-folder
+    setting into separate arguments);
+  - `--tool-profile source|compute` (default `source`);
+  - `--artifact-root DIR` (empty string means none);
+  - `--broker-id` (default `desktop-ext`).
+
+  It builds `DesktopSettings(profile="local", ..., broker_idle_seconds=1800)`.
+  It writes them atomically (temp file plus `os.replace`), and only when
+  changed, to `%LOCALAPPDATA%\ContextShrink\extension\<broker_id>.json`
+  (POSIX: `~/.local/state/contextshrink/extension/`). Then it ensures a broker
+  is running: if a `stats` call fails because no broker is reachable, it
+  starts one detached (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
+  CREATE_NO_WINDOW`, stdio to `DEVNULL`), using `[sys.executable, "broker",
+  "--config", path]` when frozen and `[sys.executable, "-m",
+  "horizon.desktop_mcp", "broker", "--config", path]` otherwise. It waits up
+  to 15 seconds for `stats` to succeed, then serves stdio as usual. Two chats
+  starting at once may each try to start a broker. Only one can own the pipe
+  and the other exits; the capability is issued only after pipe ownership.
+  Any startup failure is reported as a sanitized code on stderr.
+- `serve --config` (the developer and pilot path) is unchanged.
+
+### Broker lifetime under the host's process job (decision)
+
+The MCP Python SDK's stdio client starts each server in a kill-on-close
+Windows Job Object that does not allow breakaway (`CREATE_BREAKAWAY_FROM_JOB`
+is denied), so a broker started from a server process ends when the chat that
+started it closes. Claude Desktop may behave the same way; that is unverified.
+Escaping the host's job, for example through WMI or a scheduled task, would
+defeat the host's process containment, so it is not done. Instead, extension
+mode passes a recovery hook to the server. A call that fails with
+`broker_unavailable` restarts the broker and is retried once.
+`broker_unavailable` now means no request byte was sent; any failure after
+sending starts is `broker_disconnected` and is never retried, so a
+non-idempotent render cannot run twice. Handles and artifacts from the lost
+broker are gone, and Claude needs a fresh search, the same as after a broker
+restart. A real two-chat run confirmed that the second chat keeps working after
+the first closes.
+
+### Build (`desktop/mcp/extension/`)
+
+- `entry.py`: the PyInstaller entry script, which calls
+  `horizon.desktop_mcp.__main__.main`.
+- `build_extension.py`:
+  - **Build:** PyInstaller `--onedir` with the console bootloader, named
+    `contextshrink-desktop`.
+    - It bundles `companion_ui/*` as data and collects pywin32, pydantic,
+      the MCP SDK, anyio and pypdf.
+    - It explicitly excludes the proxy and ML stacks (`torch`,
+      `transformers`, `onnxruntime`, `numpy`, `litellm`, `fastapi` and
+      similar), plus `horizon.proxy`, `horizon.providers` and other
+      non-desktop packages.
+    - Build output goes under `desktop/mcp/extension/build/` (git-ignored).
+  - **Pack:** write `manifest.json` from `manifest.template.json` with the
+    version filled in. Zip it with `server/<onedir contents>` into
+    `dist/contextshrink-desktop-<version>.mcpb`, using deterministic order
+    and timestamps.
+  - **Validate:** before packing, check the required fields, that the entry
+    point exists inside the archive, that the tools list matches
+    `tool_specs`, and that every argument variable references a declared
+    `user_config` key.
+  - It never uploads. Publishing goes to the private release bucket in a
+    separate, explicit step.
+- `manifest.template.json`:
+  - `manifest_version "0.3"`, `server.type "binary"`, and `entry_point
+    "server/contextshrink-desktop.exe"`.
+  - `mcp_config.command "${__dirname}/server/contextshrink-desktop.exe"` with
+    `args ["serve", "--extension", "--tool-profile",
+    "${user_config.tool_profile}", "--artifact-root",
+    "${user_config.artifact_root}", "--approved-roots",
+    "${user_config.approved_roots}"]` (the multi-folder value last).
+  - `user_config`: `approved_roots` (directory, multiple, required),
+    `tool_profile` (string, default `source`) and `artifact_root` (directory,
+    optional).
+  - `compatibility.platforms ["win32"]`, and `tools` with the seven tool
+    names and descriptions.
+- Local smoke: run the built executable in extension mode through the MCP SDK
+  stdio client against a temporary approved folder, check that it auto-starts
+  a broker, then search, open a PDF page, and stop.
+
+Signing (Authenticode for the executable, plus MCPB signing) and the
+clean-machine install/uninstall/rollback check are F3 and need the owner's
+certificate and a second machine.
