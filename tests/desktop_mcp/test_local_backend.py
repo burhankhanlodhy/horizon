@@ -161,6 +161,46 @@ def test_compact_falls_back_to_exact_when_gain_gate_not_met() -> None:
     assert result["text"] == "one\ntwo\nthree\n"
 
 
+def test_compact_fallback_cursor_walks_every_exact_page() -> None:
+    source = "C:/approved/outline.md"
+    # Distinct rows defeat every fold, and headings would make an overview
+    # misroute look plausible rather than raise.
+    rows = ["# Title\n"] + [f"# Row {index:04d}: " + ("y" * 60) + "\n" for index in range(120)]
+    reader = _Reader([_Record(source, "".join(rows))])
+    backend = LocalBackend(reader, result_token_budget=512, max_result_bytes=4096)
+
+    page = backend.open(source, mode="compact")
+    assert page is not None
+    collected = page["text"]
+    pages = 1
+    while page["more_available"]:
+        previous_end = page["selected_lines"]["end"]
+        page = backend.open(page["source_id"], mode="compact", cursor=page["next_cursor"])
+        assert page is not None
+        assert page["mode"] == "exact"
+        assert page["requested_mode"] == "compact"
+        assert page["compression_applied"] is False
+        assert "headings" not in page
+        assert page["selected_lines"]["start"] == previous_end + 1
+        collected += page["text"]
+        pages += 1
+    assert pages > 1
+    assert collected == "".join(rows)
+
+
+def test_compact_cursor_is_rejected_by_other_modes() -> None:
+    source = "C:/approved/large.txt"
+    text = "".join(f"row {index:04d}: " + ("z" * 70) + "\n" for index in range(120))
+    reader = _Reader([_Record(source, text)])
+    backend = LocalBackend(reader, result_token_budget=512, max_result_bytes=4096)
+
+    first = backend.open(source, mode="compact")
+    assert first is not None and first["more_available"] is True
+    for mode in ("exact", "overview"):
+        with pytest.raises(LocalBackendError):
+            backend.open(first["source_id"], mode=mode, cursor=first["next_cursor"])
+
+
 def test_focused_result_labels_partial_scope_and_keeps_exact_recovery_refs() -> None:
     source = "C:/approved/a.txt"
     text = "intro line\n\nSQLite stores local snapshots.\n\nunrelated details\n"

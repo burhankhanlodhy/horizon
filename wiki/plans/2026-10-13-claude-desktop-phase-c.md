@@ -118,6 +118,22 @@ pause, confirmed the local Phase C state without code changes:
   review; no live Claude Desktop Phase C walk-through or Enterprise billing
   evidence has been captured.
 
+### Review on October 14, 2026
+
+A review found that a compact-mode cursor issued by the exact-page fallback
+was misrouted on continuation into the overview branch, returning
+`cursor_mismatch` (or a heading inventory) instead of the next exact page. The
+fix resumes exact pages under the compact binding. Regression tests walk every
+page and reject the cursor in other modes. `pytest tests/desktop_mcp -q` now
+reports **158 passed, 1 skipped**. The review also listed untested checklist
+items: cursor tamper/mismatch per bound field and caller/workspace binding;
+source prompt-injection fixtures; root prefix collision; oversized single
+line/JSON string/CSV cell in exact mode; blank CSV rows and leading-zero IDs;
+source row/field/line bounds; desktop-path round trips for log, search and path
+folds; the inflation-guard boundary; JSON null/escape/order/big-integer round
+trips; UNC/device paths; change between search/open/retrieve; and a log-capture
+check for source text and queries.
+
 A local in-process benchmark on a synthetic 7.65 MB / 150,000-line log
 returned the first bounded exact page in 1.176 seconds and a subsequent cursor
 page in 0.656 seconds. A separate synthetic 8.1 MB broker/SDK check using the

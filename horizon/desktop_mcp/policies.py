@@ -645,7 +645,9 @@ def present_snapshot(
             {"type": "lines", "start": scope[0], "end": scope[1]} if scope else {"type": "whole"}
         )
 
-    if mode == "exact":
+    # Compact cursors are only issued by the exact-page fallback, so a
+    # continuation resumes those exact pages under the same compact binding.
+    if mode == "exact" or (mode == "compact" and cursor):
         context = {
             "mode": mode,
             "requested_mode": requested_mode,
@@ -666,7 +668,7 @@ def present_snapshot(
         )
 
     raw_scope = "".join(lines[resolved_scope[0] - 1 : resolved_scope[1]])
-    if mode == "compact" and not cursor:
+    if mode == "compact":
         kind = infer_compaction_kind(snapshot.kind, raw_scope)
         candidate = (
             compact_text(raw_scope, kind)
@@ -728,10 +730,8 @@ def present_snapshot(
         )
         if saves_enough and _fit(result, limits, estimator):
             return result
-        if cursor:
-            # A compact candidate that does not clear the gate falls back to
-            # exact pages bound to the same requested scope.
-            pass
+        # A compact candidate that does not clear the gate falls back to
+        # exact pages bound to the same requested scope.
         context = {
             "mode": mode,
             "requested_mode": requested_mode,
