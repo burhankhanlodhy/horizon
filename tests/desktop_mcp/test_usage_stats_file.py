@@ -534,3 +534,22 @@ def test_extension_settings_skip_stats_inside_an_approved_root(
     )
     settings = extension._extension_settings(args)
     assert settings.usage_stats_path is None
+
+
+def test_cumulative_basis_keeps_versioned_counter_labels(tmp_path: Path) -> None:
+    from horizon.desktop_mcp.measurement import CumulativeUsageStats
+
+    stats = CumulativeUsageStats(tmp_path / "stats.json")
+    stats.add(
+        {
+            "tool": "contextshrink_open",
+            "mode": "exact",
+            "status": "success",
+            "tokenizer_name": "o200k_base",
+            "counter_version": "tiktoken-0.14.0",
+            "fallback": False,
+            "result_raw_equivalent_token_estimate": 10,
+            "result_delivered_token_estimate": 4,
+        }
+    )
+    assert list(stats.snapshot()["token_estimates"]) == ["o200k_base:tiktoken-0.14.0:exact"]
