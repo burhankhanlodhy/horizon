@@ -549,6 +549,10 @@ def exchange(
     if len(payload) > MAX_FRAME_BYTES:
         raise BrokerTransportError("frame_too_large")
     deadline = time.monotonic() + timeout_seconds
+    # Once any byte of the request may have reached a broker, a failure is
+    # reported as broker_disconnected: the operation might have run, so callers
+    # must not retry it blindly. broker_unavailable means nothing was sent.
+    sent = False
     try:
         while True:
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
@@ -576,6 +580,7 @@ def exchange(
         )
         _verify_server_sid(pipe)
         frame = b"CSM\x01" + len(payload).to_bytes(4, "big") + payload
+        sent = True
         _write_all(pipe, frame, deadline)
         prefix = _read_exact(pipe, 8, deadline)
         if prefix[:4] != b"CSM\x01":
@@ -606,10 +611,10 @@ def exchange(
         return response["result"]
     except BrokerTransportError:
         raise
-    except Exception as exc:
-        if _winerror(exc) in _RETRYABLE_PIPE_ERRORS and time.monotonic() >= deadline:
-            raise BrokerTransportError("broker_unavailable") from None
-        raise BrokerTransportError("broker_unavailable") from None
+    except Exception:
+        raise BrokerTransportError(
+            "broker_disconnected" if sent else "broker_unavailable"
+        ) from None
     finally:
         if "pipe" in locals():
             try:

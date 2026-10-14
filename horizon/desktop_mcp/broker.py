@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -129,29 +130,32 @@ class _BackendWorker:
 
     def _start(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
-        bootstrap = (
-            "import sys; "
-            f"sys.path.insert(0, {str(repo_root)!r}); "
-            "from horizon.desktop_mcp.backend_worker import main; "
-            "raise SystemExit(main())"
-        )
+        worker_arguments = [
+            "--config",
+            str(self.config_path),
+            "--expected-broker-id",
+            self.broker_id,
+            "--expected-max-clients",
+            str(self.max_clients),
+            "--expected-timeout",
+            str(self.timeout_seconds),
+        ]
+        if getattr(sys, "frozen", False):
+            # A PyInstaller executable cannot run `-c` bootstraps; it re-enters
+            # through its own `worker` subcommand instead.
+            command = [sys.executable, "worker", *worker_arguments]
+        else:
+            bootstrap = (
+                "import sys; "
+                f"sys.path.insert(0, {str(repo_root)!r}); "
+                "from horizon.desktop_mcp.backend_worker import main; "
+                "raise SystemExit(main())"
+            )
+            command = [sys.executable, "-I", "-c", bootstrap, *worker_arguments]
         environment = _worker_environment()
         try:
             process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-I",
-                    "-c",
-                    bootstrap,
-                    "--config",
-                    str(self.config_path),
-                    "--expected-broker-id",
-                    self.broker_id,
-                    "--expected-max-clients",
-                    str(self.max_clients),
-                    "--expected-timeout",
-                    str(self.timeout_seconds),
-                ],
+                command,
                 cwd=repo_root,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -278,10 +282,35 @@ class _BackendWorker:
             return response["result"]
 
 
+# Upper bound on how long the idle watchdog sleeps between checks.
+_IDLE_POLL_CAP_SECONDS = 5.0
+
+
+def _idle_watchdog(
+    *,
+    idle_seconds: int,
+    last_activity: Callable[[], float],
+    clock: Callable[[], float],
+    stop_event: threading.Event,
+    done: threading.Event,
+    pipe_name: str,
+    poll_seconds: float,
+) -> None:
+    """Stop the broker through the normal stop path once it has been idle long enough."""
+    while not done.wait(poll_seconds):
+        if clock() - last_activity() >= idle_seconds:
+            try:
+                stop_broker(pipe_name, stop_event)
+            except BrokerTransportError:
+                # stop_event is already set; the serve loop observes it on its next wait.
+                stop_event.set()
+            return
+
+
 class BrokerService:
     """Serve one serialized request at a time through a bounded worker process."""
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.config_path = Path(config_path)
         self.settings = _load_local_settings(self.config_path)
         self.worker = _BackendWorker(
@@ -291,10 +320,13 @@ class BrokerService:
             max_clients=self.settings.max_broker_clients,
         )
         self._lock = threading.RLock()
+        self._clock = clock
+        self._last_activity = clock()
 
     def handle(self, operation: str, args: dict[str, Any]) -> dict[str, Any]:
         # Config reload and all source IO stay inside the cancellable worker.
         # The pipe service keeps only the startup pipe identity and worker handle.
+        self._last_activity = self._clock()
         with self._lock:
             result = self.worker.request(operation, args)
             if "error" in result:
@@ -312,22 +344,42 @@ class BrokerService:
         sid = current_user_sid()
         pipe_name = pipe_name_for(sid, self.settings.broker_id)
         issued: list[str] = []
+        # The watchdog needs the same stop event the pipe loop observes.
+        stop = stop_event if stop_event is not None else threading.Event()
+        done = threading.Event()
 
         def issue() -> str:
             issued.append(issue_capability(self.settings, base_dir=capability_base_dir))
             return issued[-1]
 
+        idle_seconds = self.settings.broker_idle_seconds
+        if idle_seconds > 0:
+            threading.Thread(
+                target=_idle_watchdog,
+                kwargs={
+                    "idle_seconds": idle_seconds,
+                    "last_activity": lambda: self._last_activity,
+                    "clock": self._clock,
+                    "stop_event": stop,
+                    "done": done,
+                    "pipe_name": pipe_name,
+                    "poll_seconds": min(_IDLE_POLL_CAP_SECONDS, idle_seconds / 4),
+                },
+                daemon=True,
+                name="contextshrink-broker-idle",
+            ).start()
         try:
             serve_pipe(
                 pipe_name,
                 self.handle,
-                stop_event=stop_event,
+                stop_event=stop,
                 max_clients=self.settings.max_broker_clients,
                 timeout_seconds=self.settings.broker_timeout_seconds,
                 expected_sid=sid,
                 capability_factory=issue,
             )
         finally:
+            done.set()
             try:
                 self.worker._stop(graceful=True)
             finally:

@@ -24,6 +24,30 @@ def _parser() -> argparse.ArgumentParser:
 
     serve = commands.add_parser("serve", help="serve diagnostic fixtures over MCP stdio")
     serve.add_argument("--config", type=Path)
+    # Extension mode: the installed Claude Desktop extension passes these; the
+    # defaults are applied in extension.run_extension, so None means "not given".
+    serve.add_argument(
+        "--extension",
+        action="store_true",
+        help="run as the installed extension: write settings from flags and ensure a broker",
+    )
+    serve.add_argument(
+        "--approved-roots",
+        nargs="*",
+        default=None,
+        metavar="DIR",
+        help="extension: approved folders",
+    )
+    serve.add_argument(
+        "--tool-profile", default=None, help="extension: source (default) or compute"
+    )
+    serve.add_argument(
+        "--artifact-root",
+        default=None,
+        metavar="DIR",
+        help="extension: artifact folder (empty for none)",
+    )
+    serve.add_argument("--broker-id", default=None, help="extension: broker identity")
 
     broker = commands.add_parser(
         "broker", help="serve approved local sources over the Windows named pipe"
@@ -68,12 +92,21 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+_EXTENSION_FLAGS = ("approved_roots", "tool_profile", "artifact_root", "broker_id")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
     if values and values[0] == "prepare":
         from .preparation_cli import main as prepare_main
 
         return prepare_main(values[1:])
+    if values and values[0] == "worker":
+        # Passed verbatim: the frozen broker re-enters the worker through this
+        # subcommand, and its arguments belong to backend_worker.main.
+        from .backend_worker import main as worker_main
+
+        return worker_main(values[1:])
     args = _parser().parse_args(values)
     if args.command == "broker":
         from .broker import BrokerService
@@ -128,6 +161,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     if args.command == "serve":
+        extension_given = [name for name in _EXTENSION_FLAGS if getattr(args, name) is not None]
+        if args.extension and args.config is not None:
+            print('{"error":"config_and_extension_conflict"}', file=sys.stderr)
+            return 2
+        if not args.extension and extension_given:
+            print('{"error":"extension_flags_require_extension"}', file=sys.stderr)
+            return 2
         try:
             from .server import serve_stdio
         except ImportError:
@@ -135,8 +175,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
         try:
-            settings = load_settings(args.config)
-            asyncio.run(serve_stdio(settings))
+            if args.extension:
+                from .extension import run_extension
+
+                run_extension(args)
+            else:
+                settings = load_settings(args.config)
+                asyncio.run(serve_stdio(settings))
         except ConfigurationError as exc:
             print(
                 json.dumps({"error": exc.code, "fields": list(exc.fields)}, separators=(",", ":")),
