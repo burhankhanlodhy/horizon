@@ -371,9 +371,14 @@ def test_retrieve_schema_lists_new_variants_after_existing_ones() -> None:
     assert "table (DOCX)" in description
 
 
+# A fixed commit on main from before the document selectors existed. Comparing
+# against HEAD would break as soon as this change itself was committed.
+BASELINE_COMMIT = "0f7fde89"
+
+
 def _load_head_contracts(tmp_path: Path) -> Any:
     completed = subprocess.run(
-        ["git", "show", "HEAD:horizon/desktop_mcp/contracts.py"],
+        ["git", "show", f"{BASELINE_COMMIT}:horizon/desktop_mcp/contracts.py"],
         cwd=REPO_ROOT,
         capture_output=True,
         check=True,
@@ -392,14 +397,15 @@ def _load_head_contracts(tmp_path: Path) -> Any:
     return module
 
 
-def test_source_profile_schemas_match_head_except_retrieve_selector_extension(
+def test_source_profile_schemas_match_baseline_except_retrieve_selector_extension(
     tmp_path: Path,
 ) -> None:
     try:
         head = _load_head_contracts(tmp_path)
     except (OSError, subprocess.CalledProcessError):
-        pytest.skip("git HEAD snapshot unavailable")
-    head_specs = {spec["name"]: spec for spec in head.tool_specs("source")}
+        pytest.skip("git baseline snapshot unavailable")
+    # The baseline predates tool profiles; its no-argument call is the source profile.
+    head_specs = {spec["name"]: spec for spec in head.tool_specs()}
     current_specs = {spec["name"]: spec for spec in tool_specs("source")}
     assert list(current_specs) == list(head_specs)
     for name, spec in head_specs.items():

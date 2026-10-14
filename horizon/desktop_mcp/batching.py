@@ -154,7 +154,12 @@ def fuse_reads(
             errors.append({"index": index, "code": "source_unknown"})
             continue
         try:
-            scope = select_exact(snapshot.text, item["selector"], kind=snapshot.kind)
+            scope = select_exact(
+                snapshot.text,
+                item["selector"],
+                kind=snapshot.kind,
+                blocks=snapshot.blocks,
+            )
         except SelectorError as error:
             errors.append({"index": index, "code": error.code})
             continue

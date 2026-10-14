@@ -9,6 +9,8 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .extractors import DOCUMENT_KINDS, DocumentBlock
+
 
 class SnapshotError(ValueError):
     """Sanitized snapshot-store failure identified by a stable code."""
@@ -20,7 +22,12 @@ class SnapshotError(ValueError):
 
 @dataclass(frozen=True)
 class SourceSnapshot:
-    """One immutable text version and its source/grant provenance."""
+    """One immutable text version and its source/grant provenance.
+
+    For document kinds, ``text`` is the extracted text, ``digest`` and
+    ``byte_count`` describe the original file, and ``blocks``/``warnings`` come
+    from the extractor. Store quotas always count the UTF-8 bytes of ``text``.
+    """
 
     source_id: str
     version: str
@@ -35,6 +42,8 @@ class SourceSnapshot:
     extractor_version: str
     created_at: float
     expires_at: float
+    blocks: tuple[DocumentBlock, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 class SnapshotStore:
@@ -67,6 +76,8 @@ class SnapshotStore:
         self.max_snapshots = max_snapshots
         self._clock = clock
         self._items: OrderedDict[str, SourceSnapshot] = OrderedDict()
+        # Held (text) bytes per retained snapshot; quota accounting uses these.
+        self._held: dict[str, int] = {}
         self._bytes = 0
         self._lock = threading.RLock()
 
@@ -94,6 +105,8 @@ class SnapshotStore:
         byte_count: int,
         identity: str,
         extractor_version: str = "text-v1",
+        blocks: tuple[DocumentBlock, ...] = (),
+        warnings: tuple[str, ...] = (),
     ) -> SourceSnapshot:
         """Store a new, independently addressable immutable version."""
         if not isinstance(text, str) or not isinstance(byte_count, int) or byte_count < 0:
@@ -102,12 +115,18 @@ class SnapshotStore:
             raise SnapshotError("snapshot_too_large")
         # A decoded string may use fewer UTF-8 bytes only if metadata is wrong.
         try:
-            actual_size = len(text.encode("utf-8"))
+            held = len(text.encode("utf-8"))
         except UnicodeEncodeError:
             raise SnapshotError("snapshot_invalid") from None
-        if actual_size != byte_count:
+        # Document byte_count is the original file size, not the extracted text.
+        is_document = isinstance(kind, str) and kind.lower().lstrip(".") in DOCUMENT_KINDS
+        if not is_document and held != byte_count:
             raise SnapshotError("snapshot_invalid")
+        if held > self.max_snapshot_bytes:
+            raise SnapshotError("snapshot_too_large")
         if not digest or not root_key or not relative_path or not identity:
+            raise SnapshotError("snapshot_invalid")
+        if not isinstance(extractor_version, str) or not extractor_version:
             raise SnapshotError("snapshot_invalid")
 
         now = self._clock()
@@ -125,18 +144,20 @@ class SnapshotStore:
             extractor_version=extractor_version,
             created_at=now,
             expires_at=now + self.ttl_seconds,
+            blocks=tuple(blocks),
+            warnings=tuple(warnings),
         )
         with self._lock:
             self._expire_locked(now)
             while self._items and (
-                self._bytes + byte_count > self.max_store_bytes
-                or len(self._items) >= self.max_snapshots
+                self._bytes + held > self.max_store_bytes or len(self._items) >= self.max_snapshots
             ):
                 self._evict_oldest_locked()
-            if byte_count > self.max_store_bytes:
+            if held > self.max_store_bytes:
                 raise SnapshotError("snapshot_too_large")
             self._items[snapshot.source_id] = snapshot
-            self._bytes += byte_count
+            self._held[snapshot.source_id] = held
+            self._bytes += held
         return snapshot
 
     def get(self, source_id: str) -> SourceSnapshot:
@@ -155,6 +176,7 @@ class SnapshotStore:
         """Drop all snapshots, for example when approved roots are reloaded."""
         with self._lock:
             self._items.clear()
+            self._held.clear()
             self._bytes = 0
 
     def stats(self) -> dict[str, int]:
@@ -171,9 +193,9 @@ class SnapshotStore:
     def _expire_locked(self, now: float) -> None:
         for source_id, snapshot in tuple(self._items.items()):
             if snapshot.expires_at <= now:
-                self._bytes -= snapshot.byte_count
+                self._bytes -= self._held.pop(source_id)
                 del self._items[source_id]
 
     def _evict_oldest_locked(self) -> None:
-        _source_id, snapshot = self._items.popitem(last=False)
-        self._bytes -= snapshot.byte_count
+        source_id, _snapshot = self._items.popitem(last=False)
+        self._bytes -= self._held.pop(source_id)

@@ -21,6 +21,7 @@ from .compression import (
     compression_decoding_hint,
     infer_compaction_kind,
 )
+from .extractors import DOCUMENT_KINDS
 from .retrieval import Passage, rank_passages
 from .selectors import SelectedScope, markdown_headings
 from .snapshots import SourceSnapshot
@@ -156,14 +157,79 @@ def _accounted_fits(payload: dict[str, Any], limits: ResultLimits, estimator: An
     return True
 
 
+def _is_document(snapshot: SourceSnapshot) -> bool:
+    return isinstance(snapshot.kind, str) and snapshot.kind.lower().lstrip(".") in DOCUMENT_KINDS
+
+
+def _document_coverage(snapshot: SourceSnapshot, coverage: str) -> str:
+    """Name extracted text and any omitted content; text snapshots are unchanged.
+
+    This is the single place where document coverage wording is derived, so every
+    result path (open, retrieve, focused, overview) reports omissions the same way.
+    """
+    if not _is_document(snapshot):
+        return coverage
+    text = coverage
+    if text == "complete source snapshot":
+        text = "complete extracted text"
+    elif text == "exact selected lines at immutable snapshot version":
+        text = "exact selected extracted text at immutable snapshot version"
+    if snapshot.warnings:
+        text += "; omitted: " + ", ".join(snapshot.warnings)
+    return text
+
+
+def _extraction_metadata(snapshot: SourceSnapshot) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for block in snapshot.blocks:
+        counts[block.kind] = counts.get(block.kind, 0) + 1
+    return {
+        "extractor_version": snapshot.extractor_version,
+        "warnings": list(snapshot.warnings),
+        "block_counts": dict(sorted(counts.items())),
+    }
+
+
+def _document_inventory(snapshot: SourceSnapshot) -> tuple[list[dict[str, Any]], str]:
+    """Overview items for documents: PDF pages, or DOCX headings in document order."""
+    if snapshot.kind.lower().lstrip(".") == "pdf":
+        items: list[dict[str, Any]] = []
+        for block in snapshot.blocks:
+            if block.kind != "page":
+                continue
+            has_text = block.line_start <= block.line_end
+            items.append(
+                {
+                    "page": block.index,
+                    "line": block.line_start if has_text else None,
+                    "has_text": has_text,
+                }
+            )
+        return items, "page"
+    lines = split_physical_lines(snapshot.text)
+    items = []
+    for block in snapshot.blocks:
+        if block.kind != "heading":
+            continue
+        first = lines[block.line_start - 1] if 1 <= block.line_start <= len(lines) else ""
+        items.append(
+            {
+                "line": block.line_start,
+                "heading": first.strip()[:200],
+                "heading_level": block.attributes.get("heading_level"),
+            }
+        )
+    return items, "heading"
+
+
 def _base_payload(snapshot: SourceSnapshot, mode: str, text: str) -> dict[str, Any]:
     line_count = max(1, len(split_physical_lines(snapshot.text)))
-    return {
+    payload: dict[str, Any] = {
         "source_id": snapshot.source_id,
         "version": snapshot.version,
         "kind": snapshot.kind,
         "mode": mode,
-        "coverage": "complete source snapshot",
+        "coverage": _document_coverage(snapshot, "complete source snapshot"),
         "selected_lines": {"start": 1, "end": line_count},
         "line_count": line_count,
         "text": text,
@@ -177,6 +243,9 @@ def _base_payload(snapshot: SourceSnapshot, mode: str, text: str) -> dict[str, A
         "next_cursor": None,
         "result_token_budget_applied": False,
     }
+    if _is_document(snapshot):
+        payload["extraction"] = _extraction_metadata(snapshot)
+    return payload
 
 
 def _finalize(
@@ -326,7 +395,9 @@ def _fit_exact_page(
         text = "".join(lines[start - 1 : candidate_end])
         payload = _base_payload(snapshot, "exact", text)
         payload["selected_lines"] = {"start": start, "end": candidate_end}
-        payload["coverage"] = "exact selected lines at immutable snapshot version"
+        payload["coverage"] = _document_coverage(
+            snapshot, "exact selected lines at immutable snapshot version"
+        )
         payload["fidelity"] = "byte_exact"
         payload["more_available"] = more
         payload["result_token_budget_applied"] = estimator is not None
@@ -346,7 +417,9 @@ def _fit_exact_page(
             "start": cursor_context["scope_lines"][0],
             "end": cursor_context["scope_lines"][1],
         }
-        raw_payload["coverage"] = "exact selected lines at immutable snapshot version"
+        raw_payload["coverage"] = _document_coverage(
+            snapshot, "exact selected lines at immutable snapshot version"
+        )
         requested_mode = cursor_context.get("requested_mode", cursor_context["mode"])
         if requested_mode != "exact":
             raw_payload["requested_mode"] = requested_mode
@@ -495,7 +568,7 @@ def present_selected_scope(
         payload = _base_payload(snapshot, "exact", excerpt)
         payload.update(
             {
-                "coverage": selected.coverage,
+                "coverage": _document_coverage(snapshot, selected.coverage),
                 "selected_lines": {"start": start_line, "end": end_line},
                 "line_ranges": [{"start_line": item[0], "end_line": item[1]} for item in chosen],
                 "selector": selected.selector,
@@ -522,7 +595,7 @@ def present_selected_scope(
         raw_payload = _base_payload(snapshot, "exact", selected.text)
         raw_payload.update(
             {
-                "coverage": selected.coverage,
+                "coverage": _document_coverage(snapshot, selected.coverage),
                 "selected_lines": {
                     "start": selected.line_start,
                     "end": selected.line_end,
@@ -690,10 +763,11 @@ def present_snapshot(
         if eval_arm == "raw":
             payload["eval_arm"] = "raw"
         payload["selected_lines"] = {"start": resolved_scope[0], "end": resolved_scope[1]}
-        payload["coverage"] = (
+        payload["coverage"] = _document_coverage(
+            snapshot,
             "complete source snapshot"
             if resolved_scope == (1, len(lines))
-            else "exact selected lines at immutable snapshot version"
+            else "exact selected lines at immutable snapshot version",
         )
         payload["fidelity"] = candidate.fidelity
         payload["compression_applied"] = candidate.applied
@@ -709,10 +783,11 @@ def present_snapshot(
         if eval_arm == "raw":
             raw_payload["eval_arm"] = "raw"
         raw_payload["selected_lines"] = {"start": resolved_scope[0], "end": resolved_scope[1]}
-        raw_payload["coverage"] = (
+        raw_payload["coverage"] = _document_coverage(
+            snapshot,
             "complete source snapshot"
             if resolved_scope == (1, len(lines))
-            else "exact selected lines at immutable snapshot version"
+            else "exact selected lines at immutable snapshot version",
         )
         raw_payload["compression_applied"] = False
         raw_payload["compression_transform"] = None
@@ -772,10 +847,11 @@ def present_snapshot(
             payload.update(
                 {
                     "requested_mode": "focused",
-                    "coverage": (
+                    "coverage": _document_coverage(
+                        snapshot,
                         "partial (no lexical matches; full document not represented)"
                         if not all_passages
-                        else "partial (no passages remain on this cursor page)"
+                        else "partial (no passages remain on this cursor page)",
                     ),
                     "selected_lines": None,
                     "fidelity": "partial_exact_excerpt",
@@ -808,7 +884,9 @@ def present_snapshot(
             payload.update(
                 {
                     "requested_mode": "focused",
-                    "coverage": "partial (selected exact passages; omitted document content)",
+                    "coverage": _document_coverage(
+                        snapshot, "partial (selected exact passages; omitted document content)"
+                    ),
                     "selected_lines": None,
                     "line_ranges": [block.reference() for block in proposed],
                     "omitted_ranges": list(omitted_ranges),
@@ -841,7 +919,9 @@ def present_snapshot(
                 omission_payload.update(
                     {
                         "requested_mode": "focused",
-                        "coverage": "partial (oversized passages omitted; exact ranges listed)",
+                        "coverage": _document_coverage(
+                            snapshot, "partial (oversized passages omitted; exact ranges listed)"
+                        ),
                         "selected_lines": None,
                         "line_ranges": [],
                         "omitted_ranges": list(omitted_ranges),
@@ -905,7 +985,9 @@ def present_snapshot(
             best_payload.update(
                 {
                     "requested_mode": "focused",
-                    "coverage": "partial (selected exact passages; omitted document content)",
+                    "coverage": _document_coverage(
+                        snapshot, "partial (selected exact passages; omitted document content)"
+                    ),
                     "selected_lines": None,
                     "line_ranges": [block.reference() for block in proposed],
                     "omitted_ranges": list(omitted_ranges),
@@ -924,10 +1006,20 @@ def present_snapshot(
         )
 
     # Overview is intentionally an inventory, never an authoritative summary.
-    headings = [
-        {"line": number, "heading": title}
-        for number, _level, title in markdown_headings(snapshot.text)
-    ]
+    if _is_document(snapshot):
+        headings, inventory_label = _document_inventory(snapshot)
+    else:
+        headings = [
+            {"line": number, "heading": title}
+            for number, _level, title in markdown_headings(snapshot.text)
+        ]
+        inventory_label = "heading"
+    inventory_coverage = _document_coverage(
+        snapshot, f"partial ({inventory_label} inventory only; not a document summary)"
+    )
+    empty_coverage = _document_coverage(
+        snapshot, f"partial (no {inventory_label}s indexed; not a document summary)"
+    )
     heading_offset = offset if cursor is not None else 0
     if heading_offset > len(headings):
         raise PolicyError("cursor_mismatch")
@@ -943,7 +1035,7 @@ def present_snapshot(
         payload.update(
             {
                 "requested_mode": "overview",
-                "coverage": "partial (heading inventory only; not a document summary)",
+                "coverage": inventory_coverage,
                 "selected_lines": None,
                 "fidelity": "partial_inventory",
                 "headings": proposed,
@@ -962,7 +1054,7 @@ def present_snapshot(
         payload.update(
             {
                 "requested_mode": "overview",
-                "coverage": "partial (no headings indexed; not a document summary)",
+                "coverage": empty_coverage,
                 "selected_lines": None,
                 "fidelity": "partial_inventory",
                 "headings": [],
@@ -1008,7 +1100,7 @@ def present_snapshot(
         best_payload.update(
             {
                 "requested_mode": "overview",
-                "coverage": "partial (heading inventory only; not a document summary)",
+                "coverage": inventory_coverage,
                 "selected_lines": None,
                 "fidelity": "partial_inventory",
                 "headings": included_headings,
