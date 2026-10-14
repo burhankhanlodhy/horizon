@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase F documents and packaging"
 date: 2026-10-14
-status: f1-documents-in-progress
+status: f1-f2-complete-locally-f3-pending
 phase: F
 milestones: [M4, M5]
 ---
@@ -26,8 +26,8 @@ Decisions (2026-10-14, by the owner):
 
 | Stage | Scope | Status |
 |---|---|---|
-| F1 | PDF/DOCX extraction, block anchors, page/paragraph/table selectors, unsupported detection | in progress |
-| F2 | Frozen-aware entrypoint and worker spawn, broker lifecycle for an installed extension, PyInstaller build, MCPB manifest and pack, local smoke | pending |
+| F1 | PDF/DOCX extraction, block anchors, page/paragraph/table selectors, unsupported detection | complete locally |
+| F2 | Frozen-aware entrypoint and worker spawn, broker lifecycle for an installed extension, PyInstaller build, MCPB manifest and pack, local smoke | complete locally |
 | F3 | Clean-machine install/uninstall/rollback and signing (needs a second Windows machine and a code-signing certificate) | pending |
 
 "Exact" for PDF/DOCX means exact text in the extracted representation with a
@@ -244,3 +244,48 @@ the first closes.
 Signing (Authenticode for the executable, plus MCPB signing) and the
 clean-machine install/uninstall/rollback check are F3 and need the owner's
 certificate and a second machine.
+
+## F1/F2 results
+
+- Extraction:
+  - PDF gives one block per page. Encrypted files try an empty password, then
+    fail with `pdf_encrypted`, and text-free files fail with `pdf_no_text`.
+    Pages without text and pages with images are reported.
+  - DOCX gives paragraphs, headings with levels, and tables. Zip size and
+    ratio limits are checked before decompressing, DOCTYPE and ENTITY are
+    rejected, tracked changes are refused, and omitted parts are reported.
+  - Page, paragraph and table selectors always return whole blocks. Results
+    carry the extractor version and name omitted content in their coverage.
+- Known extraction gaps: images nested in PDF form XObjects are not detected,
+  so `images_present` can be missed. Only code review covers a DOCX entry that
+  lies about its size; the read is bounded and Python's `zipfile` also
+  rejects a size mismatch.
+- Build: a 59.1 MiB one-folder bundle (178 files) and a 31.6 MB `.mcpb`. The
+  build excludes the proxy and ML stacks; `starlette`/`uvicorn` stay because
+  the MCP SDK imports them.
+- Smoke on the frozen build:
+  - **Source profile:** search, PDF open and page retrieve, and DOCX
+    paragraph retrieve all worked. The broker and worker were started by the
+    executable itself, and the same calls worked from the unpacked `.mcpb`.
+  - **Compute profile:** seven tools, exact grouped decimals, a rendered
+    artifact and a batch. Results are in `desktop/mcp/extension/README.md`.
+- The manifest lists the four default tools with `tools_generated: true`.
+  `source` remains the default profile because the compute schemas cost
+  about 1,370 extra tokens per chat.
+- Verification: `pytest tests/desktop_mcp` plus the MCP dependency-contract and
+  CCR HTTP tests report 914 passed, 2 skipped; ruff check and format pass.
+
+## F3 (needs the owner)
+
+- Install the `.mcpb` in Claude Desktop on a clean Windows machine with no
+  developer Python, choose an approved folder, and run search, open and a PDF
+  page retrieve in two chats. Then uninstall, and confirm that no broker,
+  capability file or artifact folder is left behind, and that the native
+  workflow is unaffected.
+- This also answers the open question of whether Claude Desktop's process job
+  behaves like the SDK's.
+- Sign the executable (Authenticode) and the extension with the owner's
+  certificate.
+- Publish only to the private release bucket, as a separate approved step.
+- Decide where the companion is launched from for extension users. Today it is
+  `contextshrink-desktop.exe companion --config <extension settings path>`.

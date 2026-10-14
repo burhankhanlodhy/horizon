@@ -1,0 +1,75 @@
+{
+  "manifest_version": "0.3",
+  "name": "contextshrink-desktop",
+  "display_name": "ContextShrink",
+  "version": "0.1.0",
+  "description": "Search and read approved local folders of text, PDF and DOCX files through exact, bounded ContextShrink tools.",
+  "long_description": "ContextShrink lets Claude search and open only the folders you approve, and retrieves exact bounded pieces of text, PDF pages and DOCX paragraphs. Files outside the approved folders are never read. The optional compute profile adds exact table operations and render-to-file.",
+  "author": {
+    "name": "ContextShrink"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/contextshrink-desktop.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/contextshrink-desktop.exe",
+      "args": [
+        "serve",
+        "--extension",
+        "--tool-profile",
+        "${user_config.tool_profile}",
+        "--artifact-root",
+        "${user_config.artifact_root}",
+        "--approved-roots",
+        "${user_config.approved_roots}"
+      ],
+      "env": {}
+    }
+  },
+  "user_config": {
+    "approved_roots": {
+      "type": "directory",
+      "title": "Approved folders",
+      "description": "Folders ContextShrink may search and read. Files outside these folders are never read.",
+      "required": true,
+      "multiple": true
+    },
+    "tool_profile": {
+      "type": "string",
+      "title": "Tool profile",
+      "description": "source exposes the four read tools. compute also adds analyze, render and batch retrieval.",
+      "required": false,
+      "default": "source"
+    },
+    "artifact_root": {
+      "type": "directory",
+      "title": "Artifact folder",
+      "description": "Optional folder where render writes table files. Leave empty to disable render.",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ]
+  },
+  "tools": [
+    {
+      "name": "contextshrink_search",
+      "description": "Search available ContextShrink sources."
+    },
+    {
+      "name": "contextshrink_open",
+      "description": "Open a source using a bounded presentation mode."
+    },
+    {
+      "name": "contextshrink_retrieve",
+      "description": "Retrieve an exact bounded selector from an available source version."
+    },
+    {
+      "name": "contextshrink_stats",
+      "description": "Return local ContextShrink diagnostic statistics."
+    }
+  ],
+  "tools_generated": true
+}

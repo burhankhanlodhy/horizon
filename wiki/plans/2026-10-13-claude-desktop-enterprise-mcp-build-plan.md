@@ -73,7 +73,7 @@ Desktop checks remain pending.
 | C | Local retrieval, compression/selection, reversible formats and SDK payload evaluation passed; live Desktop and Enterprise validation pending | M2, M3, M10 |
 | D | Local browser companion, session-scoped staging, reference-only packets and CLI implemented; target-app validation pending | M9 |
 | E | Typed computation, fused reads, instruction pack, role-separated artifacts and companion browser implemented locally; live Desktop validation pending | M11, M12 |
-| F | Digital documents, runtime packaging and installation | M4, M5 |
+| F | PDF/DOCX extraction and a self-contained MCPB Windows build implemented and smoke-tested locally; clean-machine install and signing pending | M4, M5 |
 | G | Enterprise trials, suite hardening and beta rollout | M6, M7, M13, M14 |
 | H | Optional advanced media/models, upstream adapters and hosted connector | Extensions |
 
