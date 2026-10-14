@@ -1,0 +1,1048 @@
+{
+  "arms": {
+    "optimized": {
+      "arm": "optimized",
+      "calls": [
+        {
+          "argument_token_estimate": 10,
+          "argument_utf8_bytes": 32,
+          "inner_result_text_token_estimate": 79,
+          "inner_result_text_utf8_bytes": 351,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 115,
+          "sdk_call_tool_result_utf8_bytes": 508,
+          "status": "success",
+          "tool": "contextshrink_search"
+        },
+        {
+          "argument_token_estimate": 39,
+          "argument_utf8_bytes": 124,
+          "inner_result_text_token_estimate": 21,
+          "inner_result_text_utf8_bytes": 103,
+          "is_error": true,
+          "sdk_call_tool_result_token_estimate": 55,
+          "sdk_call_tool_result_utf8_bytes": 235,
+          "status": "error",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 46,
+          "argument_utf8_bytes": 156,
+          "inner_result_text_token_estimate": 474,
+          "inner_result_text_utf8_bytes": 1636,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 520,
+          "sdk_call_tool_result_utf8_bytes": 1908,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 43,
+          "argument_utf8_bytes": 100,
+          "inner_result_text_token_estimate": 441,
+          "inner_result_text_utf8_bytes": 1481,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 484,
+          "sdk_call_tool_result_utf8_bytes": 1751,
+          "status": "success",
+          "tool": "contextshrink_retrieve"
+        },
+        {
+          "argument_token_estimate": 46,
+          "argument_utf8_bytes": 163,
+          "inner_result_text_token_estimate": 570,
+          "inner_result_text_utf8_bytes": 1909,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 621,
+          "sdk_call_tool_result_utf8_bytes": 2210,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 110,
+          "inner_result_text_token_estimate": 396,
+          "inner_result_text_utf8_bytes": 1344,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 437,
+          "sdk_call_tool_result_utf8_bytes": 1598,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 115,
+          "inner_result_text_token_estimate": 642,
+          "inner_result_text_utf8_bytes": 2018,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 761,
+          "sdk_call_tool_result_utf8_bytes": 2409,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 117,
+          "inner_result_text_token_estimate": 425,
+          "inner_result_text_utf8_bytes": 1387,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 476,
+          "sdk_call_tool_result_utf8_bytes": 1660,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 38,
+          "argument_utf8_bytes": 115,
+          "inner_result_text_token_estimate": 484,
+          "inner_result_text_utf8_bytes": 1722,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 528,
+          "sdk_call_tool_result_utf8_bytes": 1989,
+          "status": "success",
+          "tool": "contextshrink_open"
+        }
+      ],
+      "enabled_tool_count": 4,
+      "quality": [
+        {
+          "case_id": "renewal-negation-and-notice",
+          "compression_applied": false,
+          "coverage": "partial (selected exact passages; omitted document content)",
+          "effective_mode": "focused",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "partial_exact_excerpt",
+          "full_inner_result_accounting": {
+            "byte_delta": 30,
+            "delivered_token_estimate": 474,
+            "delivered_utf8_bytes": 1636,
+            "raw_equivalent_token_estimate": 468,
+            "raw_equivalent_utf8_bytes": 1666,
+            "token_delta_estimate": -6
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 1,
+          "recovery_targets_found_count": 1,
+          "requested_mode": "focused",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "retention-number-and-legal-hold",
+          "compression_applied": false,
+          "coverage": "partial (selected exact passages; omitted document content)",
+          "effective_mode": "focused",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "partial_exact_excerpt",
+          "full_inner_result_accounting": {
+            "byte_delta": -325,
+            "delivered_token_estimate": 570,
+            "delivered_utf8_bytes": 1909,
+            "raw_equivalent_token_estimate": 459,
+            "raw_equivalent_utf8_bytes": 1584,
+            "token_delta_estimate": -111
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "focused",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "small-input-no-positive-savings",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 396,
+            "delivered_utf8_bytes": 1344,
+            "raw_equivalent_token_estimate": 396,
+            "raw_equivalent_utf8_bytes": 1345,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 1
+        },
+        {
+          "case_id": "structured-json-number-lexemes",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 642,
+            "delivered_utf8_bytes": 2018,
+            "raw_equivalent_token_estimate": 642,
+            "raw_equivalent_utf8_bytes": 2019,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 3
+        },
+        {
+          "case_id": "duplicate-json-key-exact-fallback",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 425,
+            "delivered_utf8_bytes": 1387,
+            "raw_equivalent_token_estimate": 425,
+            "raw_equivalent_utf8_bytes": 1388,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "repeated-log-positive-fold",
+          "compression_applied": true,
+          "coverage": "complete source snapshot",
+          "effective_mode": "compact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "reversible_fold",
+          "full_inner_result_accounting": {
+            "byte_delta": 853,
+            "delivered_token_estimate": 484,
+            "delivered_utf8_bytes": 1722,
+            "raw_equivalent_token_estimate": 714,
+            "raw_equivalent_utf8_bytes": 2575,
+            "token_delta_estimate": 230
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 2
+        }
+      ],
+      "server_instructions_token_estimate": 56,
+      "server_instructions_utf8_bytes": 320,
+      "tool_schema_token_estimate": 795,
+      "tool_schema_utf8_bytes": 3243,
+      "tool_schemas": [
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search available ContextShrink sources.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 5,
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "default": "",
+                "maxLength": 4096,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_search",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Open a source using a bounded presentation mode.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "mode": {
+                "default": "exact",
+                "enum": [
+                  "exact",
+                  "compact",
+                  "focused",
+                  "overview"
+                ],
+                "type": "string"
+              },
+              "query": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "result_token_budget": {
+                "maximum": 8000,
+                "minimum": 128,
+                "type": "integer"
+              },
+              "source": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_open",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Retrieve an exact bounded selector from an available source version.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "result_token_budget": {
+                "maximum": 8000,
+                "minimum": 128,
+                "type": "integer"
+              },
+              "selector": {
+                "description": "Use logical CSV/TSV record numbers for rows; record 1 is the first record, including a header when present.",
+                "discriminator": {
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "start": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "lines",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "heading": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "occurrence": {
+                        "default": 1,
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "markdown_section",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "heading"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pointer": {
+                        "maxLength": 1024,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "json_pointer",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "pointer"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "start": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "rows",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "object"
+              },
+              "source_id": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "selector"
+            ],
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_retrieve",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Return local ContextShrink diagnostic statistics.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_stats",
+          "outputSchema": null,
+          "title": null
+        }
+      ],
+      "totals": {
+        "argument_token_estimate": 333,
+        "argument_utf8_bytes": 1032,
+        "call_count": 9,
+        "counterfactual_per_call_raw_equivalent_inner_tokens": 3104,
+        "error_call_count": 1,
+        "inner_result_text_token_estimate": 3532,
+        "inner_result_text_utf8_bytes": 11951,
+        "observed_surface_token_estimate_without_inner_duplicate": 5181,
+        "observed_surface_utf8_bytes_without_inner_duplicate": 18863,
+        "one_time_schema_and_instructions_token_estimate": 851,
+        "one_time_schema_and_instructions_utf8_bytes": 3563,
+        "sdk_call_tool_result_token_estimate": 3997,
+        "sdk_call_tool_result_utf8_bytes": 14268
+      }
+    },
+    "raw": {
+      "arm": "raw",
+      "calls": [
+        {
+          "argument_token_estimate": 10,
+          "argument_utf8_bytes": 32,
+          "inner_result_text_token_estimate": 79,
+          "inner_result_text_utf8_bytes": 351,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 115,
+          "sdk_call_tool_result_utf8_bytes": 508,
+          "status": "success",
+          "tool": "contextshrink_search"
+        },
+        {
+          "argument_token_estimate": 39,
+          "argument_utf8_bytes": 124,
+          "inner_result_text_token_estimate": 21,
+          "inner_result_text_utf8_bytes": 103,
+          "is_error": true,
+          "sdk_call_tool_result_token_estimate": 55,
+          "sdk_call_tool_result_utf8_bytes": 235,
+          "status": "error",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 46,
+          "argument_utf8_bytes": 156,
+          "inner_result_text_token_estimate": 480,
+          "inner_result_text_utf8_bytes": 1731,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 533,
+          "sdk_call_tool_result_utf8_bytes": 2001,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 46,
+          "argument_utf8_bytes": 163,
+          "inner_result_text_token_estimate": 468,
+          "inner_result_text_utf8_bytes": 1646,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 521,
+          "sdk_call_tool_result_utf8_bytes": 1916,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 110,
+          "inner_result_text_token_estimate": 400,
+          "inner_result_text_utf8_bytes": 1361,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 441,
+          "sdk_call_tool_result_utf8_bytes": 1619,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 115,
+          "inner_result_text_token_estimate": 641,
+          "inner_result_text_utf8_bytes": 2035,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 760,
+          "sdk_call_tool_result_utf8_bytes": 2430,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 37,
+          "argument_utf8_bytes": 117,
+          "inner_result_text_token_estimate": 433,
+          "inner_result_text_utf8_bytes": 1404,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 484,
+          "sdk_call_tool_result_utf8_bytes": 1681,
+          "status": "success",
+          "tool": "contextshrink_open"
+        },
+        {
+          "argument_token_estimate": 38,
+          "argument_utf8_bytes": 115,
+          "inner_result_text_token_estimate": 720,
+          "inner_result_text_utf8_bytes": 2582,
+          "is_error": false,
+          "sdk_call_tool_result_token_estimate": 784,
+          "sdk_call_tool_result_utf8_bytes": 2863,
+          "status": "success",
+          "tool": "contextshrink_open"
+        }
+      ],
+      "enabled_tool_count": 4,
+      "quality": [
+        {
+          "case_id": "renewal-negation-and-notice",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 480,
+            "delivered_utf8_bytes": 1731,
+            "raw_equivalent_token_estimate": 480,
+            "raw_equivalent_utf8_bytes": 1732,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 1,
+          "recovery_targets_found_count": 1,
+          "requested_mode": "focused",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "retention-number-and-legal-hold",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 468,
+            "delivered_utf8_bytes": 1646,
+            "raw_equivalent_token_estimate": 468,
+            "raw_equivalent_utf8_bytes": 1647,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "focused",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "small-input-no-positive-savings",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 400,
+            "delivered_utf8_bytes": 1361,
+            "raw_equivalent_token_estimate": 400,
+            "raw_equivalent_utf8_bytes": 1362,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 1
+        },
+        {
+          "case_id": "structured-json-number-lexemes",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 641,
+            "delivered_utf8_bytes": 2035,
+            "raw_equivalent_token_estimate": 641,
+            "raw_equivalent_utf8_bytes": 2036,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 3
+        },
+        {
+          "case_id": "duplicate-json-key-exact-fallback",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 433,
+            "delivered_utf8_bytes": 1404,
+            "raw_equivalent_token_estimate": 433,
+            "raw_equivalent_utf8_bytes": 1405,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 2
+        },
+        {
+          "case_id": "repeated-log-positive-fold",
+          "compression_applied": false,
+          "coverage": "exact selected lines at immutable snapshot version",
+          "effective_mode": "exact",
+          "exactly_recovered_literal_count": 0,
+          "fidelity": "byte_exact",
+          "full_inner_result_accounting": {
+            "byte_delta": 1,
+            "delivered_token_estimate": 720,
+            "delivered_utf8_bytes": 2582,
+            "raw_equivalent_token_estimate": 720,
+            "raw_equivalent_utf8_bytes": 2583,
+            "token_delta_estimate": 0
+          },
+          "missing_after_recovery_count": 0,
+          "missing_from_open_count": 0,
+          "recovery_target_count": 0,
+          "recovery_targets_found_count": 0,
+          "requested_mode": "compact",
+          "required_literal_count": 1
+        }
+      ],
+      "server_instructions_token_estimate": 56,
+      "server_instructions_utf8_bytes": 320,
+      "tool_schema_token_estimate": 795,
+      "tool_schema_utf8_bytes": 3243,
+      "tool_schemas": [
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Search available ContextShrink sources.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 5,
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "default": "",
+                "maxLength": 4096,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_search",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Open a source using a bounded presentation mode.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "mode": {
+                "default": "exact",
+                "enum": [
+                  "exact",
+                  "compact",
+                  "focused",
+                  "overview"
+                ],
+                "type": "string"
+              },
+              "query": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "result_token_budget": {
+                "maximum": 8000,
+                "minimum": 128,
+                "type": "integer"
+              },
+              "source": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_open",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Retrieve an exact bounded selector from an available source version.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "result_token_budget": {
+                "maximum": 8000,
+                "minimum": 128,
+                "type": "integer"
+              },
+              "selector": {
+                "description": "Use logical CSV/TSV record numbers for rows; record 1 is the first record, including a header when present.",
+                "discriminator": {
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "start": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "lines",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "heading": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "occurrence": {
+                        "default": 1,
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "markdown_section",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "heading"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "pointer": {
+                        "maxLength": 1024,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "json_pointer",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "pointer"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "end": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "start": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "rows",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "start",
+                      "end"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "object"
+              },
+              "source_id": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "selector"
+            ],
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_retrieve",
+          "outputSchema": null,
+          "title": null
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": null
+          },
+          "description": "Return local ContextShrink diagnostic statistics.",
+          "execution": null,
+          "icons": null,
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "meta": null,
+          "name": "contextshrink_stats",
+          "outputSchema": null,
+          "title": null
+        }
+      ],
+      "totals": {
+        "argument_token_estimate": 290,
+        "argument_utf8_bytes": 932,
+        "call_count": 8,
+        "counterfactual_per_call_raw_equivalent_inner_tokens": 3142,
+        "error_call_count": 1,
+        "inner_result_text_token_estimate": 3242,
+        "inner_result_text_utf8_bytes": 11213,
+        "observed_surface_token_estimate_without_inner_duplicate": 4834,
+        "observed_surface_utf8_bytes_without_inner_duplicate": 17748,
+        "one_time_schema_and_instructions_token_estimate": 851,
+        "one_time_schema_and_instructions_utf8_bytes": 3563,
+        "sdk_call_tool_result_token_estimate": 3693,
+        "sdk_call_tool_result_utf8_bytes": 13253
+      }
+    }
+  },
+  "check": "synthetic_mcp_sdk_ab_eval",
+  "claims": {
+    "quality_gate": "required literals are present in the open result or recoverable by an exact line selector; focused/overview coverage may remain partial",
+    "quality_interpretation": "deterministic fixture coverage checks, not model-answer faithfulness or a blind score",
+    "universal_positive_savings": false
+  },
+  "cost_attribution": {
+    "enterprise_billing": "not_measured",
+    "raw_equivalent": "per-call counterfactual baseline, not task totals or measured saved tokens",
+    "token_counts": "estimates with declared counter provenance; not Claude usage counts",
+    "usd_savings": "not_reported"
+  },
+  "execution": {
+    "counting": {
+      "count_status": "estimate_not_claude_count",
+      "counter_version": "tiktoken-0.14.0",
+      "counting_model_assumption": null,
+      "fallback": false,
+      "tokenizer_name": "o200k_base"
+    },
+    "model_api_calls": 0,
+    "network_calls": 0,
+    "transport": "in_memory_mcp_python_sdk_session",
+    "user_sources_read": false
+  },
+  "fixture_case_count": 6,
+  "fixture_file_provenance": "synthetic_fixture_only",
+  "fixture_provenance": "synthetic_fixture_only",
+  "measurement_scope": {
+    "arguments": "serialized tool arguments counted for every call",
+    "host_added_context": "unknown",
+    "inner_result": "TextContent.text counted separately; per-result source/full-result accounting is nested in opened results",
+    "json_rpc_framing": "not captured by the in-memory transport",
+    "provider_hidden_prompt_material": "unknown",
+    "schemas_and_instructions": "captured once per arm and included as fixed one-time estimate",
+    "sdk_result": "serialized typed CallToolResult objects counted for every call, including errors and exact recovery calls",
+    "stdio_protocol_bytes": "not measured"
+  },
+  "phase": "C",
+  "schema_version": 2,
+  "status": "passed"
+}

@@ -284,3 +284,6 @@ experiments/claude-code/read-maturation/template/
 experiments/compaction-paired/template/
 experiments/cache-keeper/live.log
 horizon/_build_info.py
+
+# Personal Desktop MCP broker settings; copy local-settings.example.json
+desktop/mcp/local-settings.json

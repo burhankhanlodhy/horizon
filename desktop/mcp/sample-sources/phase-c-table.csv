@@ -1,0 +1,4 @@
+record_id,retention_years,legal_hold,delete_allowed
+SYN-001,7,true,false
+SYN-002,5,false,true
+SYN-003,7,true,false

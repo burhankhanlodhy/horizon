@@ -1,0 +1,17 @@
+{
+  "profile": "local",
+  "approved_roots": [
+    "C:/Users/YOUR_USERNAME/OneDrive/Desktop/ContextShrink/desktop/mcp/sample-sources"
+  ],
+  "broker_id": "desktop",
+  "result_token_budget": 2000,
+  "max_result_bytes": 65536,
+  "max_input_bytes": 32768,
+  "max_source_bytes": 8388608,
+  "max_snapshot_bytes": 16777216,
+  "max_store_bytes": 134217728,
+  "max_snapshots": 64,
+  "max_broker_clients": 8,
+  "broker_timeout_seconds": 10,
+  "snapshot_ttl_seconds": 3600
+}

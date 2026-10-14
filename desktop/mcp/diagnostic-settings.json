@@ -1,0 +1,9 @@
+{
+  "profile": "diagnostic",
+  "approved_roots": [],
+  "result_token_budget": 2000,
+  "max_result_bytes": 65536,
+  "max_input_bytes": 32768,
+  "snapshot_ttl_seconds": 3600,
+  "counting_model": null
+}

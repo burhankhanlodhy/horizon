@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "contextshrink-phase-a": {
+      "command": "C:/Users/YOUR_USERNAME/OneDrive/Desktop/ContextShrink/.venv/Scripts/python.exe",
+      "args": [
+        "C:/Users/YOUR_USERNAME/OneDrive/Desktop/ContextShrink/desktop/mcp/launch_stdio.py",
+        "--config",
+        "C:/Users/YOUR_USERNAME/OneDrive/Desktop/ContextShrink/desktop/mcp/diagnostic-settings.json"
+      ]
+    }
+  }
+}

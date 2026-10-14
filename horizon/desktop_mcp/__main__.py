@@ -1,0 +1,131 @@
+"""Command-line entry point for the diagnostic desktop MCP spike."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import signal
+import sys
+import threading
+from collections.abc import Sequence
+from pathlib import Path
+
+from .settings import ConfigurationError, load_settings
+
+
+def _print_json(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m horizon.desktop_mcp")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    serve = commands.add_parser("serve", help="serve diagnostic fixtures over MCP stdio")
+    serve.add_argument("--config", type=Path)
+
+    broker = commands.add_parser(
+        "broker", help="serve approved local sources over the Windows named pipe"
+    )
+    broker.add_argument("--config", type=Path, required=True)
+
+    doctor = commands.add_parser("doctor", help="write a local runtime capability report")
+    doctor.add_argument("--output", type=Path)
+
+    probe = commands.add_parser(
+        "probe",
+        help="run the local MCP SDK stdio probe (does not verify Claude Desktop)",
+        description="Exercise the local MCP SDK stdio path; this does not verify Claude Desktop compatibility.",
+    )
+    probe.add_argument("--output", type=Path)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "broker":
+        from .broker import BrokerService
+        from .broker_transport import BrokerTransportError
+
+        stop_event = threading.Event()
+        try:
+            settings = load_settings(args.config)
+            if settings.profile != "local":
+                raise ConfigurationError("local_profile_required")
+            service = BrokerService(args.config)
+            try:
+                signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+                signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+            except (ValueError, OSError):
+                pass
+            service.serve(stop_event=stop_event)
+        except ConfigurationError as exc:
+            print(
+                json.dumps({"error": exc.code, "fields": list(exc.fields)}, separators=(",", ":")),
+                file=sys.stderr,
+            )
+            return 2
+        except BrokerTransportError as exc:
+            print(json.dumps({"error": exc.code}, separators=(",", ":")), file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            return 0
+        except Exception as exc:
+            code = getattr(exc, "code", "broker_start_failed")
+            if not isinstance(code, str) or not code.replace("_", "").isalnum() or len(code) > 64:
+                code = "broker_start_failed"
+            print(json.dumps({"error": code}, separators=(",", ":")), file=sys.stderr)
+            return 2
+        return 0
+
+    if args.command == "serve":
+        try:
+            from .server import serve_stdio
+        except ImportError:
+            print('{"error":"mcp_sdk_unavailable"}', file=sys.stderr)
+            return 2
+
+        try:
+            settings = load_settings(args.config)
+            asyncio.run(serve_stdio(settings))
+        except ConfigurationError as exc:
+            print(
+                json.dumps({"error": exc.code, "fields": list(exc.fields)}, separators=(",", ":")),
+                file=sys.stderr,
+            )
+            return 2
+        except (BrokenPipeError, EOFError):
+            return 0
+        except Exception as exc:
+            code = getattr(exc, "code", "server_start_failed")
+            if not isinstance(code, str) or not code.replace("_", "").isalnum() or len(code) > 64:
+                code = "server_start_failed"
+            print(json.dumps({"error": code}, separators=(",", ":")), file=sys.stderr)
+            return 2
+        return 0
+
+    from .capabilities import run_doctor, run_probe
+
+    try:
+        if args.command == "doctor":
+            result = run_doctor(args.output)
+        elif args.command == "probe":
+            result = asyncio.run(run_probe(args.output))
+        else:  # pragma: no cover - argparse constrains the command names
+            return 2
+    except OSError:
+        print('{"error":"report_write_failed"}', file=sys.stderr)
+        return 2
+    # Doctor/probe are intentionally one-shot JSON commands; serve writes only
+    # MCP protocol frames to stdout.
+    _print_json(result)
+    if result.get("output_error"):
+        return 2
+    if args.command == "doctor":
+        return 0 if result.get("status") == "ready" else 2
+    return 0 if result.get("status") == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,54 @@
+{
+  "capabilities": {
+    "api_key_required": false,
+    "billing": "unknown",
+    "broker": "not_implemented",
+    "claude_desktop": "not_tested",
+    "compression": "not_implemented",
+    "desktop_apps": "not_tested",
+    "filesystem_access": "not_implemented",
+    "model_required": false,
+    "protocol_compatibility": "installed_sdk_only"
+  },
+  "check": "stdio_probe",
+  "phase": "A",
+  "probe": {
+    "cost_usd_reported": false,
+    "desktop_application_compatibility": "not_tested",
+    "exact_open_repeat": "passed",
+    "fixture_ids_discovered": [
+      "fixture:json",
+      "fixture:log",
+      "fixture:note"
+    ],
+    "line_retrieve": "passed",
+    "negotiated_protocol_version": "2025-11-25",
+    "search_empty_query": "passed",
+    "server_info": {
+      "name": "contextshrink-desktop",
+      "version": "0.1.0"
+    },
+    "stats_raw_only": true,
+    "stdio_child_process": "passed",
+    "tools_listed": [
+      "contextshrink_search",
+      "contextshrink_open",
+      "contextshrink_retrieve",
+      "contextshrink_stats"
+    ],
+    "unauthorized_source_rejected": true,
+    "unsupported_mode_rejected": true
+  },
+  "runtime": {
+    "mcp_sdk": {
+      "desktop_application_compatibility": "not_tested",
+      "installed": true,
+      "sdk_protocol_version": "2025-11-25",
+      "version": "1.30.0"
+    },
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_implementation": "CPython",
+    "python_version": "3.12.14"
+  },
+  "status": "passed"
+}

@@ -1,0 +1,25 @@
+{
+  "api_key_or_model_used": false,
+  "checks": {
+    "approved_file_open": true,
+    "broker_started": true,
+    "children_stopped": true,
+    "cross_process_snapshot_retrieval": true,
+    "exact_range_retrieval": true,
+    "filename_search": true,
+    "new_version_after_mutation": true,
+    "old_snapshot_unchanged_after_mutation": true,
+    "outside_path_denied": true,
+    "oversized_open_returns_retrieval_handle": true,
+    "revoked_handle_denied": true
+  },
+  "phase": "B",
+  "runtime": {
+    "mcp_sdk": "1.30.0",
+    "platform": "win32",
+    "python": "3.12.14"
+  },
+  "status": "passed",
+  "synthetic_fixtures_only": true,
+  "user_configuration_modified": false
+}

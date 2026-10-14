@@ -1,0 +1,13 @@
+{
+  "policy_id": "synthetic-records-01",
+  "records": [
+    { "record_id": "SYN-001", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-002", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-003", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-004", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-005", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-006", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-007", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } },
+    { "record_id": "SYN-008", "retention_years": 7, "legal_hold": { "delete_allowed": false, "review_after_days": 30 }, "renewal": { "automatic": false, "notice_days": 30 } }
+  ]
+}

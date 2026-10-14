@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "provenance": "synthetic_fixture_only",
+  "cases": [
+    {
+      "id": "renewal-negation-and-notice",
+      "filename": "renewal.md",
+      "query": "renewal automatic written notice",
+      "required_literals": [
+        "This agreement will not automatically renew.",
+        "Either party must provide written notice at least 30 calendar days before the renewal date."
+      ],
+      "recovery_literals": ["Escalation: notify the on-call desk within 90 minutes."],
+      "text": "# Service Terms\n\nThe service starts on January 1. The standard support window is Monday through Friday.\n\n## Renewal\n\nThis agreement will not automatically renew.\nEither party must provide written notice at least 30 calendar days before the renewal date.\n\n## Contact\n\nSend routine questions to the service desk.\nEscalation: notify the on-call desk within 90 minutes.\n"
+    },
+    {
+      "id": "retention-number-and-legal-hold",
+      "filename": "retention.md",
+      "query": "records retention legal hold deletion",
+      "required_literals": [
+        "The team must retain complete financial records for exactly 7 years.",
+        "Records subject to a legal hold must not be deleted, even after the retention period ends."
+      ],
+      "text": "# Records Policy\n\n## Retention\n\nThe team must retain complete financial records for exactly 7 years.\n\n## Legal hold\n\nRecords subject to a legal hold must not be deleted, even after the retention period ends.\n\n## Disposal\n\nA manager reviews ordinary disposal requests each quarter.\n"
+    },
+    {
+      "id": "small-input-no-positive-savings",
+      "filename": "tiny.md",
+      "requested_mode": "compact",
+      "query": "status",
+      "required_literals": ["Status: ready."],
+      "text": "Status: ready.\n"
+    },
+    {
+      "id": "structured-json-number-lexemes",
+      "filename": "numbers.json",
+      "requested_mode": "compact",
+      "required_literals": ["9007199254740993.00", "-0.0", "false"],
+      "text": "{\n  \"records\": [\n    {\n      \"id\": 9007199254740993.00,\n      \"delta\": -0.0,\n      \"enabled\": false,\n      \"label\": \"alpha\"\n    },\n    {\n      \"id\": 9007199254740993.00,\n      \"delta\": -0.0,\n      \"enabled\": false,\n      \"label\": \"beta\"\n    },\n    {\n      \"id\": 9007199254740993.00,\n      \"delta\": -0.0,\n      \"enabled\": false,\n      \"label\": \"gamma\"\n    },\n    {\n      \"id\": 9007199254740993.00,\n      \"delta\": -0.0,\n      \"enabled\": false,\n      \"label\": \"delta\"\n    },\n    {\n      \"id\": 9007199254740993.00,\n      \"delta\": -0.0,\n      \"enabled\": false,\n      \"label\": \"epsilon\"\n    }\n  ]\n}\n"
+    },
+    {
+      "id": "duplicate-json-key-exact-fallback",
+      "filename": "duplicate.json",
+      "requested_mode": "compact",
+      "required_literals": ["\"state\": \"draft\"", "\"state\": \"final\""],
+      "text": "{\n  \"state\": \"draft\",\n  \"state\": \"final\"\n}\n"
+    },
+    {
+      "id": "repeated-log-positive-fold",
+      "filename": "repeated.log",
+      "requested_mode": "compact",
+      "optimized_literals": ["(repeated 24 times)"],
+      "required_literals": ["worker=beta status=ready event=periodic-heartbeat"],
+      "text": "worker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\nworker=beta status=ready event=periodic-heartbeat\n"
+    }
+  ]
+}
