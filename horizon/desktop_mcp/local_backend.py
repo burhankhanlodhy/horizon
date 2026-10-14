@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import Any
 
 from .artifacts import ArtifactError, ArtifactStore, Dependency
 from .batching import BatchError, fuse_reads
+from .broker_transport import ARTIFACT_CHUNK_BYTES
 from .measurement import LocalUsageLedger, TokenEstimator, finalize_accounting
 from .operations import OPERATIONS_VERSION, OperationError, run_operation
 from .policies import (
@@ -535,6 +537,69 @@ class LocalBackend:
         except LocalBackendError as exc:
             self._record_error("contextshrink_retrieve_batch", "batch", started, exc.code)
             raise
+
+    # Companion-only artifact operations. They are not recorded in the usage
+    # ledger, which covers model-facing calls only.
+
+    def artifact_list(self) -> dict[str, Any]:
+        """Manifests of live artifacts; empty before any render created a store."""
+        with self._lock:
+            store = self._existing_artifact_store_locked()
+            if store is None:
+                return {"artifacts": []}
+            try:
+                return {"artifacts": store.list()}
+            except ArtifactError as exc:
+                raise LocalBackendError(exc.code) from None
+
+    def artifact_read(self, artifact_id: str, offset: int, length: int) -> dict[str, Any]:
+        """Return one base64 slice of an artifact, verified by the store on read."""
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise LocalBackendError("invalid_arguments")
+        if (
+            isinstance(length, bool)
+            or not isinstance(length, int)
+            or not 1 <= length <= ARTIFACT_CHUNK_BYTES
+        ):
+            raise LocalBackendError("invalid_arguments")
+        with self._lock:
+            store = self._existing_artifact_store_locked()
+            if store is None:
+                raise LocalBackendError("artifact_unknown")
+            try:
+                manifest = store.manifest(artifact_id)
+                data = store.read(artifact_id)
+            except ArtifactError as exc:
+                raise LocalBackendError(exc.code) from None
+        total = len(data)
+        if offset > total:
+            raise LocalBackendError("invalid_arguments")
+        chunk = data[offset : offset + length]
+        return {
+            "artifact_id": artifact_id,
+            "offset": offset,
+            "data_base64": base64.b64encode(chunk).decode("ascii"),
+            "total_bytes": total,
+            "sha256": manifest["sha256"],
+            "eof": offset + len(chunk) >= total,
+        }
+
+    def artifact_delete(self, artifact_id: str) -> dict[str, Any]:
+        with self._lock:
+            store = self._existing_artifact_store_locked()
+            if store is None:
+                raise LocalBackendError("artifact_unknown")
+            try:
+                deleted = store.delete(artifact_id)
+            except ArtifactError as exc:
+                raise LocalBackendError(exc.code) from None
+        return {"deleted": deleted}
+
+    def _existing_artifact_store_locked(self) -> ArtifactStore | None:
+        """The current store without creating one; caller holds the lock."""
+        if self._artifact_closed:
+            return None
+        return self.artifact_store
 
     def close(self) -> None:
         """Close the artifact store and drop cached tables; safe to call repeatedly."""

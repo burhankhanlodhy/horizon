@@ -140,3 +140,24 @@ server for `contextshrink_open` with the displayed source handle. The broker
 must still be running with the same local config. Removing a staged source or
 letting it expire ends that source's recoverability. No Claude Desktop
 configuration change is needed for inline passthrough or compact previews.
+
+## Browse artifacts
+
+The **Artifacts** section lists generated results that the local broker holds
+for this session. Each row shows the title, format, row count, size, and
+expiry time. **Preview** shows the first rows the broker recorded, as plain
+text in a table, without a download. **Download** fetches the artifact through
+the companion with the session credential, then starts a save through your
+browser. Your browser's Save dialog chooses the destination; the companion
+never writes a file path you supply. **Delete** asks for confirmation, then
+removes the artifact from the broker.
+
+Artifacts expire automatically and disappear when the broker revokes them,
+for example when the source they were derived from is removed. A revoked or
+expired artifact returns a clear message, and **Refresh** reloads the list.
+Without an approved local broker config, the section reports that artifact
+browsing is unavailable.
+
+The MCP adapter that Claude Desktop uses cannot list, read, or delete
+artifacts. Only this companion can, through its own broker client and the
+session credential.

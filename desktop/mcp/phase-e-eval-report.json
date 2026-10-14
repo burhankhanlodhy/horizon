@@ -1,0 +1,248 @@
+{
+  "all_answers_match": true,
+  "arms": {
+    "optimized": {
+      "enabled_tool_count": 7,
+      "one_time_surface_token_estimate": 2219,
+      "overall_total_token_estimate": 6655,
+      "server_instructions_token_estimate": 81,
+      "server_instructions_utf8_bytes": 451,
+      "task_total_token_estimate": 4436,
+      "tool_names": [
+        "contextshrink_search",
+        "contextshrink_open",
+        "contextshrink_retrieve",
+        "contextshrink_stats",
+        "contextshrink_analyze",
+        "contextshrink_render",
+        "contextshrink_retrieve_batch"
+      ],
+      "tool_schema_token_estimate": 2138,
+      "tool_schema_utf8_bytes": 8547
+    },
+    "raw": {
+      "enabled_tool_count": 4,
+      "one_time_surface_token_estimate": 851,
+      "overall_total_token_estimate": 116868,
+      "server_instructions_token_estimate": 56,
+      "server_instructions_utf8_bytes": 320,
+      "task_total_token_estimate": 116017,
+      "tool_names": [
+        "contextshrink_search",
+        "contextshrink_open",
+        "contextshrink_retrieve",
+        "contextshrink_stats"
+      ],
+      "tool_schema_token_estimate": 795,
+      "tool_schema_utf8_bytes": 3243
+    }
+  },
+  "check": "synthetic_mcp_sdk_ab_eval_compute",
+  "cost_attribution": {
+    "enterprise_billing": "not_measured",
+    "token_counts": "estimates with declared counter provenance; not Claude usage counts",
+    "usd_savings": "not_reported"
+  },
+  "execution": {
+    "counting": {
+      "count_status": "estimate_not_claude_count",
+      "counter_version": "tiktoken-0.14.0",
+      "counting_model_assumption": null,
+      "fallback": false,
+      "tokenizer_name": "o200k_base"
+    },
+    "model_api_calls": 0,
+    "network_calls": 0,
+    "transport": "in_memory_mcp_python_sdk_session",
+    "user_sources_read": false
+  },
+  "fixture_counts": {
+    "filtered_rows": 390,
+    "note_lines": 1000,
+    "sales_rows": 3000,
+    "tiny_rows": 5
+  },
+  "fixture_provenance": "synthetic_generated_in_script",
+  "limitations": [
+    "Token counts are estimates from TokenEstimator (tiktoken o200k when available, else a UTF-8 byte heuristic), not Claude usage counts.",
+    "Only SDK-serialized tool arguments and CallToolResult objects are counted; stdio JSON-RPC framing is not captured by the in-memory transport.",
+    "Desktop-added context, system prompts, and provider-hidden prompt material are not visible and are not counted.",
+    "estimated_model_output_tokens is a counterfactual for the table the model would have to write in the raw arm; no model was run.",
+    "The final answer text is not counted in tasks 1, 3, and 4 for either arm; task 2 counts the table in the raw arm and a fixed short reply in the optimized arm.",
+    "No USD, billing, or enterprise cost figures are reported.",
+    "The raw arm reads exact pages at the default 2000-token page budget; a larger budget would reduce raw call counts.",
+    "Source handles come from one contextshrink_search call per task in each arm; discovery is not free and is counted.",
+    "Data is generated deterministically by this script; costs on real user sources will differ.",
+    "Source handles, cursor tokens, and artifact ids are random per run, so token counts can shift by a few tokens between runs; answers do not.",
+    "One run per arm with no timing or variance measurement; results are not a benchmark of model behavior."
+  ],
+  "measurement_scope": {
+    "arguments": "serialized tool arguments counted for every call",
+    "estimated_model_output_tokens": "counterfactual output the model would emit in the raw arm; fixed short reply in the optimized arm; zero where the final answer is excluded",
+    "host_added_context": "unknown",
+    "json_rpc_framing": "not captured by the in-memory transport",
+    "provider_hidden_prompt_material": "unknown",
+    "schemas_and_instructions": "captured once per arm and added once to that arm's overall total",
+    "sdk_result": "serialized typed CallToolResult objects counted for every call, including errors",
+    "stdio_protocol_bytes": "not measured"
+  },
+  "overall": {
+    "larger_overall_arm": "raw",
+    "optimized_minus_raw": -110213,
+    "optimized_overall_total_token_estimate": 6655,
+    "raw_overall_total_token_estimate": 116868
+  },
+  "phase": "E",
+  "schema_version": 1,
+  "status": "passed",
+  "tasks": {
+    "1_grouped_exact_total": {
+      "answers_match": {
+        "optimized": true,
+        "raw": true
+      },
+      "arms": {
+        "optimized": {
+          "argument_tokens": 84,
+          "calls": 2,
+          "calls_by_tool": {
+            "contextshrink_analyze": 1,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 704,
+          "total": 788
+        },
+        "raw": {
+          "argument_tokens": 1785,
+          "calls": 28,
+          "calls_by_tool": {
+            "contextshrink_open": 27,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 51552,
+          "total": 53337
+        }
+      },
+      "description": "Grouped exact sum of amount by region over a 3,000-row CSV. Raw pages every exact read; optimized runs one analyze over the whole source.",
+      "larger_total_arm": "raw",
+      "larger_total_arm_including_one_time_surface": "raw",
+      "optimized_minus_raw_including_one_time_surface": -51181,
+      "optimized_minus_raw_total": -52549
+    },
+    "2_full_table_deliverable": {
+      "answers_match": {
+        "optimized": true,
+        "raw": true
+      },
+      "arms": {
+        "optimized": {
+          "argument_tokens": 107,
+          "calls": 2,
+          "calls_by_tool": {
+            "contextshrink_render": 1,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 16,
+          "result_tokens": 625,
+          "total": 748
+        },
+        "raw": {
+          "argument_tokens": 1707,
+          "calls": 28,
+          "calls_by_tool": {
+            "contextshrink_open": 27,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 3906,
+          "result_tokens": 51472,
+          "total": 57085
+        }
+      },
+      "description": "Filtered CSV deliverable (east region, amount >= 1600.00). Raw reads every page and counts the table it would emit as output; optimized renders one artifact and counts its manifest plus a fixed short reply.",
+      "larger_total_arm": "raw",
+      "larger_total_arm_including_one_time_surface": "raw",
+      "optimized_minus_raw_including_one_time_surface": -54969,
+      "optimized_minus_raw_total": -56337
+    },
+    "3_six_exact_ranges": {
+      "answers_match": {
+        "optimized": true,
+        "raw": true
+      },
+      "arms": {
+        "optimized": {
+          "argument_tokens": 232,
+          "calls": 2,
+          "calls_by_tool": {
+            "contextshrink_retrieve_batch": 1,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 1928,
+          "total": 2160
+        },
+        "raw": {
+          "argument_tokens": 257,
+          "calls": 7,
+          "calls_by_tool": {
+            "contextshrink_retrieve": 6,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 4582,
+          "total": 4839
+        }
+      },
+      "description": "Six exact line ranges from a 1,000-line text source. Raw issues six retrieve calls; optimized issues one retrieve_batch call.",
+      "larger_total_arm": "raw",
+      "larger_total_arm_including_one_time_surface": "raw",
+      "optimized_minus_raw_including_one_time_surface": -1311,
+      "optimized_minus_raw_total": -2679
+    },
+    "4_tiny_no_gain_case": {
+      "answers_match": {
+        "optimized": true,
+        "raw": true
+      },
+      "arms": {
+        "optimized": {
+          "argument_tokens": 68,
+          "calls": 2,
+          "calls_by_tool": {
+            "contextshrink_analyze": 1,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 672,
+          "total": 740
+        },
+        "raw": {
+          "argument_tokens": 42,
+          "calls": 2,
+          "calls_by_tool": {
+            "contextshrink_open": 1,
+            "contextshrink_search": 1
+          },
+          "error_call_count": 0,
+          "estimated_model_output_tokens": 0,
+          "result_tokens": 714,
+          "total": 756
+        }
+      },
+      "description": "One value from a 5-row CSV. Expected to favor the raw arm because the compute schemas are a fixed cost that a one-row answer cannot amortize.",
+      "larger_total_arm": "raw",
+      "larger_total_arm_including_one_time_surface": "optimized",
+      "optimized_minus_raw_including_one_time_surface": 1352,
+      "optimized_minus_raw_total": -16
+    }
+  }
+}

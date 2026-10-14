@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase E deterministic work and artifacts"
 date: 2026-10-14
-status: e2-wiring-complete-e3-pending
+status: local-implementation-complete-live-desktop-validation-pending
 phase: E
 milestones: [M11, M12]
 ---
@@ -25,7 +25,7 @@ operation is a validated, bounded, typed specification.
 |---|---|---|
 | E1 | Pure core: `tables`, `operations`, `batching`, `answer_contract`, `artifacts` with unit tests | complete locally |
 | E2 | Backend/broker wiring; compute profile with `contextshrink_analyze`, `contextshrink_render` and `contextshrink_retrieve_batch`; contracts | complete locally |
-| E3 | Companion artifact browser, user-operated export, revocation, SDK evaluation | pending |
+| E3 | Role separation, companion artifact browser, user-operated export, SDK evaluation | complete locally |
 
 E1 modules have no MCP, broker, network, or model dependencies.
 
@@ -255,6 +255,73 @@ allowed sets, `title` is a string of 1-120 characters, `requests` has 1-16 items
 of exactly `{source_id, selector}` with selectors checked by the existing
 `_validate_selector`. Unknown keys fail. `BrokerClient` gains `analyze`,
 `render` and `retrieve_batch` with the backend's signatures.
+
+## E3 review and end-to-end results
+
+A scratch probe ran a real broker process with the compute profile, rendered an
+artifact through the MCP adapter's `BrokerClient`, and then used the real
+companion HTTP server:
+
+- The MCP adapter's client calling `artifact_list` got
+  `operation_unauthorized`.
+- The companion listed the artifact and downloaded bytes identical to the file
+  on disk, as `text/csv; charset=utf-8` with a cleaned file name. A hostile
+  printable title `Q3 "totals" ../x <b>;evil.csv` became
+  `Q3 totals ..x bevil.csv`, and a title containing a line break was refused
+  at render time.
+- A formula-like cell was written escaped (`'=HYPERLINK(...)`).
+- A request without the session token got 401.
+- After the broker stopped, the capability file and the artifact files were
+  gone.
+
+Review fix: the capability was issued before the broker owned its pipe, so
+accidentally starting a second broker with the same `broker_id` replaced the
+running broker's capability and broke its companion before the second broker
+failed to start. The capability is now issued only after exclusive pipe
+ownership. A cleanup error while revoking can no longer mask the error that
+ended serving. A real-pipe regression test fails under the old ordering.
+
+### Synthetic SDK evaluation
+
+`desktop/mcp/phase_e_eval.py` (report:
+[`phase-e-eval-report.json`](../../desktop/mcp/phase-e-eval-report.json))
+reports estimated o200k tokens. All four answers match in both arms.
+
+| Task | Raw arm | Compute arm |
+|---|---:|---:|
+| Grouped exact total, 3,000 rows | 53,337 (28 calls) | 788 (2 calls) |
+| 390-row filtered CSV deliverable | 57,085 (28 calls, incl. 3,906 estimated output) | 748 (2 calls, incl. 16 output) |
+| Six exact ranges | 4,839 (7 calls) | 2,160 (2 calls) |
+| Tiny 5-row case | 756 | 740 |
+| Tool schemas and instructions, once per chat | 851 | 2,219 |
+
+The compute profile adds about 1,370 tokens of schemas and instructions to
+every chat where it is enabled. On the tiny task that makes it 1,352 tokens
+more expensive overall. It pays off only when a chat actually does
+large-table work, so it should stay opt-in per configuration. The raw-arm
+figures are counterfactuals: the model's own arithmetic is not counted, the
+table it would write is estimated rather than generated, and no Claude
+model, JSON-RPC framing, hidden host context or billing is included. This is
+synthetic fixture evidence, not observed Claude Desktop usage or a savings
+claim.
+
+### Still open
+
+- A live Claude Desktop walkthrough of the compute profile and the companion
+  artifact browser.
+- Same-user code can still read the capability file; that is outside this
+  boundary by design.
+- Expired-version errors still surface as `snapshot_unknown`.
+- `artifact_read` re-reads and hashes the whole artifact for each 384 KiB chunk
+  (about 22 reads for an 8 MiB artifact). That is acceptable at the current
+  size cap.
+- HTML and chart previews from safe templates are deferred. The browser
+  previews only the manifest's first rows.
+
+Verification: `pytest tests/desktop_mcp` plus the MCP dependency-contract and
+CCR HTTP tests report 728 passed, 2 skipped (POSIX-only tests); ruff check and
+format pass; `node --check` passes for the companion UI, which has no
+`innerHTML`.
 
 ## E2 review and end-to-end results
 
