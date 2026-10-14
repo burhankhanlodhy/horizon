@@ -616,7 +616,7 @@ def _parse_cumulative_file(raw: bytes) -> dict[str, Any] | None:
 
 
 def _cumulative_key(value: Any) -> str:
-    if isinstance(value, str) and _SAFE_CODE.fullmatch(value):
+    if isinstance(value, str) and _SAFE_LABEL.fullmatch(value):
         return value
     return "unknown"
 

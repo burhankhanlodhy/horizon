@@ -101,6 +101,9 @@ _EXCLUDE_MODULES = (
 )
 
 
+_COPY_METADATA = ("tiktoken", "pypdf", "mcp")
+
+
 def _tool_names() -> list[str]:
     from horizon.desktop_mcp.contracts import tool_specs
 
@@ -264,6 +267,10 @@ def build() -> Path:
         arguments += ["--collect-data", package]
     for module in _HIDDEN_IMPORTS:
         arguments += ["--hidden-import", module]
+    # Package metadata lets the frozen build report real library versions
+    # (for example the token counter version) instead of "unknown".
+    for package in _COPY_METADATA:
+        arguments += ["--copy-metadata", package]
     for module in _EXCLUDE_MODULES:
         arguments += ["--exclude-module", module]
     arguments.append(str(ENTRY_SCRIPT))
