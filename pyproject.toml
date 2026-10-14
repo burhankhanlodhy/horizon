@@ -263,6 +263,10 @@ mcp = [
     "starlette>=0.27.0",
     "uvicorn>=0.23.0,<1.0",
 ]
+# Desktop MCP PDF extraction, pinned to the tested version (DOCX uses the stdlib)
+desktop-documents = [
+    "pypdf==6.20.1",
+]
 # Voice filler detection
 voice = [
     "onnxruntime>=1.24.0; python_version>='3.11'",
