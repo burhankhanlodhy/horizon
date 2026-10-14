@@ -161,12 +161,12 @@ def test_fresh_file_records_mixed_events(tmp_path: Path) -> None:
     assert data["fallback_count"] == 1
     assert data["compact_result_count"] == 1
     assert data["token_estimates"] == {
-        "o200k_base:counter_v1:exact": {
+        "o200k_base:counter_v1:tokenizer": {
             "calls": 1,
             "raw_equivalent_sum": 100,
             "delivered_sum": 40,
         },
-        "utf8_bytes_div_3_heuristic:byte_v1:fallback": {
+        "utf8_bytes_div_3_heuristic:byte_v1:byte_estimate": {
             "calls": 1,
             "raw_equivalent_sum": 30,
             "delivered_sum": 30,
@@ -189,7 +189,7 @@ def test_totals_survive_a_new_cumulative_instance(tmp_path: Path) -> None:
     assert snapshot["calls"] == 3
     assert snapshot["since"] == STAMP
     assert snapshot["last_updated"] == "2026-10-14T09:31:00Z"
-    assert snapshot["token_estimates"]["o200k_base:counter_v1:exact"] == {
+    assert snapshot["token_estimates"]["o200k_base:counter_v1:tokenizer"] == {
         "calls": 2,
         "raw_equivalent_sum": 20,
         "delivered_sum": 8,
@@ -335,7 +335,7 @@ def test_key_caps_collapse_extra_basis_keys_into_other(tmp_path: Path) -> None:
 
     tokens = stats.snapshot()["token_estimates"]
     assert len(tokens) == 65
-    assert tokens["tok0:counter_v1:exact"]["calls"] == 1
+    assert tokens["tok0:counter_v1:tokenizer"]["calls"] == 1
     assert tokens["other"]["calls"] == 6
     assert tokens["other"]["raw_equivalent_sum"] == 12
     assert sum(entry["calls"] for entry in tokens.values()) == 70
@@ -397,11 +397,12 @@ def test_negative_estimated_tokens_avoided_is_kept(tmp_path: Path) -> None:
             },
         },
     )
-    entry = backend.stats()["cumulative"]["token_estimates"]["o200k_base:counter_v1:exact"]
+    entry = backend.stats()["cumulative"]["token_estimates"]["o200k_base:counter_v1:tokenizer"]
     assert entry["estimated_tokens_avoided"] == -15
     stored = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))
     assert (
-        "estimated_tokens_avoided" not in stored["token_estimates"]["o200k_base:counter_v1:exact"]
+        "estimated_tokens_avoided"
+        not in stored["token_estimates"]["o200k_base:counter_v1:tokenizer"]
     )
 
 
@@ -552,4 +553,4 @@ def test_cumulative_basis_keeps_versioned_counter_labels(tmp_path: Path) -> None
             "result_delivered_token_estimate": 4,
         }
     )
-    assert list(stats.snapshot()["token_estimates"]) == ["o200k_base:tiktoken-0.14.0:exact"]
+    assert list(stats.snapshot()["token_estimates"]) == ["o200k_base:tiktoken-0.14.0:tokenizer"]

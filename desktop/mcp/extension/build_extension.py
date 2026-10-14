@@ -28,7 +28,9 @@ REPO_ROOT = HERE.parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-VERSION = "0.1.0"
+# One version source for the MCP server, the manifest and the runtime build id.
+from horizon.desktop_mcp.version import VERSION  # noqa: E402
+
 EXE_NAME = "contextshrink-desktop"
 ENTRY_SCRIPT = HERE / "entry.py"
 TEMPLATE_PATH = HERE / "manifest.template.json"

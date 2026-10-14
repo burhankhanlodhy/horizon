@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "contextshrink-desktop",
   "display_name": "ContextShrink",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Search and read approved local folders of text, PDF and DOCX files through exact, bounded ContextShrink tools.",
   "long_description": "ContextShrink lets Claude search and open only the folders you approve, and retrieves exact bounded pieces of text, PDF pages and DOCX paragraphs. Files outside the approved folders are never read. The optional compute profile adds exact table operations and render-to-file.",
   "author": {

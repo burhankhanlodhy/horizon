@@ -29,9 +29,12 @@ from .broker_transport import (
 )
 from .roles import issue_capability, load_capability, revoke_capability
 from .settings import ConfigurationError, DesktopSettings, load_settings
+from .version import VERSION
 
 _ARTIFACT_ID = re.compile(r"[0-9a-f]{32}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# A retire reply must reach the client before the pipe loop is stopped.
+_RETIRE_DELAY_SECONDS = 0.5
 
 
 class BrokerError(Exception):
@@ -307,6 +310,15 @@ def _idle_watchdog(
             return
 
 
+def _running_build_id() -> str:
+    """Build id of the executable this broker runs from; "dev" outside a frozen build."""
+    if not getattr(sys, "frozen", False):
+        return "dev"
+    from .extension import build_id
+
+    return build_id()
+
+
 class BrokerService:
     """Serve one serialized request at a time through a bounded worker process."""
 
@@ -322,11 +334,24 @@ class BrokerService:
         self._lock = threading.RLock()
         self._clock = clock
         self._last_activity = clock()
+        self._build_id = _running_build_id()
+        # Replaced by serve() with the pipe loop's own stop event and pipe name.
+        self._stop_event = threading.Event()
+        self._pipe_name: str | None = None
 
     def handle(self, operation: str, args: dict[str, Any]) -> dict[str, Any]:
         # Config reload and all source IO stay inside the cancellable worker.
         # The pipe service keeps only the startup pipe identity and worker handle.
         self._last_activity = self._clock()
+        if operation == "heartbeat":
+            return {"build_id": self._build_id, "version": VERSION}
+        if operation == "retire":
+            threading.Thread(
+                target=self._retire_after_reply,
+                daemon=True,
+                name="contextshrink-broker-retire",
+            ).start()
+            return {"retiring": True}
         with self._lock:
             result = self.worker.request(operation, args)
             if "error" in result:
@@ -334,6 +359,14 @@ class BrokerService:
                 metadata = result.get("metadata")
                 raise BrokerError(code, metadata if isinstance(metadata, dict) else None)
             return result
+
+    def _retire_after_reply(self) -> None:
+        """Stop through the normal stop path, shortly after the retire reply is sent."""
+        time.sleep(_RETIRE_DELAY_SECONDS)
+        try:
+            stop_broker(self._pipe_name or "", self._stop_event)
+        except BrokerTransportError:
+            self._stop_event.set()
 
     def serve(
         self,
@@ -347,6 +380,16 @@ class BrokerService:
         # The watchdog needs the same stop event the pipe loop observes.
         stop = stop_event if stop_event is not None else threading.Event()
         done = threading.Event()
+        self._stop_event = stop
+        self._pipe_name = pipe_name
+        if getattr(sys, "frozen", False):
+            # Old runtime copies are removed off the startup path; a folder that
+            # a running broker still has loaded is left in place.
+            threading.Thread(
+                target=_clean_runtimes_for_this_build,
+                daemon=True,
+                name="contextshrink-runtime-cleanup",
+            ).start()
 
         def issue() -> str:
             issued.append(issue_capability(self.settings, base_dir=capability_base_dir))
@@ -528,6 +571,14 @@ class BrokerClient:
     def stats(self) -> dict[str, Any]:
         return self._request("stats", {})
 
+    def heartbeat(self) -> dict[str, Any]:
+        """Keep the broker alive and learn its build id and version."""
+        return self._request("heartbeat", {})
+
+    def retire(self) -> dict[str, Any]:
+        """Ask an older broker to stop through its normal stop path."""
+        return self._request("retire", {"reason": "upgrade"})
+
 
 def _parse_artifact_chunk(
     result: dict[str, Any], artifact_id: str, offset: int
@@ -639,6 +690,15 @@ class CompanionBrokerClient:
         if not isinstance(deleted, bool):
             raise BrokerError("artifact_unavailable")
         return deleted
+
+
+def _clean_runtimes_for_this_build() -> None:
+    from .extension import cleanup_runtimes
+
+    try:
+        cleanup_runtimes(keep=Path(sys.executable).parent.name)
+    except OSError:
+        pass
 
 
 def stop_broker(pipe_name: str, stop_event: threading.Event) -> None:
