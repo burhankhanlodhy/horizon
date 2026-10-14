@@ -103,8 +103,49 @@ class RowsSelector(_StrictModel):
         return self
 
 
+class PageSelector(_StrictModel):
+    """PDF page range; at most 200 pages per selector."""
+
+    type: Literal["page"]
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def ordered_bounded_pages(self) -> PageSelector:
+        if self.end < self.start or self.end - self.start + 1 > 200:
+            raise ValueError("page range must be ordered and bounded")
+        return self
+
+
+class ParagraphSelector(_StrictModel):
+    """DOCX paragraph/heading range; at most 2,000 per selector."""
+
+    type: Literal["paragraph"]
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def ordered_bounded_paragraphs(self) -> ParagraphSelector:
+        if self.end < self.start or self.end - self.start + 1 > 2000:
+            raise ValueError("paragraph range must be ordered and bounded")
+        return self
+
+
+class TableSelector(_StrictModel):
+    """One DOCX table by its 1-based table number."""
+
+    type: Literal["table"]
+    index: int = Field(ge=1, le=10000)
+
+
 Selector = Annotated[
-    LinesSelector | MarkdownSectionSelector | JsonPointerSelector | RowsSelector,
+    LinesSelector
+    | MarkdownSectionSelector
+    | JsonPointerSelector
+    | RowsSelector
+    | PageSelector
+    | ParagraphSelector
+    | TableSelector,
     Field(discriminator="type"),
 ]
 
@@ -201,7 +242,9 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
                     "type": "object",
                     "description": (
                         "Use logical CSV/TSV record numbers for rows; record 1 is the first "
-                        "record, including a header when present."
+                        "record, including a header when present. Use page (PDF) for page "
+                        "ranges, paragraph (DOCX) for paragraph and heading ranges, and table "
+                        "(DOCX) for one table by its number."
                     ),
                     "oneOf": [
                         {
@@ -246,6 +289,35 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
                                 "end": {"type": "integer", "minimum": 1},
                             },
                             "required": ["type", "start", "end"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "const": "page"},
+                                "start": {"type": "integer", "minimum": 1},
+                                "end": {"type": "integer", "minimum": 1},
+                            },
+                            "required": ["type", "start", "end"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "const": "paragraph"},
+                                "start": {"type": "integer", "minimum": 1},
+                                "end": {"type": "integer", "minimum": 1},
+                            },
+                            "required": ["type", "start", "end"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "const": "table"},
+                                "index": {"type": "integer", "minimum": 1, "maximum": 10000},
+                            },
+                            "required": ["type", "index"],
                             "additionalProperties": False,
                         },
                     ],
@@ -432,6 +504,7 @@ _TOOL_FIELDS = {
     "type",
     "start",
     "end",
+    "index",
     "cursor",
     "heading",
     "occurrence",

@@ -278,6 +278,27 @@ def _validate_selector(selector: Any) -> None:
             or ("~" in pointer.replace("~0", "").replace("~1", ""))
         ):
             raise BrokerTransportError("invalid_arguments")
+    elif kind in {"page", "paragraph"}:
+        if set(selector) != {"type", "start", "end"}:
+            raise BrokerTransportError("invalid_arguments")
+        start, end = selector["start"], selector["end"]
+        span_cap = 200 if kind == "page" else 2000
+        if (
+            isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, int)
+            or not isinstance(end, int)
+            or start < 1
+            or end < start
+            or end - start + 1 > span_cap
+        ):
+            raise BrokerTransportError("invalid_arguments")
+    elif kind == "table":
+        if set(selector) != {"type", "index"}:
+            raise BrokerTransportError("invalid_arguments")
+        index = selector["index"]
+        if isinstance(index, bool) or not isinstance(index, int) or not 1 <= index <= 10000:
+            raise BrokerTransportError("invalid_arguments")
     else:
         raise BrokerTransportError("invalid_arguments")
 
