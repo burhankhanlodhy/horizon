@@ -463,6 +463,8 @@ def _validate_input(value: Any) -> dict[str, Any]:
         assignments[assignment_id] = row
     if len(participant_kinds) != 1 or any(set(arms) != set(ARMS) for arms in pair_groups.values()):
         raise EconomicsError("assignment_arm_set_invalid")
+    if root["evidence_class"] == "synthetic" and participant_kinds != {"synthetic"}:
+        raise EconomicsError("synthetic_evidence_contains_real_participants")
     participant_positions = {
         participant_id: index
         for index, participant_id in enumerate(
@@ -696,6 +698,8 @@ def _validate_input(value: Any) -> dict[str, Any]:
     windows = root["usage_windows"]
     if not isinstance(windows, list) or len(windows) > 100_000:
         raise EconomicsError("usage_windows_invalid")
+    if root["evidence_class"] == "synthetic" and windows:
+        raise EconomicsError("synthetic_evidence_contains_admin_usage")
     # Keep administrator billing windows separate. M13 never allocates a window
     # across assignments or calls; the fixture report labels live evidence pending.
     window_ids: set[str] = set()
@@ -1795,7 +1799,9 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
             ),
         }
 
-    if not real_ids:
+    if data["evidence_class"] == "synthetic":
+        status, reason = "pending", "synthetic_fixture_has_no_enterprise_usage"
+    elif not real_ids:
         status, reason = "pending", "synthetic_fixture_has_no_enterprise_usage"
     elif not windows or not fresh:
         status, reason = "pending", "fresh_admin_usage_windows_missing_or_stale"

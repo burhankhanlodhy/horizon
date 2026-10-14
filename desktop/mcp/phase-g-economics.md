@@ -36,6 +36,8 @@ Observed window cost is summarized by arm and kept in the administrator's curren
 
 The report does not assert causality, additive mechanism gains, universal savings, or an Enterprise result. `enterprise_usage_observed` indicates that real pseudonymous admin-window records were imported, while status and coverage explain whether they are sufficient for full observed summaries. `causal_claim` is always false and `savings_claim` is always `none`.
 
+The evidence class is enforced: synthetic inputs cannot contain pseudonymous assignments or administrator usage windows, and synthetic score rows cannot be marked `scored`. Synthetic quality-rule checks remain separate diagnostics and do not count as participant-quality successes or observed Enterprise data.
+
 ## Validation
 
 ```powershell

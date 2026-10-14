@@ -544,6 +544,22 @@ def test_synthetic_assignment_cannot_be_given_participant_quality_score() -> Non
         economics.build_report(data)
 
 
+def test_synthetic_evidence_cannot_claim_real_participant_or_admin_data() -> None:
+    data = real_evidence_fixture()
+    data["evidence_class"] = "synthetic"
+    with pytest.raises(
+        economics.EconomicsError, match="synthetic_evidence_contains_real_participants"
+    ):
+        economics.build_report(data)
+
+    data = fixture()
+    data["usage_windows"] = [{"window_id": "synthetic-window"}]
+    with pytest.raises(
+        economics.EconomicsError, match="synthetic_evidence_contains_admin_usage"
+    ):
+        economics.build_report(data)
+
+
 def test_score_sheet_task_id_must_match_assignment_when_present() -> None:
     data = fixture()
     data["scores"][0]["task_id"] = "other-task"
