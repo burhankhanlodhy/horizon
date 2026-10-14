@@ -7,6 +7,7 @@ download a missing vocabulary.  Counts are estimates, not provider usage.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import json
@@ -18,6 +19,7 @@ import tempfile
 import threading
 import time
 from collections import Counter, OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,8 @@ _ALLOWED_MODES = frozenset(
 )
 _ALLOWED_STATUS = frozenset({"success", "error", "fallback", "unknown"})
 _SAFE_CODE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+# Counter and tokenizer labels carry versions such as "tiktoken-0.14.0".
+_SAFE_LABEL = re.compile(r"^[a-zA-Z0-9_.:+-]{1,64}$")
 _CACHE_LOAD_LOCK = threading.Lock()
 _COUNT_CACHE_MAX_ENTRIES = 128
 
@@ -496,7 +500,7 @@ class LocalUsageLedger:
 
 
 def _safe_text(value: Any, maximum: int) -> str | None:
-    if isinstance(value, str) and len(value) <= maximum and _SAFE_CODE.fullmatch(value):
+    if isinstance(value, str) and len(value) <= maximum and _SAFE_LABEL.fullmatch(value):
         return value
     return None
 
@@ -509,3 +513,272 @@ def _safe_nonnegative(value: Any) -> int | None:
 
 def _sum(events: tuple[dict[str, Any], ...], field: str) -> int:
     return sum(event[field] for event in events if isinstance(event.get(field), int))
+
+
+_CUMULATIVE_SCHEMA_VERSION = 1
+_CUMULATIVE_MAX_FILE_BYTES = 64 * 1024
+_CUMULATIVE_MAX_KEYS = 64
+_CUMULATIVE_OTHER_KEY = "other"
+_CUMULATIVE_BASIS_MAX = 128
+_CUMULATIVE_SCOPE = (
+    "cumulative per-call estimates across broker restarts on this machine; "
+    "not task totals or measured savings"
+)
+_CUMULATIVE_INTEGRITY = "plain local file; editable and not evidence"
+_CUMULATIVE_RESET = "delete the stats file to start over"
+_CUMULATIVE_COUNTER_MAPS = ("by_tool", "by_mode", "by_status")
+_CUMULATIVE_COUNT_FIELDS = ("calls", "error_count", "fallback_count", "compact_result_count")
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _empty_cumulative_totals() -> dict[str, Any]:
+    return {
+        "since": None,
+        "last_updated": None,
+        "calls": 0,
+        "by_tool": {},
+        "by_mode": {},
+        "by_status": {},
+        "error_count": 0,
+        "fallback_count": 0,
+        "compact_result_count": 0,
+        "token_estimates": {},
+        "byte_totals": {"raw_equivalent_sum": 0, "delivered_sum": 0},
+    }
+
+
+def _valid_counter_map(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and len(value) <= _CUMULATIVE_MAX_KEYS
+        and all(isinstance(key, str) and _is_nonnegative_int(count) for key, count in value.items())
+    )
+
+
+def _valid_token_map(value: Any) -> bool:
+    if not isinstance(value, dict) or len(value) > _CUMULATIVE_MAX_KEYS:
+        return False
+    for key, entry in value.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            return False
+        if not all(
+            _is_nonnegative_int(entry.get(field))
+            for field in ("calls", "raw_equivalent_sum", "delivered_sum")
+        ):
+            return False
+    return True
+
+
+def _parse_cumulative_file(raw: bytes) -> dict[str, Any] | None:
+    """Return validated totals from a stats file, or None when it is unusable."""
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("schema_version")
+    if not _is_nonnegative_int(version) or version != _CUMULATIVE_SCHEMA_VERSION:
+        return None
+    totals = _empty_cumulative_totals()
+    for stamp in ("since", "last_updated"):
+        value = data.get(stamp)
+        if value is not None and (not isinstance(value, str) or len(value) > 64):
+            return None
+        totals[stamp] = value
+    if not all(_is_nonnegative_int(data.get(field)) for field in _CUMULATIVE_COUNT_FIELDS):
+        return None
+    if not all(_valid_counter_map(data.get(name)) for name in _CUMULATIVE_COUNTER_MAPS):
+        return None
+    if not _valid_token_map(data.get("token_estimates")):
+        return None
+    byte_totals = data.get("byte_totals")
+    if not isinstance(byte_totals, dict) or not all(
+        _is_nonnegative_int(byte_totals.get(field))
+        for field in ("raw_equivalent_sum", "delivered_sum")
+    ):
+        return None
+    for field in _CUMULATIVE_COUNT_FIELDS:
+        totals[field] = data[field]
+    for name in _CUMULATIVE_COUNTER_MAPS:
+        totals[name] = dict(data[name])
+    totals["token_estimates"] = {
+        key: {field: entry[field] for field in ("calls", "raw_equivalent_sum", "delivered_sum")}
+        for key, entry in data["token_estimates"].items()
+    }
+    totals["byte_totals"] = {
+        field: byte_totals[field] for field in ("raw_equivalent_sum", "delivered_sum")
+    }
+    return totals
+
+
+def _cumulative_key(value: Any) -> str:
+    if isinstance(value, str) and _SAFE_CODE.fullmatch(value):
+        return value
+    return "unknown"
+
+
+def _cumulative_choice(value: Any, allowed: frozenset[str]) -> str:
+    return value if isinstance(value, str) and value in allowed else "unknown"
+
+
+def _cumulative_bucket(counts: dict[str, Any], key: str) -> str:
+    """Keep at most _CUMULATIVE_MAX_KEYS distinct keys; extras share "other"."""
+    if key in counts or len(counts) < _CUMULATIVE_MAX_KEYS:
+        return key
+    return _CUMULATIVE_OTHER_KEY
+
+
+def _cumulative_basis_key(event: dict[str, Any]) -> str:
+    tokenizer = _cumulative_key(event.get("tokenizer_name"))
+    counter = _cumulative_key(event.get("counter_version"))
+    flavor = "fallback" if event.get("fallback") is True else "exact"
+    return f"{tokenizer}:{counter}:{flavor}"[:_CUMULATIVE_BASIS_MAX]
+
+
+def _utc_stamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class CumulativeUsageStats:
+    """Per-call usage counters that survive broker and worker restarts.
+
+    The file holds only the aggregate counters below, never per-call rows,
+    timestamps per call, paths, queries, source text, hashes or error codes.
+    Counts are per-call estimates; they are not task totals, measured savings
+    or billing data. A missing, unreadable or invalid file starts fresh, and
+    the file is left alone until the next successful write replaces it.
+    """
+
+    def __init__(self, path: Path | str, *, clock: Any = time.time) -> None:
+        self.path = Path(path)
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._totals = _empty_cumulative_totals()
+        self.reset_reason: str | None = None
+        self.write_error = False
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            with self.path.open("rb") as handle:
+                raw = handle.read(_CUMULATIVE_MAX_FILE_BYTES + 1)
+        except FileNotFoundError:
+            return
+        except OSError:
+            self.reset_reason = "unreadable"
+            return
+        totals = None
+        if len(raw) <= _CUMULATIVE_MAX_FILE_BYTES:
+            totals = _parse_cumulative_file(raw)
+        if totals is None:
+            self.reset_reason = "invalid"
+            return
+        self._totals = totals
+
+    def add(self, event: dict[str, Any]) -> None:
+        """Fold one sanitized ledger event into the totals and persist them.
+
+        Never raises: a failed write keeps the in-memory totals and sets
+        ``write_error``.
+        """
+        if not isinstance(event, dict):
+            return
+        with self._lock:
+            totals = self._totals
+            stamp = _utc_stamp(float(self._clock()))
+            if totals["since"] is None:
+                totals["since"] = stamp
+            totals["last_updated"] = stamp
+            totals["calls"] += 1
+            tool = _cumulative_choice(event.get("tool"), _ALLOWED_TOOLS)
+            mode = _cumulative_choice(event.get("mode"), _ALLOWED_MODES)
+            status = _cumulative_choice(event.get("status"), _ALLOWED_STATUS)
+            for name, key in (("by_tool", tool), ("by_mode", mode), ("by_status", status)):
+                counts = totals[name]
+                bucket = _cumulative_bucket(counts, key)
+                counts[bucket] = counts.get(bucket, 0) + 1
+            if status == "error":
+                totals["error_count"] += 1
+            if event.get("fallback") is True:
+                totals["fallback_count"] += 1
+            if (
+                status == "success"
+                and event.get("compression_applied") is True
+                and mode == "compact"
+            ):
+                totals["compact_result_count"] += 1
+            raw_tokens = event.get("result_raw_equivalent_token_estimate")
+            delivered_tokens = event.get("result_delivered_token_estimate")
+            if _is_nonnegative_int(raw_tokens) and _is_nonnegative_int(delivered_tokens):
+                tokens = totals["token_estimates"]
+                bucket = _cumulative_bucket(tokens, _cumulative_basis_key(event))
+                entry = tokens.setdefault(
+                    bucket, {"calls": 0, "raw_equivalent_sum": 0, "delivered_sum": 0}
+                )
+                entry["calls"] += 1
+                entry["raw_equivalent_sum"] += raw_tokens
+                entry["delivered_sum"] += delivered_tokens
+            raw_bytes = event.get("result_raw_equivalent_utf8_bytes")
+            delivered_bytes = event.get("result_delivered_utf8_bytes")
+            if _is_nonnegative_int(raw_bytes) and _is_nonnegative_int(delivered_bytes):
+                totals["byte_totals"]["raw_equivalent_sum"] += raw_bytes
+                totals["byte_totals"]["delivered_sum"] += delivered_bytes
+            self._write_locked()
+
+    def _write_locked(self) -> None:
+        document = {"schema_version": _CUMULATIVE_SCHEMA_VERSION, **self._totals}
+        data = (json.dumps(document, sort_keys=True, indent=2) + "\n").encode("utf-8")
+        temporary: str | None = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(
+                dir=self.path.parent, prefix=f".{self.path.name}.", suffix=".tmp"
+            )
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            temporary = None
+            self.write_error = False
+        except OSError:
+            self.write_error = True
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    def snapshot(self) -> dict[str, Any]:
+        """Public view of the totals; never includes the file path."""
+        with self._lock:
+            totals = copy.deepcopy(self._totals)
+            reset_reason = self.reset_reason
+            write_error = self.write_error
+        token_estimates = {
+            key: {
+                **entry,
+                "estimated_tokens_avoided": entry["raw_equivalent_sum"] - entry["delivered_sum"],
+            }
+            for key, entry in totals["token_estimates"].items()
+        }
+        view: dict[str, Any] = {
+            "schema_version": _CUMULATIVE_SCHEMA_VERSION,
+            **totals,
+            "token_estimates": token_estimates,
+            "persistence": "local_file",
+            "scope": _CUMULATIVE_SCOPE,
+            "billing_attribution": "not_measured",
+            "integrity": _CUMULATIVE_INTEGRITY,
+            "reset": _CUMULATIVE_RESET,
+        }
+        if reset_reason is not None:
+            view["reset_reason"] = reset_reason
+        if write_error:
+            view["write_error"] = True
+        return view

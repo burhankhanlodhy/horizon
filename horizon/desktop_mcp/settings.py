@@ -26,6 +26,16 @@ def _comparable(path: Path) -> Path:
     return Path(os.path.normcase(str(normalized)))
 
 
+def _overlaps_approved_roots(path: Path, roots: tuple[Path, ...]) -> bool:
+    """True when ``path`` is, contains, or lies inside any approved root."""
+    candidate = _comparable(path)
+    for root in roots:
+        approved = _comparable(root)
+        if candidate == approved or approved in candidate.parents or candidate in approved.parents:
+            return True
+    return False
+
+
 class DesktopSettings(BaseModel):
     """Strict settings for diagnostic fixtures or approved local sources."""
 
@@ -57,6 +67,9 @@ class DesktopSettings(BaseModel):
     # Generated artifacts live here, never inside an approved root, so they
     # cannot be cataloged or opened as sources. None disables rendering.
     artifact_root: Path | None = None
+    # Cumulative per-call usage counters persist here across broker restarts.
+    # None keeps usage in worker memory only. Must not overlap an approved root.
+    usage_stats_path: Path | None = None
 
     @field_validator("approved_roots", mode="before")
     @classmethod
@@ -79,6 +92,21 @@ class DesktopSettings(BaseModel):
     @field_validator("artifact_root", mode="before")
     @classmethod
     def artifact_root_must_be_absolute(cls, value: Any) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, Path):
+            path = value
+        elif isinstance(value, str):
+            path = Path(value)
+        else:
+            raise ValueError("must be a path")
+        if not path.is_absolute():
+            raise ValueError("must be absolute")
+        return path
+
+    @field_validator("usage_stats_path", mode="before")
+    @classmethod
+    def usage_stats_path_must_be_absolute(cls, value: Any) -> Path | None:
         if value is None:
             return None
         if isinstance(value, Path):
@@ -124,16 +152,14 @@ class DesktopSettings(BaseModel):
             raise ValueError("max_store_bytes must be at least max_snapshot_bytes")
         if self.tool_profile == "compute" and self.profile != "local":
             raise ValueError("tool_profile compute requires the local profile")
-        if self.artifact_root is not None:
-            artifact = _comparable(self.artifact_root)
-            for root in self.approved_roots:
-                approved = _comparable(root)
-                if (
-                    artifact == approved
-                    or approved in artifact.parents
-                    or artifact in approved.parents
-                ):
-                    raise ValueError("artifact_root must not overlap an approved root")
+        if self.artifact_root is not None and _overlaps_approved_roots(
+            self.artifact_root, self.approved_roots
+        ):
+            raise ValueError("artifact_root must not overlap an approved root")
+        if self.usage_stats_path is not None and _overlaps_approved_roots(
+            self.usage_stats_path, self.approved_roots
+        ):
+            raise ValueError("usage_stats_path must not overlap an approved root")
         return self
 
     @field_validator("counting_model")
@@ -166,6 +192,7 @@ _CONFIG_FIELDS = {
     "min_compaction_gain_percent",
     "tool_profile",
     "artifact_root",
+    "usage_stats_path",
 }
 
 

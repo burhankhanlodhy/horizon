@@ -54,6 +54,7 @@ def _make_backend(settings: DesktopSettings) -> Any:
         eval_arm=getattr(settings, "eval_arm", "optimized"),
         min_compaction_gain_tokens=getattr(settings, "min_compaction_gain_tokens", 64),
         min_compaction_gain_percent=getattr(settings, "min_compaction_gain_percent", 5.0),
+        usage_stats_path=getattr(settings, "usage_stats_path", None),
     )
 
 
@@ -119,6 +120,7 @@ class Runtime:
                 "min_compaction_gain_tokens",
                 "min_compaction_gain_percent",
                 "artifact_root",
+                "usage_stats_path",
             )
         )
         if rebuild:
