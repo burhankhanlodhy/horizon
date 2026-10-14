@@ -183,3 +183,24 @@ def test_stats_count_only_retained_successful_compact_transformations() -> None:
     assert stats["retained_successful_compact_result_scope"].startswith(
         "retained successful compact"
     )
+
+
+def test_ledger_keeps_versioned_counter_labels_but_not_unsafe_text() -> None:
+    from horizon.desktop_mcp.measurement import LocalUsageLedger
+
+    ledger = LocalUsageLedger()
+    kept = ledger.record(
+        tool="contextshrink_open",
+        mode="exact",
+        source_version=None,
+        accounting={"counter_version": "tiktoken-0.14.0", "tokenizer_name": "o200k_base"},
+    )
+    assert kept["counter_version"] == "tiktoken-0.14.0"
+    dropped = ledger.record(
+        tool="contextshrink_open",
+        mode="exact",
+        source_version=None,
+        accounting={"counter_version": "C:/Users/x path", "tokenizer_name": "a b"},
+    )
+    assert dropped["counter_version"] is None
+    assert dropped["tokenizer_name"] is None

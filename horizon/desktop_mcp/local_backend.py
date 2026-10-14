@@ -13,7 +13,12 @@ from typing import Any
 from .artifacts import ArtifactError, ArtifactStore, Dependency
 from .batching import BatchError, fuse_reads
 from .broker_transport import ARTIFACT_CHUNK_BYTES
-from .measurement import LocalUsageLedger, TokenEstimator, finalize_accounting
+from .measurement import (
+    CumulativeUsageStats,
+    LocalUsageLedger,
+    TokenEstimator,
+    finalize_accounting,
+)
 from .operations import OPERATIONS_VERSION, OperationError, run_operation
 from .policies import (
     POLICY_VERSION,
@@ -61,6 +66,7 @@ class LocalBackend:
         min_compaction_gain_tokens: int = 64,
         min_compaction_gain_percent: int = 5,
         artifact_root: Path | None = None,
+        usage_stats_path: Path | None = None,
     ) -> None:
         if eval_arm not in {"optimized", "raw"}:
             raise ValueError("eval_arm must be optimized or raw")
@@ -80,6 +86,10 @@ class LocalBackend:
         self.min_compaction_gain_percent = min_compaction_gain_percent
         self.estimator = TokenEstimator(counting_model)
         self.usage_ledger = LocalUsageLedger()
+        # Optional on-disk totals that survive restarts; None keeps usage in memory.
+        self.cumulative_usage: CumulativeUsageStats | None = (
+            CumulativeUsageStats(usage_stats_path) if usage_stats_path is not None else None
+        )
         self._cursor_signer = CursorSigner()
         self._lock = threading.RLock()
         self._catalog_count = 0
@@ -651,6 +661,11 @@ class LocalBackend:
                 "snapshot_ttl_seconds": self.store.ttl_seconds,
                 "evaluation_arm": self.eval_arm,
                 "usage": usage_ledger,
+                "cumulative": (
+                    self.cumulative_usage.snapshot()
+                    if self.cumulative_usage is not None
+                    else {"persistence": "off"}
+                ),
             }
 
     def _observe(
@@ -665,7 +680,7 @@ class LocalBackend:
     ) -> None:
         """Record only allowlisted local metadata; never accept source text or args."""
         result = payload or {}
-        self.usage_ledger.record(
+        event = self.usage_ledger.record(
             tool=tool,
             mode=mode or result.get("requested_mode") or result.get("mode") or "unknown",
             source_version=result.get("version"),
@@ -676,6 +691,8 @@ class LocalBackend:
             latency_ms=latency_ms,
             error_code=error_code,
         )
+        if self.cumulative_usage is not None:
+            self.cumulative_usage.add(event)
 
     def _import_source(self, source: str, metadata: dict[str, str] | None = None) -> SourceSnapshot:
         try:

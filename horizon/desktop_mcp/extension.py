@@ -21,7 +21,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from .broker import BrokerClient, BrokerError
-from .settings import ConfigurationError, DesktopSettings, _validation_fields
+from .settings import (
+    ConfigurationError,
+    DesktopSettings,
+    _overlaps_approved_roots,
+    _validation_fields,
+)
 
 _EXTENSION_HOME_ENV = "CONTEXTSHRINK_EXTENSION_HOME"
 _DEFAULT_BROKER_ID = "desktop-ext"
@@ -50,19 +55,33 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def extension_config_path(broker_id: str, base_dir: Path | None = None) -> Path:
-    """Return the settings file the extension writes for one broker identity."""
+def _extension_base_dir(base_dir: Path | None = None) -> Path:
+    """The extension folder: explicit base, env override, or the per-user default."""
     if base_dir is not None:
-        base = Path(base_dir)
-    elif (override := os.environ.get(_EXTENSION_HOME_ENV)) and os.path.isabs(override):
-        base = Path(override)
-    elif sys.platform == "win32":
+        return Path(base_dir)
+    if (override := os.environ.get(_EXTENSION_HOME_ENV)) and os.path.isabs(override):
+        return Path(override)
+    if sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA")
         root = Path(local) if local else Path.home() / "AppData" / "Local"
-        base = root / "ContextShrink" / "extension"
-    else:
-        base = Path.home() / ".local" / "state" / "contextshrink" / "extension"
-    return base / f"{broker_id}.json"
+        return root / "ContextShrink" / "extension"
+    return Path.home() / ".local" / "state" / "contextshrink" / "extension"
+
+
+def extension_config_path(broker_id: str, base_dir: Path | None = None) -> Path:
+    """Return the settings file the extension writes for one broker identity."""
+    return _extension_base_dir(base_dir) / f"{broker_id}.json"
+
+
+def extension_stats_path(broker_id: str, base_dir: Path | None = None) -> Path:
+    """Return the cumulative usage file for one broker identity.
+
+    The rule is a sibling of the extension folder: with the default layout
+    ``<ContextShrink>/extension/<id>.json`` the stats are at
+    ``<ContextShrink>/stats/<id>.json``. The same parent is used when
+    CONTEXTSHRINK_EXTENSION_HOME or ``base_dir`` overrides the folder.
+    """
+    return _extension_base_dir(base_dir).parent / "stats" / f"{broker_id}.json"
 
 
 def write_extension_settings(settings: DesktopSettings, path: Path) -> bool:
@@ -167,12 +186,23 @@ def ensure_broker(
 
 def _extension_settings(args: Any) -> DesktopSettings:
     artifact_root = getattr(args, "artifact_root", None) or None
+    approved_roots = list(getattr(args, "approved_roots", None) or [])
+    broker_id = getattr(args, "broker_id", None) or _DEFAULT_BROKER_ID
+    # Stats are skipped (not an error) when the stats folder sits inside an
+    # approved root, e.g. a user who approved their whole profile folder.
+    stats_path = extension_stats_path(broker_id)
+    usage_stats_path = (
+        None
+        if _overlaps_approved_roots(stats_path, tuple(Path(str(root)) for root in approved_roots))
+        else str(stats_path)
+    )
     data: dict[str, Any] = {
         "profile": "local",
-        "approved_roots": list(getattr(args, "approved_roots", None) or []),
-        "broker_id": getattr(args, "broker_id", None) or _DEFAULT_BROKER_ID,
+        "approved_roots": approved_roots,
+        "broker_id": broker_id,
         "tool_profile": getattr(args, "tool_profile", None) or "source",
         "artifact_root": artifact_root,
+        "usage_stats_path": usage_stats_path,
         "broker_idle_seconds": _EXTENSION_IDLE_SECONDS,
     }
     try:

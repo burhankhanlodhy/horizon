@@ -103,6 +103,37 @@ stdio client pattern as `tests/desktop_mcp/test_extension_runtime.py`.
 Not covered by the smoke: the companion UI. It is bundled as data but was not
 opened.
 
+## Usage stats
+
+Ask Claude "show ContextShrink stats" to see the counters. The stats result
+has two usage blocks:
+
+- `usage`: per-call observations kept in the running worker. They reset when
+  the broker or worker restarts.
+- `cumulative`: totals kept in a local file, so they survive restarts on this
+  machine. It reads `{"persistence":"off"}` when the file is not in use.
+
+The cumulative numbers are per-call estimates of the inner tool results:
+call counts by tool, mode and status, error and fallback counts, and summed
+token and UTF-8 byte estimates. Token counts are offline estimates, not
+Claude's tokenizer. They are not task totals, measured savings or billing
+data, and no USD figure is produced. The file holds counters only: no paths,
+queries, source text or per-call timestamps.
+
+Where the file lives: `stats\<broker-id>.json` beside the `extension` folder
+under the ContextShrink base. By default that is
+`%LOCALAPPDATA%\ContextShrink\stats\`. When `CONTEXTSHRINK_EXTENSION_HOME` is
+set, the same sibling rule applies to its parent folder. If that stats folder
+would sit inside an approved folder (for example, your whole profile), the
+file is not written and `cumulative` reads `persistence: off`.
+
+The file is a plain local file. Anyone with access to it can edit it, so it is
+not evidence.
+
+To reset, stop the running broker first: it ends when the chat that started
+it closes, or after 30 minutes idle. Then delete the stats file. A running
+broker keeps its totals in memory and rewrites the file on its next call.
+
 ## Known gaps
 
 - The manifest lists the four default (`source`) tools and sets
