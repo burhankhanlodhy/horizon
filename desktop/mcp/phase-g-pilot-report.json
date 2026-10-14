@@ -1,0 +1,389 @@
+{
+  "arm_ids": [
+    "A",
+    "B",
+    "C_normal",
+    "C_tuned"
+  ],
+  "arms": {
+    "A": {
+      "assigned": 13,
+      "completed": 12,
+      "observed": 13,
+      "outcomes": {
+        "bypassed": 0,
+        "completed": 12,
+        "failed": 0,
+        "not_run": 0,
+        "refused": 0,
+        "timed_out": 0,
+        "unsupported": 1
+      },
+      "quality": {
+        "citations": {
+          "complete": 0,
+          "missing": 0,
+          "not_required": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "completeness": {
+          "complete": 0,
+          "incomplete": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "correctness": {
+          "correct": 0,
+          "incorrect": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "unsupported_claim": {
+          "no": 0,
+          "unknown": 0,
+          "unscored": 13,
+          "yes": 0
+        }
+      },
+      "quality_pass_count": null,
+      "quality_pass_criterion": "not_declared",
+      "scores": {
+        "no_score": 13,
+        "scored": 0
+      }
+    },
+    "B": {
+      "assigned": 13,
+      "completed": 11,
+      "observed": 13,
+      "outcomes": {
+        "bypassed": 0,
+        "completed": 11,
+        "failed": 1,
+        "not_run": 0,
+        "refused": 0,
+        "timed_out": 0,
+        "unsupported": 1
+      },
+      "quality": {
+        "citations": {
+          "complete": 0,
+          "missing": 0,
+          "not_required": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "completeness": {
+          "complete": 0,
+          "incomplete": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "correctness": {
+          "correct": 0,
+          "incorrect": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "unsupported_claim": {
+          "no": 0,
+          "unknown": 0,
+          "unscored": 13,
+          "yes": 0
+        }
+      },
+      "quality_pass_count": null,
+      "quality_pass_criterion": "not_declared",
+      "scores": {
+        "no_score": 13,
+        "scored": 0
+      }
+    },
+    "C_normal": {
+      "assigned": 13,
+      "completed": 11,
+      "observed": 13,
+      "outcomes": {
+        "bypassed": 1,
+        "completed": 11,
+        "failed": 0,
+        "not_run": 0,
+        "refused": 0,
+        "timed_out": 0,
+        "unsupported": 1
+      },
+      "quality": {
+        "citations": {
+          "complete": 0,
+          "missing": 0,
+          "not_required": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "completeness": {
+          "complete": 0,
+          "incomplete": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "correctness": {
+          "correct": 0,
+          "incorrect": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "unsupported_claim": {
+          "no": 0,
+          "unknown": 0,
+          "unscored": 13,
+          "yes": 0
+        }
+      },
+      "quality_pass_count": null,
+      "quality_pass_criterion": "not_declared",
+      "scores": {
+        "no_score": 13,
+        "scored": 0
+      }
+    },
+    "C_tuned": {
+      "assigned": 13,
+      "completed": 11,
+      "observed": 12,
+      "outcomes": {
+        "bypassed": 0,
+        "completed": 11,
+        "failed": 0,
+        "not_run": 1,
+        "refused": 0,
+        "timed_out": 0,
+        "unsupported": 1
+      },
+      "quality": {
+        "citations": {
+          "complete": 0,
+          "missing": 0,
+          "not_required": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "completeness": {
+          "complete": 0,
+          "incomplete": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "correctness": {
+          "correct": 0,
+          "incorrect": 0,
+          "partial": 0,
+          "unscored": 13
+        },
+        "unsupported_claim": {
+          "no": 0,
+          "unknown": 0,
+          "unscored": 13,
+          "yes": 0
+        }
+      },
+      "quality_pass_count": null,
+      "quality_pass_criterion": "not_declared",
+      "scores": {
+        "no_score": 13,
+        "scored": 0
+      }
+    }
+  },
+  "as_of_utc": "2026-10-14T12:00:00Z",
+  "assignment_count": 52,
+  "assignment_sha256": "dfb39ec2a961ac76b9a9bded0630b54fdd2e4054a9c81adfc641eb0c0a6896e2",
+  "blind_scoring": {
+    "blind_scores_imported": false,
+    "quality_method": "not_scored",
+    "score_count": 0,
+    "synthetic_rule_checks_are_participant_quality": false,
+    "unscored_count": 0
+  },
+  "bundle_sha256": "e1e970c215725c001d5ddadbac3b81e5b32a6c323ca809d71834ee3a92878174",
+  "claims": {
+    "savings_claim": "none"
+  },
+  "enterprise_observed": {
+    "causal_claim": false,
+    "enterprise_usage_observed": false,
+    "fresh_window_count": 0,
+    "reason": "synthetic_fixture_has_no_enterprise_usage",
+    "status": "pending",
+    "usage_window_count": 0,
+    "usage_windows": []
+  },
+  "evidence_class": "synthetic",
+  "execution": {
+    "model_api_calls": 0,
+    "network_calls": 0,
+    "raw_prompts_or_source_data_persisted": false
+  },
+  "fixture_provenance": "committed_synthetic_bundle_only",
+  "fixture_rule_checks": {
+    "count": 13,
+    "method": "deterministic_contract_type_and_equality_checks",
+    "participant_quality_claim": false,
+    "status": "passed"
+  },
+  "fixture_sha256": "e1e970c215725c001d5ddadbac3b81e5b32a6c323ca809d71834ee3a92878174",
+  "limitations": [
+    "token and payload counts are estimates, not Claude usage",
+    "synthetic checks validate harness rules only and are not participant quality scores",
+    "Enterprise time buckets require explicit mapping and remain observational",
+    "modeled economics need supplied rates, cache mix and incremental service costs"
+  ],
+  "modeled_economics": {
+    "currency": null,
+    "reason": "rates_cache_mix_and_incremental_service_cost_not_supplied",
+    "status": "unavailable"
+  },
+  "payload_estimate": {
+    "by_arm": {
+      "A": {
+        "counter_versions": [
+          "synthetic-counter-v1"
+        ],
+        "estimate_count": 13,
+        "observed_count": 13,
+        "total_estimated_tokens": 1495
+      },
+      "B": {
+        "counter_versions": [
+          "synthetic-counter-v1"
+        ],
+        "estimate_count": 13,
+        "observed_count": 13,
+        "total_estimated_tokens": 1175
+      },
+      "C_normal": {
+        "counter_versions": [
+          "synthetic-counter-v1"
+        ],
+        "estimate_count": 13,
+        "observed_count": 13,
+        "total_estimated_tokens": 1755
+      },
+      "C_tuned": {
+        "counter_versions": [
+          "synthetic-counter-v1"
+        ],
+        "estimate_count": 12,
+        "observed_count": 13,
+        "total_estimated_tokens": 1260
+      }
+    },
+    "counter_scope": "participant_supplied_inner_payload_estimates",
+    "coverage": 52,
+    "paired_comparison": {
+      "comparable_pair_count": 11,
+      "comparison": "paired_A_minus_B",
+      "incomparable_pair_count": 2,
+      "incomparable_reasons": {
+        "arm_not_completed": 2
+      },
+      "paired_estimates": [
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "cross_document"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "exhaustive_rows"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "full_artifact"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "multilingual"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "negation_exception"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "numeric_lookup"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 155,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": -40,
+          "task_id": "rare_outlier"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "repeated_sources"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "small_no_gain"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "source_free"
+        },
+        {
+          "a_estimated_tokens": 115,
+          "b_estimated_tokens": 85,
+          "participant_id": "syn-p-0001",
+          "signed_delta_a_minus_b": 30,
+          "task_id": "updated_revoked"
+        }
+      ],
+      "scope": "completed_pairs_matching_source_snapshot_model_settings_and_counter_version",
+      "signed_token_delta_a_minus_b": 260,
+      "status": "available_estimate"
+    },
+    "status": "available_estimate"
+  },
+  "schema_version": "phase_g_study/v1",
+  "study_id": "phase-g-m6-synthetic-v1",
+  "study_plan": {
+    "minimum_completed_per_arm": 5,
+    "refresh_max_age_hours": 24,
+    "stopping_rule": "complete_predeclared_bundle_or_stop_at_target",
+    "stratum_weights": {
+      "deliverable": "0.25",
+      "document": "0.25",
+      "edge_case": "0.25",
+      "numeric": "0.25"
+    },
+    "target_participants": 8
+  }
+}
