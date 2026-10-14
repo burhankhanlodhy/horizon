@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase E deterministic work and artifacts"
 date: 2026-10-14
-status: e1-core-in-progress
+status: e1-core-complete-e2-pending
 phase: E
 milestones: [M11, M12]
 ---
@@ -23,7 +23,7 @@ operation is a validated, bounded, typed specification.
 
 | Stage | Scope | Status |
 |---|---|---|
-| E1 | Pure core: `tables`, `operations`, `batching`, `answer_contract`, `artifacts` with unit tests | in progress |
+| E1 | Pure core: `tables`, `operations`, `batching`, `answer_contract`, `artifacts` with unit tests | complete locally |
 | E2 | Backend/broker wiring; compute profile with `contextshrink_analyze` and `contextshrink_render`; contracts | pending |
 | E3 | Companion artifact browser, user-operated export, revocation, SDK evaluation | pending |
 
@@ -40,6 +40,8 @@ E1 modules have no MCP, broker, network, or model dependencies.
   same logical numbering as the `rows` selector (header is record 1, so the
   first data row has `ref {"type": "rows", "start": 2, "end": 2}`). Short records
   pad with `None`; a record longer than the header is `table_row_width`.
+  Blank lines are not data rows, so they never inflate counts, but later rows
+  keep their logical record numbers. JSON rows span the whole document's lines.
 - `json`: a top-level array of flat objects. Columns are the union of keys in
   first-seen order. `ref` is `{"type": "json_pointer", "pointer": "/<index>"}`.
   Nested arrays/objects are `table_nested_value`; duplicate keys are
@@ -186,6 +188,25 @@ Unknown versions raise `ValueError("instruction_pack_unknown")`.
   user-operated Save As only and is never model-facing.
 - `Dependency(source_id, version, root_key)` is the dependency record.
   Titles are at most 120 characters of printable text.
+
+## E1 review decisions
+
+- Only columns an operation actually uses are type-checked. Predicate columns
+  are checked first, so a row the filter rejects is `not_matched` rather than
+  `excluded` for an invalid value it never needed, and `on_invalid: "error"`
+  never fires for it. Lineage still satisfies
+  `matched + sum(excluded) + not_matched == scanned == source_rows`.
+- Comparison literals sent as JSON numbers pass through a binary float; send
+  high-precision literals as strings. Distinct counts and group keys compare
+  typed values, so `1.0` and `1.00` are one value shown in first-seen form.
+- `fuse_reads` gives back the most recently admitted blocks when late
+  deferral entries would exceed the budget, instead of failing the call.
+- `render_json` rejects duplicate column names (`artifact_columns_invalid`)
+  rather than dropping values. `ArtifactStore.read` hashes what it opened and
+  returns nothing unless it matches the recorded SHA-256.
+- E1 verification: `pytest tests/desktop_mcp -q` reports 527 passed, 1 skipped;
+  ruff check and format pass. 200,000 CSV rows parse and aggregate (grouped
+  count/sum/mean) in about 0.5 seconds locally.
 
 ## Verification
 
