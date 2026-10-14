@@ -218,9 +218,10 @@ def test_staging_rejects_hardlink_before_broker_source_can_be_pinned(tmp_path: P
     with pytest.raises(StagingFilesystemError):
         staging.pin_owned_file(filename, identity, hashlib.sha256(data).hexdigest())
     assert outside_link.read_bytes() == data
+    # A multiply linked source is deliberately not deleted by identity alone.
+    outside_link.unlink()
     assert staging.delete_owned(filename, identity)
     assert staging.close()
-    assert outside_link.read_bytes() == data
 
 
 def test_busy_windows_source_cleanup_remains_retryable(tmp_path: Path) -> None:
@@ -349,7 +350,9 @@ def test_large_single_line_import_and_reference_only_use_overview_without_body(
             }
 
     monkeypatch.setattr("horizon.desktop_mcp.companion.BrokerClient", FakeBrokerClient)
-    companion = PreparationCompanion(config, approved)
+    companion = PreparationCompanion(
+        config, approved, recovery_key_directory=tmp_path / "recovery-keys"
+    )
     assert companion.vault is not None
     staged = companion.vault.import_text(body, config)
     assert staged["utf8_bytes"] > 256 * 1024

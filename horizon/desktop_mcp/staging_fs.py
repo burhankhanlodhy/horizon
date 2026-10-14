@@ -50,6 +50,10 @@ class PinnedStagingDirectory:
         self._windows_child_handle: int | None = None
         self._windows_root_handle: int | None = None
         self._windows_files: dict[str, int] = {}
+        self._writer_descriptors: dict[str, int] = {}
+        self._lease_name: str | None = None
+        self._lease_descriptor: int | None = None
+        self._lease_identity: tuple[int, int] | None = None
         self._root_identity: tuple[int, int] | None = None
         self._directory_identity: tuple[int, int] | None = None
 
@@ -70,7 +74,32 @@ class PinnedStagingDirectory:
                 instance._close_posix(remove_directory=True)
             raise
 
-    def _open_posix(self) -> None:
+    @classmethod
+    def open_existing(cls, approved_root: Path, session_name: str) -> PinnedStagingDirectory:
+        """Pin an already existing generated child without creating it."""
+        instance = cls(approved_root, session_name)
+        try:
+            if os.name == "nt":
+                instance._open_windows(existing=True)
+            else:
+                instance._open_posix(existing=True)
+            return instance
+        except Exception:
+            if os.name == "nt":
+                instance._close_handles()
+            else:
+                instance._close_posix(remove_directory=False)
+            raise
+
+    @property
+    def root_identity(self) -> tuple[int, int] | None:
+        return self._root_identity
+
+    @property
+    def directory_identity(self) -> tuple[int, int] | None:
+        return self._directory_identity
+
+    def _open_posix(self, *, existing: bool = False) -> None:
         if not self.root.is_absolute():
             raise StagingFilesystemError("staging_root_not_absolute")
         flags = _DIRECTORY_FLAGS
@@ -85,7 +114,8 @@ class PinnedStagingDirectory:
                 self._posix_root_fd = None
                 raise StagingFilesystemError("staging_root_unavailable")
             self._root_identity = _identity(root_info)
-            os.mkdir(self.session_name, mode=0o700, dir_fd=root_fd)
+            if not existing:
+                os.mkdir(self.session_name, mode=0o700, dir_fd=root_fd)
             child_fd = os.open(self.session_name, flags, dir_fd=root_fd)
             self._posix_directory_fd = child_fd
             child_info = os.fstat(child_fd)
@@ -97,7 +127,7 @@ class PinnedStagingDirectory:
         except OSError as error:
             raise StagingFilesystemError("staging_directory_unavailable") from error
 
-    def _open_windows(self) -> None:
+    def _open_windows(self, *, existing: bool = False) -> None:
         import ctypes
         import ctypes.wintypes
 
@@ -182,9 +212,15 @@ class PinnedStagingDirectory:
             handle = self._nt_create_directory_relative(
                 self._windows_root_handle,
                 self.session_name,
-                read_attributes | list_directory | 0x00010000 | 0x00100000,
+                read_attributes
+                | list_directory
+                | 0x00000002
+                | 0x00010000
+                | 0x40000000
+                | 0x00100000,
                 share_read_write,
                 0x00000010,
+                existing=existing,
             )
             self._windows_handles.append(handle)
             self._windows_child_handle = handle
@@ -195,6 +231,8 @@ class PinnedStagingDirectory:
                 info.attributes & reparse_attribute
             ):
                 raise StagingFilesystemError("staging_reparse_point_rejected")
+            self._root_identity = self._windows_handle_identity(self._windows_root_handle)
+            self._directory_identity = self._windows_handle_identity(handle)
         except StagingFilesystemError:
             self._remove_windows_directory_if_owned()
             raise
@@ -209,6 +247,9 @@ class PinnedStagingDirectory:
         desired_access: int,
         share_access: int,
         attributes: int,
+        *,
+        existing: bool = False,
+        directory: bool = True,
     ) -> int:
         """Atomically create/open a child relative to an already pinned directory."""
         import ctypes
@@ -279,26 +320,38 @@ class PinnedStagingDirectory:
         )
         io_status = _IoStatusBlock()
         output = ctypes.wintypes.HANDLE()
-        # FILE_CREATE + FILE_DIRECTORY_FILE + FILE_SYNCHRONOUS_IO_NONALERT
+        # FILE_CREATE/FILE_OPEN + FILE_DIRECTORY_FILE/FILE_NON_DIRECTORY_FILE
+        # + FILE_SYNCHRONOUS_IO_NONALERT
         # + FILE_OPEN_REPARSE_POINT. The returned handle pins the new directory
         # before any path-based operation can observe or replace its name.
         status = nt_create_file(
             ctypes.byref(output),
-            desired_access,
+            desired_access | (0x00100000 if not directory else 0),
             ctypes.byref(object_attributes),
             ctypes.byref(io_status),
             None,
             attributes,
             share_access,
-            2,
-            0x00000001 | 0x00000020 | 0x00200000,
+            1 if existing else 2,
+            (0x00000001 if directory else 0x00000040) | 0x00000020 | 0x00200000,
             None,
             0,
         )
         if status < 0:
             error = status_to_error(status)
-            raise StagingFilesystemError("staging_directory_unavailable", int(error))
+            failure = StagingFilesystemError("staging_directory_unavailable", int(error))
+            failure.winerror = int(error)
+            raise failure
         return int(output.value)
+
+    def _windows_handle_identity(self, handle: int) -> tuple[int, int]:
+        import ctypes
+
+        info = self._win_info_type()
+        if not self._win_get_info(handle, ctypes.byref(info)):
+            raise self._win_os_error("staging_directory_unavailable")
+        file_index = (int(info.index_high) << 32) | int(info.index_low)
+        return int(info.volume_serial), file_index
 
     def _win_os_error(self, message: str) -> StagingFilesystemError:
         import ctypes
@@ -353,12 +406,460 @@ class PinnedStagingDirectory:
             self._check_open()
             if filename in self._entries:
                 raise StagingFilesystemError("staging_file_exists")
-            if self._is_windows:
-                identity = self._write_windows(filename, data)
-            else:
-                identity = self._write_posix(filename, data)
-            self._entries[filename] = identity
+            identity = self.create_empty_exclusive(filename)
+            try:
+                written = self.write_owned(filename, identity, data)
+            except StagingFilesystemError:
+                self.delete_owned(filename, identity)
+                raise
+            if not written:
+                self.delete_owned(filename, identity)
+                raise StagingFilesystemError("staging_file_changed")
             return identity
+
+    def list_names(self, *, limit: int = 256) -> list[str]:
+        """List a bounded number of children while the directory stays pinned."""
+        if not 1 <= limit <= 4096:
+            raise StagingFilesystemError("staging_directory_limit_invalid")
+        with self._lock:
+            self.check_directory()
+            if self._is_windows:
+                children = os.scandir(self.directory)
+            else:
+                if self._posix_directory_fd is None:
+                    raise StagingFilesystemError("staging_closed")
+                children = os.scandir(self._posix_directory_fd)
+            try:
+                names: list[str] = []
+                for child in children:
+                    if len(names) >= limit:
+                        raise StagingFilesystemError("staging_directory_too_many_children")
+                    names.append(child.name)
+                return names
+            finally:
+                children.close()
+
+    def create_empty_exclusive(self, filename: str) -> tuple[int, int]:
+        """Create an empty, owned file and retain its writer handle.
+
+        Recovery metadata can durably claim the returned identity before any
+        user text is written through :meth:`write_owned`.
+        """
+        filename = _safe_name(filename)
+        with self._lock:
+            self._check_open()
+            if filename in self._entries or filename in self._writer_descriptors:
+                raise StagingFilesystemError("staging_file_exists")
+            if self._is_windows:
+                import msvcrt
+
+                handle = self._nt_create_directory_relative(
+                    self._windows_child_handle,
+                    filename,
+                    0x80000000 | 0x40000000 | 0x00010000 | 0x00000080,
+                    0x00000001,
+                    0x00000080,
+                    directory=False,
+                )
+                descriptor = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+                identity, attributes, links = self._windows_file_info(
+                    msvcrt.get_osfhandle(descriptor)
+                )
+                if attributes & (0x00000010 | 0x00000400) or links != 1:
+                    os.close(descriptor)
+                    raise StagingFilesystemError("staging_file_rejected")
+            else:
+                if self._posix_directory_fd is None:
+                    raise StagingFilesystemError("staging_closed")
+                flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                try:
+                    descriptor = os.open(filename, flags, 0o600, dir_fd=self._posix_directory_fd)
+                    info = os.fstat(descriptor)
+                except OSError as error:
+                    raise StagingFilesystemError("staging_write_failed") from error
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 0:
+                    os.close(descriptor)
+                    raise StagingFilesystemError("staging_file_rejected")
+                identity = _identity(info)
+            self._entries[filename] = identity
+            self._writer_descriptors[filename] = descriptor
+            try:
+                self.sync_directory()
+            except StagingFilesystemError:
+                self.delete_owned(filename, identity)
+                raise
+            return identity
+
+    def sync_directory(self) -> None:
+        """Flush directory-entry changes before any user text write follows."""
+        with self._lock:
+            self.check_directory()
+            if self._is_windows:
+                import ctypes.wintypes
+
+                flush = self._win_kernel32.FlushFileBuffers
+                flush.argtypes = [ctypes.wintypes.HANDLE]
+                flush.restype = ctypes.wintypes.BOOL
+                if not flush(self._windows_child_handle):
+                    raise self._win_os_error("staging_directory_sync_failed")
+            else:
+                if self._posix_directory_fd is None:
+                    raise StagingFilesystemError("staging_closed")
+                try:
+                    os.fsync(self._posix_directory_fd)
+                except OSError as error:
+                    raise StagingFilesystemError("staging_directory_sync_failed") from error
+
+    def write_owned(self, filename: str, identity: tuple[int, int], data: bytes) -> bool:
+        """Write bounded bytes through the retained identity-checked handle."""
+        filename = _safe_name(filename)
+        if not isinstance(data, bytes) or len(data) > _MAX_FILE_BYTES:
+            raise StagingFilesystemError("staging_file_size_invalid")
+        with self._lock:
+            self._check_open()
+            descriptor = self._writer_descriptors.get(filename)
+            if descriptor is None or self._entries.get(filename) != identity:
+                return False
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 0:
+                    return False
+                if self._is_windows:
+                    import msvcrt
+
+                    observed, attributes, links = self._windows_file_info(
+                        msvcrt.get_osfhandle(descriptor)
+                    )
+                    if observed != identity or attributes & (0x00000010 | 0x00000400) or links != 1:
+                        return False
+                total = 0
+                while total < len(data):
+                    written = os.write(descriptor, data[total:])
+                    if written <= 0:
+                        raise StagingFilesystemError("staging_write_failed")
+                    total += written
+                os.fsync(descriptor)
+                return True
+            finally:
+                os.close(descriptor)
+                self._writer_descriptors.pop(filename, None)
+
+    def read_existing(
+        self, filename: str, *, limit: int
+    ) -> tuple[bytes, tuple[int, int], int, int]:
+        """Read one bounded, regular, single-link file relative to the pinned child."""
+        filename = _safe_name(filename)
+        if not 0 <= limit <= _MAX_FILE_BYTES:
+            raise StagingFilesystemError("staging_file_size_invalid")
+        with self._lock:
+            self._check_open()
+            descriptor: int | None = None
+            try:
+                if self._is_windows:
+                    import msvcrt
+
+                    handle = self._nt_create_directory_relative(
+                        self._windows_child_handle,
+                        filename,
+                        0x80000000 | 0x00000080,
+                        0x00000001,
+                        0x00000080,
+                        existing=True,
+                        directory=False,
+                    )
+                    identity, attributes, links = self._windows_file_info(handle)
+                    if attributes & (0x00000010 | 0x00000400) or links != 1:
+                        self._close_handle(handle)
+                        raise StagingFilesystemError("staging_file_rejected")
+                    descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+                else:
+                    if self._posix_directory_fd is None:
+                        raise StagingFilesystemError("staging_closed")
+                    descriptor = os.open(
+                        filename,
+                        os.O_RDONLY | os.O_NOFOLLOW,
+                        dir_fd=self._posix_directory_fd,
+                    )
+                    info = os.fstat(descriptor)
+                    identity = _identity(info)
+                    links = info.st_nlink
+                    if not stat.S_ISREG(info.st_mode) or links != 1:
+                        raise StagingFilesystemError("staging_file_rejected")
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                    raise StagingFilesystemError("staging_file_size_invalid")
+                data = bytearray()
+                while len(data) <= limit:
+                    block = os.read(descriptor, min(65536, limit + 1 - len(data)))
+                    if not block:
+                        break
+                    data.extend(block)
+                if len(data) > limit:
+                    raise StagingFilesystemError("staging_file_size_invalid")
+                return bytes(data), identity, links, info.st_size
+            except StagingFilesystemError:
+                raise
+            except OSError as error:
+                raise StagingFilesystemError("staging_file_unavailable") from error
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+    def adopt_existing(self, filename: str, identity: tuple[int, int]) -> bool:
+        """Register a previously checked owned file for anchored deletion."""
+        filename = _safe_name(filename)
+        with self._lock:
+            self._check_open()
+            try:
+                if self._is_windows:
+                    handle = self._nt_create_directory_relative(
+                        self._windows_child_handle,
+                        filename,
+                        0x00010000 | 0x00000080,
+                        0x00000001,
+                        0x00000080,
+                        existing=True,
+                        directory=False,
+                    )
+                    observed, attributes, links = self._windows_file_info(handle)
+                    self._close_handle(handle)
+                    if observed != identity or attributes & (0x00000010 | 0x00000400) or links != 1:
+                        return False
+                else:
+                    if self._posix_directory_fd is None:
+                        return False
+                    info = os.stat(filename, dir_fd=self._posix_directory_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_nlink != 1
+                        or _identity(info) != identity
+                    ):
+                        return False
+            except (OSError, StagingFilesystemError):
+                return False
+            self._entries[filename] = identity
+            return True
+
+    def try_acquire_lease(self, filename: str, *, create: bool) -> bool:
+        """Hold a kernel-released live-session lease; return false if active."""
+        filename = _safe_name(filename)
+        with self._lock:
+            self._check_open()
+            if self._lease_descriptor is not None or self._lease_name is not None:
+                raise StagingFilesystemError("staging_lease_already_held")
+            try:
+                if self._is_windows:
+                    handle = self._nt_create_directory_relative(
+                        self._windows_child_handle,
+                        filename,
+                        0x80000000 | 0x40000000 | 0x00010000 | 0x00000080,
+                        0x00000001 if create else 0,
+                        0x00000080,
+                        existing=not create,
+                        directory=False,
+                    )
+                    identity, attributes, links = self._windows_file_info(handle)
+                    if attributes & (0x00000010 | 0x00000400) or links != 1:
+                        self._close_handle(handle)
+                        raise StagingFilesystemError("staging_lease_invalid")
+                    if self._windows_file_size(handle) != 0:
+                        self._close_handle(handle)
+                        raise StagingFilesystemError("staging_lease_invalid")
+                    descriptor = -int(handle)
+                else:
+                    if self._posix_directory_fd is None:
+                        raise StagingFilesystemError("staging_closed")
+                    flags = os.O_RDWR | os.O_NOFOLLOW
+                    if create:
+                        flags |= os.O_CREAT | os.O_EXCL
+                    descriptor = os.open(
+                        filename,
+                        flags,
+                        0o600,
+                        dir_fd=self._posix_directory_fd,
+                    )
+                    info = os.fstat(descriptor)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 0:
+                        os.close(descriptor)
+                        raise StagingFilesystemError("staging_lease_invalid")
+                    identity = _identity(info)
+                    import fcntl
+
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        os.close(descriptor)
+                        return False
+                self._entries[filename] = identity
+                self._lease_name = filename
+                self._lease_descriptor = descriptor
+                self._lease_identity = identity
+                return True
+            except StagingFilesystemError as error:
+                if not create and getattr(error, "winerror", None) in {32, 33}:
+                    return False
+                raise
+            except FileExistsError:
+                if create:
+                    return False
+                raise StagingFilesystemError("staging_lease_unavailable") from None
+            except PermissionError as error:
+                if not create and os.name == "nt" and getattr(error, "winerror", None) in {32, 33}:
+                    return False
+                raise StagingFilesystemError("staging_lease_unavailable") from error
+            except OSError as error:
+                if not create and isinstance(error, FileNotFoundError):
+                    return False
+                if not create and getattr(error, "winerror", None) in {32, 33}:
+                    return False
+                raise StagingFilesystemError("staging_lease_unavailable") from error
+
+    def release_lease(self) -> None:
+        with self._lock:
+            descriptor = self._lease_descriptor
+            if descriptor is None:
+                return
+            if descriptor < 0:
+                self._close_handle(-descriptor)
+            else:
+                os.close(descriptor)
+            self._lease_descriptor = None
+
+    @property
+    def lease_identity(self) -> tuple[int, int] | None:
+        return self._lease_identity
+
+    def rename_owned_new(self, source: str, destination: str, identity: tuple[int, int]) -> bool:
+        """Atomically rename one owned file to a new name within the pinned child."""
+        source = _safe_name(source)
+        destination = _safe_name(destination)
+        with self._lock:
+            self._check_open()
+            if self._entries.get(source) != identity or destination in self._entries:
+                return False
+            if self._is_windows:
+                import ctypes
+                import ctypes.wintypes
+
+                handle = self._nt_create_directory_relative(
+                    self._windows_child_handle,
+                    source,
+                    0x00010000 | 0x00000080,
+                    0x00000001,
+                    0x00000080,
+                    existing=True,
+                    directory=False,
+                )
+                try:
+                    observed, attributes, links = self._windows_file_info(handle)
+                    if observed != identity or attributes & (0x00000010 | 0x00000400) or links != 1:
+                        return False
+
+                    destination_path = str(self.directory / destination)
+
+                    class _RenameInfo(ctypes.Structure):
+                        _fields_ = [
+                            ("flags", ctypes.wintypes.DWORD),
+                            ("root_directory", ctypes.wintypes.HANDLE),
+                            ("name_bytes", ctypes.wintypes.DWORD),
+                            ("name", ctypes.c_wchar * (len(destination_path) + 1)),
+                        ]
+
+                    info = _RenameInfo(
+                        0,
+                        None,
+                        len(destination_path.encode("utf-16-le")),
+                        destination_path,
+                    )
+                    set_info = self._win_kernel32.SetFileInformationByHandle
+                    set_info.argtypes = [
+                        ctypes.wintypes.HANDLE,
+                        ctypes.wintypes.DWORD,
+                        ctypes.c_void_p,
+                        ctypes.wintypes.DWORD,
+                    ]
+                    set_info.restype = ctypes.wintypes.BOOL
+                    if not set_info(handle, 3, ctypes.byref(info), ctypes.sizeof(info)):
+                        error = ctypes.get_last_error()
+                        if error in {80, 183}:
+                            return False
+                        raise self._win_os_error("staging_rename_failed")
+                finally:
+                    self._close_handle(handle)
+            else:
+                if self._posix_directory_fd is None:
+                    raise StagingFilesystemError("staging_closed")
+                import ctypes
+                import errno
+                import sys
+
+                try:
+                    source_info = os.stat(
+                        source, dir_fd=self._posix_directory_fd, follow_symlinks=False
+                    )
+                    if (
+                        not stat.S_ISREG(source_info.st_mode)
+                        or source_info.st_nlink != 1
+                        or _identity(source_info) != identity
+                    ):
+                        return False
+                    libc = ctypes.CDLL(None, use_errno=True)
+                    if sys.platform.startswith("linux"):
+                        rename = getattr(libc, "renameat2", None)
+                        if rename is None:
+                            raise StagingFilesystemError("safe_rename_unavailable")
+                        rename.argtypes = [
+                            ctypes.c_int,
+                            ctypes.c_char_p,
+                            ctypes.c_int,
+                            ctypes.c_char_p,
+                            ctypes.c_uint,
+                        ]
+                        rename.restype = ctypes.c_int
+                        result = rename(
+                            self._posix_directory_fd,
+                            os.fsencode(source),
+                            self._posix_directory_fd,
+                            os.fsencode(destination),
+                            1,
+                        )
+                    elif sys.platform == "darwin":
+                        rename = getattr(libc, "renameatx_np", None)
+                        if rename is None:
+                            raise StagingFilesystemError("safe_rename_unavailable")
+                        rename.argtypes = [
+                            ctypes.c_int,
+                            ctypes.c_char_p,
+                            ctypes.c_int,
+                            ctypes.c_char_p,
+                            ctypes.c_uint,
+                        ]
+                        rename.restype = ctypes.c_int
+                        result = rename(
+                            self._posix_directory_fd,
+                            os.fsencode(source),
+                            self._posix_directory_fd,
+                            os.fsencode(destination),
+                            0x00000004,
+                        )
+                    else:
+                        raise StagingFilesystemError("safe_rename_unavailable")
+                    if result != 0:
+                        error_number = ctypes.get_errno()
+                        if error_number == errno.EEXIST:
+                            return False
+                        raise OSError(error_number, "staging_rename_failed")
+                except StagingFilesystemError:
+                    raise
+                except FileExistsError:
+                    return False
+                except OSError as error:
+                    raise StagingFilesystemError("staging_rename_failed") from error
+            self.sync_directory()
+            self._entries.pop(source, None)
+            self._entries[destination] = identity
+            self._writer_descriptors.pop(source, None)
+            return True
 
     def _write_posix(self, filename: str, data: bytes) -> tuple[int, int]:
         if self._posix_directory_fd is None:
@@ -486,6 +987,9 @@ class PinnedStagingDirectory:
             self._check_open()
             if self._entries.get(filename) != identity:
                 return False
+            writer = self._writer_descriptors.pop(filename, None)
+            if writer is not None:
+                os.close(writer)
             if self._is_windows:
                 result = self._delete_windows(filename, identity)
             else:
@@ -685,6 +1189,8 @@ class PinnedStagingDirectory:
             )
             if not stat.S_ISREG(info.st_mode):
                 return False
+            if info.st_nlink != 1:
+                return False
             if identity is not None and _identity(info) != identity:
                 return False
             os.unlink(filename, dir_fd=self._posix_directory_fd)
@@ -692,6 +1198,8 @@ class PinnedStagingDirectory:
         except FileNotFoundError:
             return False
         except OSError as error:
+            if getattr(error, "winerror", None) in {32, 33}:
+                return False
             raise StagingFilesystemError("staging_delete_failed") from error
 
     def _delete_windows(self, filename: str, identity: tuple[int, int]) -> bool:
@@ -706,40 +1214,55 @@ class PinnedStagingDirectory:
             self._windows_files.pop(filename, None)
             return self._delete_windows_unpinned(filename, identity)
         except OSError as error:
+            if getattr(error, "winerror", None) in {32, 33}:
+                return False
             raise StagingFilesystemError("staging_delete_failed") from error
 
     def _delete_windows_unpinned(self, filename: str, identity: tuple[int, int]) -> bool:
-        import ctypes
-        import ctypes.wintypes
-
-        handle_value = self._win_create_file(
-            str(self.directory / filename),
-            0x00010000 | 0x00000080,
-            0x00000001,
-            None,
-            3,
-            0x00200000,
-            None,
-        )
-        if handle_value == ctypes.wintypes.HANDLE(-1).value:
-            return False
-        handle = int(handle_value)
+        try:
+            handle = self._nt_create_directory_relative(
+                self._windows_child_handle,
+                filename,
+                0x00010000 | 0x00000080,
+                0x00000001,
+                0x00000080,
+                existing=True,
+                directory=False,
+            )
+        except StagingFilesystemError as error:
+            if getattr(error, "winerror", None) in {2, 3}:
+                return False
+            raise
         try:
             observed_identity, attributes, _links = self._windows_file_info(handle)
-            if observed_identity != identity or attributes & (0x00000010 | 0x00000400):
+            if (
+                observed_identity != identity
+                or attributes & (0x00000010 | 0x00000400)
+                or _links != 1
+            ):
                 return False
             self._mark_windows_delete(handle)
             return True
         finally:
             self._close_handle(handle)
 
-    def close(self, *, remove_directory: bool = True) -> bool:
+    def close(self, *, remove_directory: bool = True, delete_entries: bool = True) -> bool:
         """Release handles and report whether owned staging was removed."""
         with self._lock:
             if self._closed:
                 return not self._entries
             cleanup_complete = True
-            for filename, identity in tuple(self._entries.items()):
+            for filename, descriptor in tuple(self._writer_descriptors.items()):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_complete = False
+                self._writer_descriptors.pop(filename, None)
+            try:
+                self.release_lease()
+            except OSError:
+                cleanup_complete = False
+            for filename, identity in tuple(self._entries.items()) if delete_entries else ():
                 try:
                     if self._is_windows:
                         deleted = self._delete_windows(filename, identity)
@@ -755,6 +1278,8 @@ class PinnedStagingDirectory:
                 directory_removed = self._close_windows(remove_directory)
             else:
                 directory_removed = self._close_posix(remove_directory)
+            self._lease_name = None
+            self._lease_identity = None
             self._closed = True
             return cleanup_complete and directory_removed
 
@@ -777,6 +1302,8 @@ class PinnedStagingDirectory:
             os.close(root_fd)
         self._posix_directory_fd = None
         self._posix_root_fd = None
+        self._lease_name = None
+        self._lease_identity = None
         return removed
 
     def _close_windows(self, remove_directory: bool) -> bool:
@@ -838,6 +1365,14 @@ class PinnedStagingDirectory:
             raise self._win_os_error("staging_file_unavailable")
         file_index = (int(info.index_high) << 32) | int(info.index_low)
         return (int(info.volume_serial), file_index), int(info.attributes), int(info.links)
+
+    def _windows_file_size(self, handle: int) -> int:
+        import ctypes
+
+        info = self._win_info_type()
+        if not self._win_get_info(handle, ctypes.byref(info)):
+            raise self._win_os_error("staging_file_unavailable")
+        return (int(info.size_high) << 32) | int(info.size_low)
 
     def _remove_windows_directory_if_owned(self) -> None:
         # During a partial open, only remove the generated child if the open

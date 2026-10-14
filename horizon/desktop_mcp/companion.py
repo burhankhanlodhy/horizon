@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import sys
@@ -29,6 +30,14 @@ from .preparation import (
     PreparationError,
     ReferenceSource,
     prepare_packet,
+)
+from .session_recovery import (
+    LEASE_NAME,
+    STATE_SLOTS,
+    RecoveryError,
+    load_hmac_key,
+    sign_state,
+    verify_state,
 )
 from .settings import ConfigurationError, DesktopSettings, load_settings
 from .staging_fs import PinnedStagingDirectory, StagingFilesystemError
@@ -125,7 +134,13 @@ def _artifact_broker_error(error: BrokerError) -> CompanionError:
 class SessionVault:
     """Own generated UTF-8 files under a configured approved root for one run."""
 
-    def __init__(self, settings: DesktopSettings, staging_root: Path) -> None:
+    def __init__(
+        self,
+        settings: DesktopSettings,
+        staging_root: Path,
+        *,
+        recovery_key_directory: Path | None = None,
+    ) -> None:
         if settings.profile != "local":
             raise CompanionError("local_profile_required")
         supplied = Path(staging_root)
@@ -139,6 +154,11 @@ class SessionVault:
         if supplied_real not in approved:
             raise CompanionError("staging_root_not_approved")
         self.root = supplied_real
+        try:
+            self._recovery_key, _key_dir = load_hmac_key(approved, recovery_key_directory)
+        except RecoveryError as error:
+            raise CompanionError(error.code) from None
+        self.recover_expired_sessions(self.root, self._recovery_key)
         self.session_id = uuid.uuid4().hex
         self.directory = self.root / f".contextshrink-session-{self.session_id}"
         try:
@@ -146,7 +166,13 @@ class SessionVault:
         except StagingFilesystemError:
             raise CompanionError("staging_root_unavailable") from None
         self.directory = self._filesystem.directory
+        if not self._filesystem.try_acquire_lease(LEASE_NAME, create=True):
+            self._filesystem.close(remove_directory=True)
+            raise CompanionError("staging_unavailable")
         self._entries: dict[str, dict[str, Any]] = {}
+        self._manifest_entries: dict[str, dict[str, Any]] = {}
+        self._manifest_generation = 0
+        self._manifest_slots: dict[str, tuple[tuple[int, int], int]] = {}
         self._expired_ids: list[str] = []
         self._bytes = 0
         self._lock = threading.RLock()
@@ -156,6 +182,215 @@ class SessionVault:
         )
         self._closed = False
         self._cleanup_complete = True
+        try:
+            self._persist_manifest()
+        except (OSError, RecoveryError, StagingFilesystemError, CompanionError):
+            self._filesystem.close(remove_directory=False, delete_entries=False)
+            raise CompanionError("staging_unavailable") from None
+
+    @classmethod
+    def recover_expired_sessions(cls, root: Path, key: bytes, *, now: float | None = None) -> int:
+        """Remove authenticated expired orphan files after their process lease ends."""
+        current = time.time() if now is None else now
+        removed = 0
+        try:
+            names: list[str] = []
+            with os.scandir(root) as children:
+                for index, item in enumerate(children):
+                    if index >= 4096 or len(names) >= 128:
+                        break
+                    if item.is_dir(follow_symlinks=False) and re.fullmatch(
+                        r"\.contextshrink-session-[0-9a-f]{32}", item.name
+                    ):
+                        names.append(item.name)
+            names.sort()
+        except OSError:
+            return 0
+        for session_name in names:
+            session_id = session_name.rsplit("-", 1)[-1]
+            try:
+                filesystem = PinnedStagingDirectory.open_existing(root, session_name)
+            except (OSError, StagingFilesystemError):
+                continue
+            try:
+                if not filesystem.try_acquire_lease(LEASE_NAME, create=False):
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                children = set(filesystem.list_names(limit=256))
+                present_slots = [slot for slot in STATE_SLOTS if slot in children]
+                if not present_slots:
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                states: list[tuple[str, tuple[int, int], dict[str, Any]]] = []
+                invalid = False
+                for slot in present_slots:
+                    try:
+                        payload, identity, links, _size = filesystem.read_existing(
+                            slot, limit=64 * 1024
+                        )
+                        if links != 1:
+                            invalid = True
+                            break
+                        state = verify_state(
+                            payload,
+                            key,
+                            session_id=session_id,
+                            root_identity=filesystem.root_identity or (-1, -1),
+                            directory_identity=filesystem.directory_identity or (-1, -1),
+                            lease_identity=filesystem.lease_identity or (-1, -1),
+                        )
+                        if not filesystem.adopt_existing(slot, identity):
+                            invalid = True
+                            break
+                        states.append((slot, identity, state))
+                    except (OSError, RecoveryError, StagingFilesystemError):
+                        invalid = True
+                        break
+                if invalid or not cls._manifests_consistent([item[2] for item in states]):
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                latest = max((item[2] for item in states), key=lambda state: state["generation"])
+                entries = latest["entries"]
+                # If any authorized item is still within its advertised TTL,
+                # preserve the whole session until a later launch.
+                if any(
+                    entry["created_epoch"] > current + 300
+                    or entry["expires_epoch"] > current + 3600 + 300
+                    or entry["expires_epoch"] > current
+                    for entry in entries
+                ):
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                candidates: list[tuple[str, tuple[int, int]]] = []
+                for entry in entries:
+                    try:
+                        data, identity, links, size = filesystem.read_existing(
+                            entry["name"], limit=8 * 1024 * 1024
+                        )
+                        if (
+                            identity != tuple(entry["file_id"])
+                            or links != 1
+                            or size > entry["size"]
+                        ):
+                            invalid = True
+                            break
+                        if entry["state"] == "committed" and (
+                            size != entry["size"]
+                            or hashlib.sha256(data).hexdigest() != entry["sha256"]
+                        ):
+                            invalid = True
+                            break
+                        if entry["state"] == "writing" and size == 0:
+                            # An authenticated writing record owns this exact
+                            # empty or bounded partial file identity.
+                            pass
+                        if not filesystem.adopt_existing(entry["name"], identity):
+                            invalid = True
+                            break
+                        candidates.append((entry["name"], identity))
+                    except (OSError, StagingFilesystemError) as error:
+                        if (
+                            isinstance(error, FileNotFoundError)
+                            or isinstance(error.__cause__, FileNotFoundError)
+                            or getattr(error, "winerror", None) == 2
+                        ):
+                            continue
+                        invalid = True
+                        break
+                if invalid:
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                # Unknown children and non-generated metadata are deliberately
+                # left untouched; the final rmdir will fail safely if present.
+                for filename, identity in candidates:
+                    if not filesystem.delete_owned(filename, identity):
+                        invalid = True
+                        break
+                    removed += 1
+                if invalid:
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                metadata_removed = True
+                for slot, identity, _state in states:
+                    if not filesystem.delete_owned(slot, identity):
+                        metadata_removed = False
+                        break
+                if not metadata_removed:
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                    continue
+                lease_identity = filesystem.lease_identity
+                filesystem.release_lease()
+                if lease_identity is not None:
+                    if not filesystem.delete_owned(LEASE_NAME, lease_identity):
+                        filesystem.close(remove_directory=False, delete_entries=False)
+                        continue
+                filesystem.close(remove_directory=True, delete_entries=False)
+            except (OSError, RecoveryError, StagingFilesystemError):
+                try:
+                    filesystem.close(remove_directory=False, delete_entries=False)
+                except (OSError, StagingFilesystemError):
+                    pass
+        return removed
+
+    @staticmethod
+    def _manifests_consistent(states: list[dict[str, Any]]) -> bool:
+        if not states or len(states) > 2:
+            return False
+        ordered = sorted(states, key=lambda state: state["generation"])
+        if len(ordered) == 1:
+            return True
+        old, new = ordered
+        if new["generation"] != old["generation"] + 1:
+            return False
+        older = {entry["id"]: entry for entry in old["entries"]}
+        newer = {entry["id"]: entry for entry in new["entries"]}
+        for entry_id, entry in older.items():
+            replacement = newer.get(entry_id)
+            if replacement is None:
+                continue
+            if any(
+                entry[key] != replacement[key]
+                for key in ("name", "file_id", "size", "sha256", "created_epoch", "expires_epoch")
+            ):
+                return False
+            if entry["state"] == "committed" and replacement["state"] != "committed":
+                return False
+        return True
+
+    def _persist_manifest(self) -> None:
+        generation = self._manifest_generation + 1
+        data = sign_state(
+            self._recovery_key,
+            session_id=self.session_id,
+            root_identity=self._filesystem.root_identity or (-1, -1),
+            directory_identity=self._filesystem.directory_identity or (-1, -1),
+            lease_identity=self._filesystem.lease_identity or (-1, -1),
+            generation=generation,
+            entries=list(self._manifest_entries.values()),
+        )
+        slot = STATE_SLOTS[generation % 2]
+        temporary = f"state-{uuid.uuid4().hex}.tmp"
+        identity = self._filesystem.write_exclusive(temporary, data)
+        existing = self._manifest_slots.get(slot)
+        if existing is not None:
+            # The other slot contains the newest durable generation. Removing
+            # only this verified older slot leaves that complete recovery point
+            # intact until the new temp file is atomically promoted.
+            other_slot = next(name for name in STATE_SLOTS if name != slot)
+            if (
+                existing[1] >= self._manifest_generation
+                or other_slot not in self._manifest_slots
+                or self._manifest_slots[other_slot][1] != self._manifest_generation
+                or not self._filesystem.delete_owned(slot, existing[0])
+            ):
+                self._filesystem.delete_owned(temporary, identity)
+                raise CompanionError("staging_unavailable")
+            self._manifest_slots.pop(slot, None)
+        if not self._filesystem.rename_owned_new(temporary, slot, identity):
+            self._filesystem.delete_owned(temporary, identity)
+            raise CompanionError("staging_unavailable")
+        self._manifest_slots[slot] = (identity, generation)
+        self._manifest_generation = generation
 
     @property
     def enabled(self) -> bool:
@@ -212,14 +447,30 @@ class SessionVault:
             entry_id = uuid.uuid4().hex
             filename = f"context-{entry_id}.txt"
             path = self.directory / filename
+            expires_epoch = time.time() + self.ttl_seconds
             created_identity: tuple[int, int] | None = None
             try:
-                created_identity = self._filesystem.write_exclusive(filename, data)
+                created_identity = self._filesystem.create_empty_exclusive(filename)
+                self._manifest_entries[entry_id] = {
+                    "id": entry_id,
+                    "name": filename,
+                    "state": "writing",
+                    "file_id": list(created_identity),
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "created_epoch": time.time(),
+                    "expires_epoch": expires_epoch,
+                }
+                self._persist_manifest()
+                if not self._filesystem.write_owned(filename, created_identity, data):
+                    raise CompanionError("staging_write_failed")
                 self._check_directory()
             except (OSError, RuntimeError, ValueError, StagingFilesystemError):
-                if created_identity is not None:
-                    self._discard(filename, created_identity)
+                self._discard_and_update(entry_id, filename, created_identity)
                 raise CompanionError("staging_write_failed") from None
+            except CompanionError:
+                self._discard_and_update(entry_id, filename, created_identity)
+                raise
             if created_identity is None:  # pragma: no cover - write_exclusive returns identity
                 raise CompanionError("staging_write_failed")
 
@@ -244,8 +495,10 @@ class SessionVault:
                 source = self._source_payload(payload, path.name)
                 self._filesystem.check_directory()
                 self._filesystem.pin_owned_file(filename, created_identity, expected_digest)
+                self._manifest_entries[entry_id]["state"] = "committed"
+                self._persist_manifest()
             except BrokerError as error:
-                self._discard(filename, created_identity)
+                self._discard_and_update(entry_id, filename, created_identity)
                 code = error.code
                 raise CompanionError(
                     code
@@ -253,13 +506,12 @@ class SessionVault:
                     else "broker_unavailable"
                 ) from None
             except CompanionError:
-                self._discard(filename, created_identity)
+                self._discard_and_update(entry_id, filename, created_identity)
                 raise
             except (ConfigurationError, OSError, RuntimeError, ValueError, TypeError, KeyError):
-                self._discard(filename, created_identity)
+                self._discard_and_update(entry_id, filename, created_identity)
                 raise CompanionError("staging_unavailable") from None
 
-            expires_epoch = time.time() + self.ttl_seconds
             metadata = {
                 "id": entry_id,
                 "name": filename,
@@ -267,6 +519,7 @@ class SessionVault:
                 "created_at": _utc(time.time()),
                 "expires_at": _utc(expires_epoch),
                 "expires_epoch": expires_epoch,
+                "sha256": hashlib.sha256(data).hexdigest(),
                 "identity": created_identity,
                 "source": source,
             }
@@ -336,12 +589,25 @@ class SessionVault:
                     return item["source"]
         return None
 
-    def _discard(self, filename: str, identity: tuple[int, int]) -> None:
+    def _discard(self, filename: str, identity: tuple[int, int]) -> bool:
         try:
-            self._filesystem.delete_owned(filename, identity)
+            return self._filesystem.delete_owned(filename, identity)
         except StagingFilesystemError:
             # A changed identity fails closed. Do not follow or remove a path.
-            return
+            return False
+
+    def _discard_and_update(
+        self, entry_id: str, filename: str, identity: tuple[int, int] | None
+    ) -> None:
+        # Keep signed ownership if deletion is blocked (for example by a
+        # hardlink or a busy Windows handle); removing that record would strand
+        # partial plaintext with no authenticated recovery path.
+        if identity is None or self._discard(filename, identity):
+            self._manifest_entries.pop(entry_id, None)
+        try:
+            self._persist_manifest()
+        except (OSError, CompanionError, RecoveryError, StagingFilesystemError):
+            pass
 
     def delete(self, entry_id: str) -> None:
         if not _SAFE_UUID.fullmatch(entry_id):
@@ -358,6 +624,17 @@ class SessionVault:
         with self._lock:
             for entry_id in tuple(self._entries):
                 self._delete_locked(entry_id)
+            # A failed import can be durably in `writing` state without a
+            # broker source handle or public entry. Clean those exact owned
+            # identities too; otherwise close could remove their manifests.
+            for entry_id, item in tuple(self._manifest_entries.items()):
+                if entry_id in self._entries:
+                    continue
+                self._check_directory()
+                if not self._filesystem.delete_owned(item["name"], tuple(item["file_id"])):
+                    raise CompanionError("staging_unavailable")
+                self._manifest_entries.pop(entry_id, None)
+                self._persist_manifest()
 
     def _delete_locked(self, entry_id: str) -> None:
         item = self._entries.get(entry_id)
@@ -371,25 +648,51 @@ class SessionVault:
         if not deleted:
             raise CompanionError("staging_unavailable")
         self._entries.pop(entry_id, None)
+        self._manifest_entries.pop(entry_id, None)
+        try:
+            self._persist_manifest()
+        except (OSError, CompanionError, RecoveryError, StagingFilesystemError):
+            # The previous authenticated generation still owns the missing
+            # identity. Recovery treats that as an already-completed delete.
+            self._entries[entry_id] = item
+            self._manifest_entries[entry_id] = {
+                "id": entry_id,
+                "name": item["name"],
+                "state": "committed",
+                "file_id": list(item["identity"]),
+                "size": item["utf8_bytes"],
+                "sha256": item["sha256"],
+                "created_epoch": item["expires_epoch"] - self.ttl_seconds,
+                "expires_epoch": item["expires_epoch"],
+            }
+            raise CompanionError("staging_unavailable") from None
         self._bytes -= item["utf8_bytes"]
 
     def close(self) -> bool:
         with self._lock:
             if self._closed:
                 return self._cleanup_complete
+            source_cleanup_complete = False
             try:
                 self.clear()
+                source_cleanup_complete = True
             except (OSError, CompanionError, RuntimeError, ValueError, StagingFilesystemError):
                 # A changed root/identity fails closed. Never recursively
                 # remove a path whose ownership or containment is uncertain.
                 pass
             finally:
                 try:
-                    # The anchored helper gets one final bounded cleanup pass
-                    # and always releases its retained filesystem handles.
-                    self._cleanup_complete = (
-                        self._filesystem.close(remove_directory=True) is not False
+                    # If a source delete or durable state rotation failed, keep
+                    # the authenticated manifest and files for next-launch
+                    # recovery; only release the live lease and handles.
+                    handles_closed = (
+                        self._filesystem.close(
+                            remove_directory=source_cleanup_complete,
+                            delete_entries=source_cleanup_complete,
+                        )
+                        is not False
                     )
+                    self._cleanup_complete = source_cleanup_complete and handles_closed
                 except (OSError, RuntimeError, ValueError, StagingFilesystemError):
                     # If identity checks fail, the helper deliberately leaves
                     # the changed path untouched and reports no false success.
@@ -407,6 +710,7 @@ class PreparationCompanion:
         staging_root: Path | None,
         *,
         artifact_client: Any | None = None,
+        recovery_key_directory: Path | None = None,
     ) -> None:
         self.config_path = Path(config).resolve(strict=True) if config is not None else None
         self.settings: DesktopSettings | None = None
@@ -414,12 +718,17 @@ class PreparationCompanion:
         # Injected clients (tests) bypass the config requirement. Otherwise the
         # broker client is built lazily from settings on first artifact request.
         self.artifact_client: Any | None = artifact_client
+        self.recovery_key_directory = recovery_key_directory
         if self.config_path is not None:
             self.settings = load_settings(self.config_path)
             if self.settings.profile != "local":
                 raise CompanionError("local_profile_required")
             if staging_root is not None:
-                self.vault = SessionVault(self.settings, staging_root)
+                self.vault = SessionVault(
+                    self.settings,
+                    staging_root,
+                    recovery_key_directory=self.recovery_key_directory,
+                )
         elif staging_root is not None:
             raise CompanionError("config_required_for_staging")
 
