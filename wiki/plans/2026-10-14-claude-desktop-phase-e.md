@@ -292,15 +292,106 @@ The probe found two defects, both fixed with tests:
 Verification: `pytest tests/desktop_mcp` plus the MCP dependency-contract and
 CCR HTTP tests report 638 passed, 1 skipped; ruff check and format pass.
 
-## E3 scope
+## E3 interfaces
 
-- Companion artifact browser with user-operated Save As/Open. This needs a
-  role decision first: broker clients are not role-separated today, so an
-  artifact listing/read operation must not be reachable from the MCP adapter.
-- Revocation surfaced in the browser, and HTML/chart previews from safe
-  templates only.
-- SDK evaluation of analyze/render/batch tasks against raw exact reads,
-  counting schemas, instructions and every call.
+### Role separation (`roles.py`)
+
+Broker clients were not role-separated: any same-user client could send any
+operation. E3 adds a broker-issued companion capability. It is a secret the
+broker generates, not a role a client asserts, so the existing rule that
+requests carry no `role` field still holds.
+
+- `COMPANION_OPERATIONS = frozenset({"artifact_list", "artifact_read",
+  "artifact_delete"})`.
+- `capability_path(settings, *, base_dir=None) -> Path`: under
+  `%LOCALAPPDATA%\ContextShrink\broker` (POSIX: `~/.local/state/contextshrink/broker`),
+  named from a SHA-256 of the user SID and `broker_id`, so no identifier is
+  readable from the name. `base_dir` exists for tests.
+- `issue_capability(settings, *, base_dir=None) -> str`: 32 random bytes,
+  URL-safe base64 (43 characters), written to a new file readable and writable
+  only by the current user (Windows DACL with the user SID and LocalSystem,
+  as the pipe uses; POSIX mode 0600 in a 0700 directory). A stale file from a
+  crashed broker is replaced; only one broker can own the pipe name.
+- `load_capability(settings, *, base_dir=None) -> str` raises
+  `BrokerError("companion_capability_unavailable")`.
+- `revoke_capability(settings, token, *, base_dir=None)` deletes the file
+  only when its contents still match `token`.
+
+The broker issues the capability before serving and revokes it in the same
+`finally` that stops the worker. Request frames may carry an optional
+`"capability"` key (a 43-character string). Companion operations without a
+matching capability, compared with `hmac.compare_digest`, fail with
+`operation_unauthorized`. A capability on any other operation is rejected
+the same way, so clients cannot probe with it. The MCP adapter's
+`BrokerClient` never loads or sends a capability; only the new
+`CompanionBrokerClient` does.
+
+Threat model: this keeps companion-only operations out of the MCP adapter,
+which is the path Claude drives, and away from other users. It cannot stop
+arbitrary code already running as the same user, which can read the user's
+files anyway.
+
+### Artifact operations
+
+| Wire operation | Args | Worker -> `LocalBackend` |
+|---|---|---|
+| `artifact_list` | `{}` | `artifact_list() -> {"artifacts": [manifest, ...]}` (empty when no store exists) |
+| `artifact_read` | `{artifact_id, offset, length}` | `artifact_read(artifact_id, offset, length) -> {"artifact_id", "offset", "data_base64", "total_bytes", "sha256", "eof"}` |
+| `artifact_delete` | `{artifact_id}` | `artifact_delete(artifact_id) -> {"deleted": bool}` |
+
+`artifact_id` is 32 lowercase hex characters, `offset` is an int from 0, and
+`length` is from 1 to 393,216 (384 KiB, about 512 KiB as base64) so a chunk
+fits the 1 MiB frame. Every call goes through the store, so dependency
+revocation, expiry and the hash check apply. Revoked or expired artifacts
+return `artifact_revoked`/`artifact_unknown` and drop out of the list.
+`CompanionBrokerClient(settings)` offers `list_artifacts() -> list[dict]`,
+`read_artifact(artifact_id) -> bytes` (reads every chunk, then checks the
+total length and SHA-256 against the first chunk's values, raising
+`BrokerError("artifact_unavailable")` on mismatch) and
+`delete_artifact(artifact_id) -> bool`.
+
+### Companion artifact browser
+
+New authenticated JSON routes on the existing companion, with the same Host,
+Origin, capability-header and framing checks as the other routes:
+
+- `GET /api/artifacts`: manifests.
+- `GET /api/artifacts/<id>/download`: the verified bytes with
+  `Content-Disposition: attachment` and a generated file name (title reduced
+  to `[A-Za-z0-9 ._-]`, at most 80 characters, plus the format's extension),
+  a format-specific `Content-Type` (`text/csv`, `application/json`,
+  `text/markdown`, `text/plain`, all `charset=utf-8`), `nosniff`, and
+  `no-store`.
+- `DELETE /api/artifacts/<id>`.
+
+Without a broker config these routes return `artifacts_unavailable`. The UI
+lists the title, format, rows, size and expiry. It previews `preview_rows` as
+a text-only table (`textContent`, never `innerHTML`), and a Download button
+fetches with the session header and saves through a temporary object URL.
+The user's browser chooses the destination, and no server code writes to a
+path it was given.
+
+### Evaluation (`desktop/mcp/phase_e_eval.py`)
+
+A synthetic in-memory SDK A/B evaluation in the style of `phase_c_eval.py`.
+Raw arm: source profile with exact reads only. Optimized arm: compute
+profile. Each arm counts its own enabled schemas and instructions once (the
+compute schemas are larger) plus every argument and result. Tasks:
+
+1. An exact grouped total over a several-thousand-row CSV. Raw arm: page
+   through the whole file with exact reads. Optimized: one analyze call.
+2. A full-table deliverable. Raw arm: the table the model would have to
+   generate, estimated as output tokens and labeled as output. Optimized:
+   one render call plus its manifest.
+3. Six exact ranges. Raw arm: six retrieves. Optimized: one retrieve_batch
+   call.
+4. A tiny no-gain case, where a small source and a one-row answer are
+   expected to cost more with compute schemas.
+
+The report includes per-task and total estimated tokens per arm, call counts,
+the fact that every answer matches a deterministic expected value, and the
+same limits as Phase C: estimates rather than Claude counts, no JSON-RPC
+framing, no hidden host context, and no USD.
 
 ## E1 review decisions
 
