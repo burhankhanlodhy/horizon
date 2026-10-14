@@ -137,3 +137,35 @@ def test_missing_explicit_config_has_sanitized_error(tmp_path: Path) -> None:
         load_settings(tmp_path / "does-not-exist.json")
     assert caught.value.code == "config_unreadable"
     assert str(tmp_path) not in str(caught.value)
+
+
+def test_compute_profile_defaults_off_and_requires_local_profile() -> None:
+    assert DesktopSettings().tool_profile == "source"
+    assert DesktopSettings().artifact_root is None
+    with pytest.raises(ValidationError):
+        DesktopSettings(profile="diagnostic", tool_profile="compute")
+
+
+@pytest.mark.parametrize(
+    "artifact_root",
+    ["C:/data/src", "C:/data/src/out", "C:/data", "c:/DATA/SRC/nested"],
+)
+def test_artifact_root_must_not_overlap_an_approved_root(artifact_root: str) -> None:
+    with pytest.raises(ValidationError):
+        DesktopSettings(
+            profile="local",
+            approved_roots=(Path("C:/data/src"),),
+            artifact_root=Path(artifact_root),
+        )
+
+
+def test_artifact_root_must_be_absolute_and_may_sit_beside_roots() -> None:
+    with pytest.raises(ValidationError):
+        DesktopSettings(profile="local", artifact_root=Path("relative/out"))
+    settings = DesktopSettings(
+        profile="local",
+        approved_roots=(Path("C:/data/src"),),
+        tool_profile="compute",
+        artifact_root=Path("C:/data/src-artifacts"),
+    )
+    assert settings.artifact_root == Path("C:/data/src-artifacts")

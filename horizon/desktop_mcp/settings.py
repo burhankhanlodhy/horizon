@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +18,12 @@ class ConfigurationError(Exception):
         self.fields = fields
         self.message = f"Configuration error ({code})"
         super().__init__(self.message)
+
+
+def _comparable(path: Path) -> Path:
+    """Lexically normalized, case-folded on Windows, for overlap checks only."""
+    normalized = Path(os.path.normpath(path))
+    return Path(os.path.normcase(str(normalized)))
 
 
 class DesktopSettings(BaseModel):
@@ -41,6 +48,12 @@ class DesktopSettings(BaseModel):
     eval_arm: Literal["raw", "optimized"] = "optimized"
     min_compaction_gain_tokens: int = Field(default=64, ge=0, le=8000)
     min_compaction_gain_percent: float = Field(default=5.0, ge=0.0, le=100.0)
+    # "compute" adds the analyze, render and retrieve_batch tools; the tool
+    # list is fixed for a given config and never changes per chat.
+    tool_profile: Literal["source", "compute"] = "source"
+    # Generated artifacts live here, never inside an approved root, so they
+    # cannot be cataloged or opened as sources. None disables rendering.
+    artifact_root: Path | None = None
 
     @field_validator("approved_roots", mode="before")
     @classmethod
@@ -59,6 +72,21 @@ class DesktopSettings(BaseModel):
                 raise ValueError("each root must be absolute")
             roots.append(path)
         return tuple(roots)
+
+    @field_validator("artifact_root", mode="before")
+    @classmethod
+    def artifact_root_must_be_absolute(cls, value: Any) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, Path):
+            path = value
+        elif isinstance(value, str):
+            path = Path(value)
+        else:
+            raise ValueError("must be a path")
+        if not path.is_absolute():
+            raise ValueError("must be absolute")
+        return path
 
     @field_validator("broker_id")
     @classmethod
@@ -84,6 +112,14 @@ class DesktopSettings(BaseModel):
             raise ValueError("max_snapshot_bytes must be at least max_source_bytes")
         if self.max_store_bytes < self.max_snapshot_bytes:
             raise ValueError("max_store_bytes must be at least max_snapshot_bytes")
+        if self.tool_profile == "compute" and self.profile != "local":
+            raise ValueError("tool_profile compute requires the local profile")
+        if self.artifact_root is not None:
+            artifact = _comparable(self.artifact_root)
+            for root in self.approved_roots:
+                approved = _comparable(root)
+                if artifact == approved or approved in artifact.parents or artifact in approved.parents:
+                    raise ValueError("artifact_root must not overlap an approved root")
         return self
 
     @field_validator("counting_model")
@@ -113,6 +149,8 @@ _CONFIG_FIELDS = {
     "eval_arm",
     "min_compaction_gain_tokens",
     "min_compaction_gain_percent",
+    "tool_profile",
+    "artifact_root",
 }
 
 

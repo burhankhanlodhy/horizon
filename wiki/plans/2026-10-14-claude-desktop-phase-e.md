@@ -189,6 +189,73 @@ Unknown versions raise `ValueError("instruction_pack_unknown")`.
 - `Dependency(source_id, version, root_key)` is the dependency record.
   Titles are at most 120 characters of printable text.
 
+## E2 interfaces
+
+### Settings (done)
+
+`tool_profile: "source" | "compute"` (default `source`; `compute` requires
+`profile: "local"`) and `artifact_root: Path | None` (absolute; must not equal,
+contain or sit inside any approved root, compared case-insensitively on
+Windows). Both are config fields. The source profile's four tools are
+unchanged. The ledger accepts the three new tool names and the modes
+`computed`, `artifact` and `batch`.
+
+### Tools (compute profile only)
+
+The plan proposed two compute tools. Fused reads get a third tool rather than
+an either/or `retrieve` schema, because hosts handle top-level `oneOf` poorly.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `contextshrink_analyze` | `source_id`, `operation` (object, see `operations.py`), optional `result_token_budget` | computed table, lineage, coverage |
+| `contextshrink_render` | `source_id`, `format` (`csv`/`json`/`markdown`/`text`), `title`, optional `operation`, optional `formula_policy` (`escape`/`reject`; `raw` is never model-facing) | artifact manifest only |
+| `contextshrink_retrieve_batch` | `requests` (1-16 of `{source_id, selector}`), optional `result_token_budget` | `fuse_reads` payload |
+
+Annotations: analyze and retrieve_batch are read-only and idempotent. Render
+is not read-only (it creates a local file), is not destructive, and is not
+idempotent; `openWorldHint` is false for all three.
+
+### Backend (`LocalBackend`)
+
+`LocalBackend(..., artifact_root: Path | None = None)` plus:
+
+- `analyze(source_id, operation, *, result_token_budget=None) -> dict`
+- `render(source_id, *, fmt, title, operation=None, formula_policy="escape") -> dict`
+- `retrieve_batch(requests, *, result_token_budget=None) -> dict`
+- `close() -> None` closes the artifact store (idempotent).
+
+Every method takes the backend lock first and only then calls the artifact
+store, so the lock order is always backend before store. The store's
+`dependency_check` re-runs `_get_authorized_snapshot` for each dependency and
+requires the same version and root key; a worker restart drops snapshots and
+therefore revokes artifacts. The store is created lazily on the first render.
+Parsed tables may be cached per `(source_id, version)` in a small LRU (at
+most 4 entries).
+
+Analyze payload: `{"tool": "analyze", "source_id", "version", "kind",
+"operations_version", "columns", "rows", "row_refs", "values", "lineage",
+"coverage": "computed over every parsed row of this source version",
+"accounting"}`. When it exceeds `max_result_bytes` or the token budget it
+raises `analysis_result_too_large` with metadata `{"source_id", "version",
+"output_rows"}`, never a truncated table. Render payload: `{"tool": "render",
+"artifact": <manifest>, "lineage": <lineage or {"source_rows": n}>,
+"delivery": "stored_locally_not_in_result"}`, and `render_unavailable` when no
+`artifact_root` is configured. Table, operation, artifact and batch errors map
+to `LocalBackendError` with their own codes. Each call records one ledger event
+(`computed`, `artifact` or `batch` mode) with no source text, spec or title.
+
+### Broker wire operations
+
+`analyze` args `{source_id, operation}` + optional `result_token_budget`;
+`render` args `{source_id, format, title}` + optional `operation`,
+`formula_policy`; `retrieve_batch` args `{requests}` + optional
+`result_token_budget`. Validation is closed: `source_id` values start with
+`cs1_`, `operation` is an object, `format` and `formula_policy` are from the
+allowed sets, `title` is a string of 1-120 characters, `requests` has 1-16 items
+of exactly `{source_id, selector}` with selectors checked by the existing
+`_validate_selector`. Unknown keys fail. `BrokerClient` gains `analyze`,
+`render` and `retrieve_batch` with the backend's signatures.
+
 ## E1 review decisions
 
 - Only columns an operation actually uses are type-checked. Predicate columns
