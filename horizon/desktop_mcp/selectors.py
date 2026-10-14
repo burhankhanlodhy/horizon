@@ -8,10 +8,15 @@ import json
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .text_lines import physical_line_number, split_physical_lines
 
+if TYPE_CHECKING:
+    from .extractors import DocumentBlock
+
+_MAX_PAGE_SPAN = 200
+_MAX_PARAGRAPH_SPAN = 2000
 _MAX_CSV_FIELD_CHARS = 1 * 1024 * 1024
 _MAX_CSV_ROWS = 100_000
 _MAX_CSV_COLUMNS = 10_000
@@ -63,7 +68,7 @@ class SelectedScope:
     selector: dict[str, Any]
     coverage: str
     selected_lines: dict[str, int] | None
-    scope_kind: Literal["lines", "section", "json_pointer", "rows"]
+    scope_kind: Literal["lines", "section", "json_pointer", "rows", "pages", "paragraphs", "table"]
     start_offset: int
     end_offset: int
     line_start: int
@@ -392,7 +397,123 @@ def _select_rows(text: str, selector: dict[str, Any], kind: str) -> SelectedScop
     )
 
 
-def select_exact(text: str, selector: dict[str, Any], *, kind: str) -> SelectedScope:
+def _select_document_blocks(
+    text: str,
+    selector: dict[str, Any],
+    *,
+    kind: str,
+    blocks: tuple[DocumentBlock, ...],
+) -> SelectedScope:
+    """Select whole PDF pages or DOCX paragraphs/tables by their block spans.
+
+    Empty blocks (a PDF page with no extractable text) are never units: they
+    have no physical lines to paginate, so they appear only in the coverage
+    note and the selection's zero-length line/offset position. Pagination
+    therefore never splits a page or paragraph.
+    """
+    selector_type = selector["type"]
+    normalized = kind.lower().lstrip(".")
+    required_kind = "pdf" if selector_type == "page" else "docx"
+    if normalized != required_kind or not blocks:
+        raise SelectorError("selector_format_unsupported")
+    wanted_kinds = {
+        "page": {"page"},
+        "paragraph": {"paragraph", "heading"},
+        "table": {"table"},
+    }[selector_type]
+    candidates = [block for block in blocks if block.kind in wanted_kinds]
+    if selector_type == "table":
+        selected_blocks = [block for block in candidates if block.index == selector["index"]]
+        if not candidates or not selected_blocks:
+            raise SelectorError("selector_out_of_range")
+    else:
+        start, end = selector["start"], selector["end"]
+        highest = max((block.index for block in candidates), default=0)
+        if end > highest:
+            raise SelectorError("selector_out_of_range")
+        selected_blocks = sorted(
+            (block for block in candidates if start <= block.index <= end),
+            key=lambda block: block.index,
+        )
+        if not selected_blocks:
+            raise SelectorError("selector_out_of_range")
+
+    lines = split_physical_lines(text) or [""]
+    units: list[tuple[int, int, str]] = []
+    empty_pages: list[int] = []
+    for block in selected_blocks:
+        if block.line_start > block.line_end:
+            if selector_type == "page":
+                empty_pages.append(block.index)
+            continue
+        if block.line_start < 1 or block.line_end > len(lines):
+            raise SelectorError("selector_format_unsupported")
+        units.append(
+            (
+                block.line_start,
+                block.line_end,
+                "".join(lines[block.line_start - 1 : block.line_end]),
+            )
+        )
+
+    if units:
+        first_line, last_line = units[0][0], units[-1][1]
+        start_offset = sum(len(line) for line in lines[: first_line - 1])
+        selected_text = "".join(unit[2] for unit in units)
+        end_offset = start_offset + len(selected_text)
+    else:
+        # Only empty pages: anchor the zero-length position at the first
+        # selected page's start so offsets and line refs stay meaningful.
+        anchor = min(
+            max(1, selected_blocks[0].line_start),
+            len(lines),
+        )
+        first_line = last_line = anchor
+        start_offset = end_offset = sum(len(line) for line in lines[: anchor - 1])
+        selected_text = ""
+
+    if selector_type == "table":
+        coverage = "exact extracted DOCX table at immutable snapshot version"
+        scope_kind: Literal["pages", "paragraphs", "table"] = "table"
+        normalized_selector: dict[str, Any] = {"type": "table", "index": selector["index"]}
+    elif selector_type == "page":
+        coverage = "exact extracted PDF text for selected pages at immutable snapshot version"
+        scope_kind = "pages"
+        normalized_selector = {"type": "page", "start": selector["start"], "end": selector["end"]}
+    else:
+        coverage = "exact extracted DOCX paragraphs and headings at immutable snapshot version"
+        scope_kind = "paragraphs"
+        normalized_selector = {
+            "type": "paragraph",
+            "start": selector["start"],
+            "end": selector["end"],
+        }
+    if empty_pages:
+        coverage += "; pages without extractable text: " + ", ".join(
+            str(number) for number in empty_pages
+        )
+    return SelectedScope(
+        selected_text,
+        normalized_selector,
+        coverage,
+        {"start": first_line, "end": last_line},
+        scope_kind,
+        start_offset,
+        end_offset,
+        first_line,
+        last_line,
+        True,
+        tuple(units) if units else (),
+    )
+
+
+def select_exact(
+    text: str,
+    selector: dict[str, Any],
+    *,
+    kind: str,
+    blocks: tuple[DocumentBlock, ...] = (),
+) -> SelectedScope:
     """Validate and select an exact source span; never reserialize source data."""
     if not isinstance(selector, dict) or not isinstance(selector.get("type"), str):
         raise SelectorError("selector_invalid")
@@ -402,6 +523,9 @@ def select_exact(text: str, selector: dict[str, Any], *, kind: str) -> SelectedS
         "markdown_section": {"type", "heading"},
         "json_pointer": {"type", "pointer"},
         "rows": {"type", "start", "end"},
+        "page": {"type", "start", "end"},
+        "paragraph": {"type", "start", "end"},
+        "table": {"type", "index"},
     }
     fields = expected_fields.get(selector_type)
     if fields is None:
@@ -444,6 +568,25 @@ def select_exact(text: str, selector: dict[str, Any], *, kind: str) -> SelectedS
         if not isinstance(pointer, str) or len(pointer) > 1024:
             raise SelectorError("selector_invalid")
         return _select_json_pointer(text, selector)
+    if selector_type in {"page", "paragraph", "table"}:
+        if selector_type == "table":
+            index = selector["index"]
+            if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+                raise SelectorError("selector_invalid")
+        else:
+            start, end = selector["start"], selector["end"]
+            span_cap = _MAX_PAGE_SPAN if selector_type == "page" else _MAX_PARAGRAPH_SPAN
+            if (
+                isinstance(start, bool)
+                or isinstance(end, bool)
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 1
+                or end < start
+                or end - start + 1 > span_cap
+            ):
+                raise SelectorError("selector_invalid")
+        return _select_document_blocks(text, selector, kind=kind, blocks=tuple(blocks))
     return _select_rows(text, selector, kind)
 
 
