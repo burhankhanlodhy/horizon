@@ -6,10 +6,49 @@ import csv
 import io
 import json
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .text_lines import physical_line_number, split_physical_lines
+
+_MAX_CSV_FIELD_CHARS = 1 * 1024 * 1024
+_MAX_CSV_ROWS = 100_000
+_MAX_CSV_COLUMNS = 10_000
+_CSV_FIELD_LIMIT_LOCK = threading.Lock()
+
+
+def _check_csv_column_count(text: str, delimiter: str) -> None:
+    """Reject very wide records before csv.reader allocates their field list."""
+
+    columns = 1
+    at_field_start = True
+    in_quotes = False
+    index = 0
+    while index < len(text):
+        character = text[index]
+        if in_quotes:
+            if character == '"':
+                if index + 1 < len(text) and text[index + 1] == '"':
+                    index += 2
+                    continue
+                in_quotes = False
+        elif character == '"' and at_field_start:
+            in_quotes = True
+            at_field_start = False
+        elif character == delimiter:
+            columns += 1
+            if columns > _MAX_CSV_COLUMNS:
+                raise SelectorError("csv_column_limit")
+            at_field_start = True
+        elif character in "\r\n":
+            if character == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
+                index += 1
+            columns = 1
+            at_field_start = True
+        else:
+            at_field_start = False
+        index += 1
 
 
 class SelectorError(ValueError):
@@ -297,21 +336,35 @@ def _select_rows(text: str, selector: dict[str, Any], kind: str) -> SelectedScop
         raise SelectorError("selector_format_unsupported")
     start, end = selector["start"], selector["end"]
     delimiter = "\t" if kind.lower().lstrip(".") == "tsv" else ","
-    # The csv module's default 128 KiB field cap would report a valid large
-    # cell as csv_invalid; no field can exceed the already-bounded source.
-    if csv.field_size_limit() < len(text):
-        csv.field_size_limit(len(text))
+    _check_csv_column_count(text, delimiter)
+    # csv.field_size_limit is process-global. Scope the larger limit to this
+    # parse and restore it even when malformed or oversized input raises.
+    # The source byte cap is not enough to bound per-row Python object growth.
     stream = io.StringIO(text, newline="")
-    reader = csv.reader(stream, delimiter=delimiter, strict=True)
     records: list[tuple[int, int]] = []
     physical_start = 1
-    try:
-        for _row in reader:
-            physical_end = max(physical_start, reader.line_num)
-            records.append((physical_start, physical_end))
-            physical_start = physical_end + 1
-    except csv.Error:
-        raise SelectorError("csv_invalid") from None
+    with _CSV_FIELD_LIMIT_LOCK:
+        previous_field_limit = csv.field_size_limit(_MAX_CSV_FIELD_CHARS)
+        try:
+            reader = csv.reader(stream, delimiter=delimiter, strict=True)
+            try:
+                for _row in reader:
+                    if len(records) >= _MAX_CSV_ROWS:
+                        raise SelectorError("csv_row_limit")
+                    if len(_row) > _MAX_CSV_COLUMNS:
+                        raise SelectorError("csv_column_limit")
+                    physical_end = max(physical_start, reader.line_num)
+                    records.append((physical_start, physical_end))
+                    physical_start = physical_end + 1
+            except csv.Error as exc:
+                code = (
+                    "csv_field_too_large"
+                    if "field larger than field limit" in str(exc).lower()
+                    else "csv_invalid"
+                )
+                raise SelectorError(code) from None
+        finally:
+            csv.field_size_limit(previous_field_limit)
     if end > len(records):
         raise SelectorError("selector_out_of_range")
     physical_first = records[start - 1][0]

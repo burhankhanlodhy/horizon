@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase C implementation and evidence"
 date: 2026-10-13
-status: in-progress
+status: local-implementation-complete-external-validation-pending
 phase: C
 milestones: [M2, M3, M10]
 ---
@@ -134,17 +134,21 @@ folds; the inflation-guard boundary; JSON null/escape/order/big-integer round
 trips; UNC/device paths; change between search/open/retrieve; and a log-capture
 check for source text and queries.
 
-Those gaps are now covered by `test_cursor_binding.py`,
+Those historical gaps are now covered by `test_cursor_binding.py`,
 `test_source_hardening.py` and `test_format_fidelity.py`, which found and
 fixed three more defects: `open` and `retrieve` accepted each other's cursors
 (line-number vs unit-index offsets, so continuations skipped or escaped the
 bound scope); an empty cursor silently restarted at page one; and a valid CSV
-cell over 128 KiB was reported as `csv_invalid`. `pytest tests/desktop_mcp -q`
-reports **278 passed, 1 skipped, 1 xfailed**. Still open: cursor binding to
-caller/workspace; an explicit expired-version error (expiry returns
-`snapshot_unknown`); per-line, CSV-field and row-count source bounds; and a
-hard-link policy. A same-user hard link inside an approved root to an outside
-file is readable today, recorded as a strict xfail.
+cell over 128 KiB was reported as `csv_invalid`. Follow-up hardening rejects
+multiply-linked files on source reads and snapshot access. CSV exact selection
+now caps logical rows and columns, caps field character count, and restores the
+process-wide CSV field limit after each parse. These are per-input parsing
+bounds; they do not claim to bound total worker RSS. Cursor ownership is
+limited to the current same-user broker model: the broker checks the Windows
+user SID and rechecks each source grant, while separate per-user workspace or
+caller identities are not implemented. Expired and missing snapshots both
+return `snapshot_unknown`; a source-byte ceiling remains, with no separate
+per-line source bound.
 
 A local in-process benchmark on a synthetic 7.65 MB / 150,000-line log
 returned the first bounded exact page in 1.176 seconds and a subsequent cursor
@@ -152,16 +156,30 @@ page in 0.656 seconds. A separate synthetic 8.1 MB broker/SDK check using the
 default 64 KiB response cap and 10-second broker deadline completed in 2.03
 seconds. Both are machine-specific local timings, not Claude Desktop latency.
 
-M2/M3/M10 implementation is locally verified; **Phase C remains in progress**
-pending a live Claude Desktop Phase C walk-through and separate whole-task
-Enterprise usage/billing evidence. Phase B's reported live basic flow does not
-count as Phase C application validation. See the
+M2/M3/M10 implementation is locally complete and locally verified;
+**external Phase C validation remains pending** for a live Claude Desktop
+walk-through and separate whole-task Enterprise usage/billing evidence.
+Phase B's reported live basic flow does not count as Phase C application
+validation. The remaining named gates are environmental/product validation,
+not a claim that the local synthetic suite proves Claude usage, billing, or
+production readiness. See the
 [comprehensive build plan](2026-10-13-claude-desktop-enterprise-mcp-build-plan.md)
 and [Phase B notes](2026-10-13-claude-desktop-phase-b.md).
 
-The independent re-verification above (156 tests, lint/format clean, eval
-regenerated with `status: "passed"`) confirms the local implementation is
-complete and reproducible after the implementation pause. The remaining Phase
-C exit items are unchanged: a live Claude Desktop Phase C walk-through
-following the `desktop/mcp/README.md` sample-source steps, and separate
-whole-task Enterprise usage/billing evidence.
+The latest combined local verification from the named worktree root used the
+primary checkout's Python executable and reported **309 passed, 1 skipped**
+across the desktop MCP suite, MCP dependency-contract test, and CCR MCP HTTP
+compatibility test. Ruff lint passed and all 56 scoped files passed format
+checks. The skipped test is platform-specific. The remaining Phase C exit
+items are a live Claude Desktop Phase C walk-through following the
+`desktop/mcp/README.md` sample-source steps, cross-SID and cloud-provider
+validation where those environments are available, and separate whole-task
+Enterprise usage/billing evidence.
+
+```powershell
+C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe -m pytest tests\desktop_mcp tests\test_mcp_dependency_contract.py tests\test_ccr_mcp_http.py -q
+```
+
+The report continues to show a larger estimated optimized task payload than
+the raw arm on its captured synthetic example. This local gate proves neither
+Claude Desktop compatibility nor lower provider usage or billing.

@@ -196,3 +196,62 @@ seconds with the default 64 KiB response cap and 10-second deadline. All timings
 are machine-local and do not establish Claude Desktop latency. Local
 implementation and tests are complete; live Phase C Desktop validation and
 billing attribution remain pending.
+
+## Phase D current-request preparation
+
+Phase D provides a standalone graphical companion and a one-shot CLI. Both
+prepare an inspectable packet before submission; the user reviews and pastes it
+into an existing chat. The companion runs a small Python HTTP server on
+`127.0.0.1`, opens a browser tab, and requires no Tauri shell, hosted login,
+network access, model call, or Claude configuration change for inline use.
+Neither route reads the clipboard, sends a message, or changes Desktop config.
+
+From the named worktree, use the primary checkout's Python environment:
+
+```powershell
+Set-Location 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.claude\worktrees\phase-c-review-orchestrate-54e903'
+$python = 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe'
+& $python desktop\mcp\prepare_companion.py
+```
+
+The browser companion has separate Request and Supporting context fields,
+defaults to Compact, and previews the complete exact packet, coverage, fidelity,
+fallback reason, and estimates. Any edited input invalidates that preview.
+Copy uses browser clipboard only after the user clicks Copy; if permission is
+unavailable, the user can select the visible packet and press Ctrl+C. The CLI
+route remains available as `python -m horizon.desktop_mcp prepare`; it accepts
+explicit file paths and displays the packet body only with `--show-packet`.
+
+Modes are `passthrough`, `compact`, `focused`, `reference`, and
+`reference_only`. The last three use an existing broker handle and matching
+local config; focused mode also requires a query. Reference-only keeps the
+source handle/version without embedding source text. Focused coverage is
+partial. No route imports arbitrary paths or changes approved roots.
+
+Optional pasted-context recovery uses a dedicated approved folder. Copy
+`companion-settings.example.json` to the ignored local
+`companion-settings.json`, set its only approved root, and run the broker and
+companion with that same config in separate foreground terminals. The UI
+discloses the approved folder and requires an explicit checkbox and separate
+Save action. The server writes a generated file under its session-owned child
+and asks the existing broker `open` operation for a normal versioned
+`cs1_…` source handle. The staging record ID is separate. A dedicated local,
+non-synced folder is recommended; OneDrive or other OS sync can copy staged
+text if the user chooses a synced root.
+
+Staging lasts only for the running companion session and broker TTL (at most
+one hour). Keep both terminals open while the handle is needed. Removing its
+staged file blocks exact recovery; an inaccessible broker snapshot may remain
+in memory until TTL/restart. Clear session and quit performs graceful cleanup;
+closing the tab does not stop the terminal server. The complete config and
+manual Claude MCP recovery example are in
+[`companion-ui/README.md`](companion-ui/README.md).
+
+The local suite reports 321 passed and 1 skipped. A repeatable, synthetic-only
+real broker plus authenticated HTTP probe is checked in at
+[`phase_d_companion_probe.py`](phase_d_companion_probe.py); its metadata report
+records 11 passing checks. The Phase D note lists exact commands and
+limitations. Browser review does not establish Claude Desktop compatibility,
+MCP Apps support, reduced Claude usage, or Enterprise billing savings. Native
+Tauri integration, app packaging, and clean-machine installation remain
+separate later work.

@@ -1,0 +1,18 @@
+{
+  "checks": {
+    "authenticated_quit_cleanup": "passed",
+    "consented_import_and_handle": "passed",
+    "exact_broker_recovery": "passed",
+    "focused_bounded_coverage": "passed",
+    "large_single_line_source": "passed",
+    "real_broker_process": "passed",
+    "reference_only_without_source_body": "passed",
+    "remove_revokes_future_recovery": "passed",
+    "safe_staging_listing": "passed",
+    "session_http_api": "passed",
+    "ttl_cleanup": "passed"
+  },
+  "evidence_scope": "real broker subprocess plus authenticated local HTTP companion",
+  "schema_version": 1,
+  "status": "passed"
+}

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ContextShrink local companion</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="ContextShrink local companion home">
+          <span class="brand-mark" aria-hidden="true">CS</span>
+          <span>Context<span class="ember">Shrink</span></span>
+        </a>
+        <span class="local-badge"><span aria-hidden="true"></span> Local companion</span>
+      </header>
+
+      <section id="boot-panel" class="card boot-panel" aria-live="polite">
+        <h1>Starting your local workspace…</h1>
+        <p class="muted">Connecting to the companion started on this computer.</p>
+      </section>
+
+      <div id="app" hidden>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">Prepare before you paste</p>
+            <h1>Shape a request with its supporting context</h1>
+            <p class="muted intro-copy">Review the exact packet, then copy it into an existing chat yourself. This page does not connect to a model or send a message.</p>
+          </div>
+          <div class="privacy-note">
+            <strong>Prepared locally</strong>
+            <span>Only an explicit save action stores context for recovery, at the approved folder shown below.</span>
+          </div>
+        </section>
+
+        <section class="card editor-card" aria-labelledby="editor-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Step 1</p>
+              <h2 id="editor-heading">Write the request</h2>
+            </div>
+            <span class="limit-note">Text is kept exactly as entered</span>
+          </div>
+          <label for="request">Request</label>
+          <textarea id="request" name="request" rows="4" spellcheck="true" placeholder="What should the assistant do with this context?"></textarea>
+
+          <div class="section-heading context-heading">
+            <div>
+              <p class="eyebrow">Step 2</p>
+              <h2>Supporting context</h2>
+            </div>
+            <span class="limit-note">Treats this text as untrusted data</span>
+          </div>
+          <label for="context">Paste notes, logs, or other context</label>
+          <textarea id="context" name="context" rows="8" spellcheck="false" placeholder="Paste only the context you want included with this request."></textarea>
+          <div class="field-foot"><span id="context-count" class="muted">0 bytes</span><span class="muted">No files or folders are read by this editor.</span></div>
+
+          <div class="mode-layout">
+            <div>
+              <label for="mode">Preparation mode</label>
+              <select id="mode" name="mode">
+                <option value="passthrough">Keep the context as written</option>
+                <option value="compact" selected>Compact repeated or structured text</option>
+                <option value="focused">Find relevant passages in a saved source</option>
+                <option value="reference">Include a bounded source excerpt and recovery handle</option>
+                <option value="reference_only">Use a saved source handle for later recovery</option>
+              </select>
+            </div>
+            <p id="mode-help" class="mode-help">The request and context are preserved in a reviewable JSON packet.</p>
+          </div>
+
+          <div id="source-fields" class="source-fields" hidden>
+            <label for="source-id">Existing broker source handle</label>
+            <input id="source-id" name="source-id" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="cs1_…" />
+            <p class="muted small">Use a handle returned by your configured local MCP source. This companion does not accept arbitrary paths or grant folders.</p>
+            <div id="query-field" hidden>
+              <label for="query">Focus query</label>
+              <input id="query" name="query" type="text" autocomplete="off" maxlength="4096" placeholder="Words or phrases to find in the saved source" />
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="prepare" class="primary" type="button">Prepare preview</button>
+            <span id="prepare-status" class="muted" role="status"></span>
+          </div>
+          <p id="form-error" class="error" role="alert" hidden></p>
+        </section>
+
+        <section id="preview" class="card preview-card" aria-labelledby="preview-heading" hidden>
+          <div class="section-heading preview-heading">
+            <div>
+              <p class="eyebrow">Review before copying</p>
+              <h2 id="preview-heading">Prepared packet</h2>
+            </div>
+            <button id="copy-packet" class="primary" type="button" disabled>Copy packet</button>
+          </div>
+          <div id="copy-status" class="copy-status" role="status" aria-live="polite"></div>
+          <div class="coverage-grid">
+            <div><span class="label">Mode</span><strong id="preview-mode">—</strong></div>
+            <div><span class="label">Fidelity</span><strong id="preview-fidelity">—</strong></div>
+            <div><span class="label">Coverage</span><strong id="preview-coverage">—</strong></div>
+            <div><span class="label">Packet</span><strong id="preview-size">—</strong></div>
+            <div><span class="label">Estimated tokens</span><strong id="preview-tokens">—</strong></div>
+          </div>
+          <p id="fallback-note" class="fallback-note" hidden></p>
+          <details class="request-review">
+            <summary>Show the exact request used</summary>
+            <pre id="request-review"></pre>
+          </details>
+          <label for="packet">Exact JSON packet</label>
+          <textarea id="packet" class="packet" rows="15" readonly spellcheck="false" aria-describedby="packet-help"></textarea>
+          <p id="packet-help" class="muted small">Select and copy the packet manually if clipboard access is unavailable. The packet labels supporting context as untrusted data.</p>
+          <div id="provenance" class="provenance"></div>
+        </section>
+
+        <section class="card import-card" aria-labelledby="import-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Optional, explicit save</p>
+              <h2 id="import-heading">Keep context recoverable</h2>
+            </div>
+            <span id="staging-state" class="state-pill">Checking local storage…</span>
+          </div>
+          <p class="muted">Saving creates a bounded text file inside the approved staging folder configured for this companion, then asks the local broker for a versioned source handle. You can use that handle to recover the same source in an existing chat. Choose a local folder if you do not want the operating system to sync these files to a cloud drive.</p>
+          <p id="session-note" class="session-note">Saved files and handles belong to this local session. Keep the launcher terminal open while you use exact recovery. Quit with the button below or stop the foreground launcher with Ctrl+C; either action removes staged files. Closing this tab alone leaves the companion running.</p>
+          <div class="approval-path"><span class="label">Approved staging folder</span><code id="staging-root">Checking local configuration…</code></div>
+          <div class="consent-row">
+            <input id="storage-consent" type="checkbox" />
+            <label for="storage-consent">I authorize saving the pasted supporting context to the configured approved staging folder for recovery.</label>
+          </div>
+          <div class="actions">
+            <button id="save-source" type="button">Save context and create recovery handle</button>
+            <span id="import-status" class="muted" role="status"></span>
+          </div>
+          <p id="import-error" class="error" role="alert" hidden></p>
+          <div id="staged-list" class="staged-list" aria-live="polite"></div>
+          <p class="muted small">Saved records expire automatically as shown. Delete a record here to remove its staged source and invalidate that recovery handle.</p>
+        </section>
+
+        <footer>
+          <span id="connection-state"><span class="state-dot"></span> Connected to local companion</span>
+          <button id="clear-session" class="text-button" type="button">Clear session and quit</button>
+        </footer>
+      </div>
+    </main>
+    <noscript>This companion needs JavaScript enabled to prepare a packet.</noscript>
+  </body>
+</html>

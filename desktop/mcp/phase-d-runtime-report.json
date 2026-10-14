@@ -1,0 +1,55 @@
+{
+  "check": "synthetic_request_preparation_cli_end_to_end",
+  "checks": {
+    "broker_focused_mode": true,
+    "broker_reference_mode": true,
+    "broker_stopped": true,
+    "compact_positive_gain": true,
+    "compact_safe_fallback": true,
+    "default_no_overwrite": true,
+    "explicit_export": true,
+    "explicit_show_packet": true,
+    "input_collision_blocked": true,
+    "invalid_source_id_rejected_before_config_or_broker": true,
+    "packet_byte_and_token_budgets": true,
+    "preview_metadata_only": true,
+    "same_handle_exact_recovery_after_cli": true,
+    "synthetic_broker_started": true,
+    "utf8_passthrough_roundtrip": true
+  },
+  "execution": {
+    "clipboard_used": false,
+    "desktop_configuration_modified": false,
+    "message_sent": false,
+    "model_api_calls": 0,
+    "network_calls": 0,
+    "real_user_sources_read": false
+  },
+  "failure_code": null,
+  "fixture_provenance": "synthetic_only",
+  "manual_desktop_work": {
+    "claude_desktop_ui_validation": "pending_not_performed",
+    "cross_sid_acl_validation": "not_exercised"
+  },
+  "measurements": {
+    "compact_packet_utf8_bytes": 588,
+    "compact_prepared_token_estimate": 133,
+    "compact_raw_token_estimate": 1866,
+    "focused_packet_token_estimate": 355,
+    "focused_packet_utf8_bytes": 1215,
+    "passthrough_packet_token_estimate": 88,
+    "passthrough_packet_utf8_bytes": 351,
+    "reference_packet_token_estimate": 312,
+    "reference_packet_utf8_bytes": 1059
+  },
+  "phase": "D",
+  "runtime": {
+    "mcp_sdk_version": "1.30.0",
+    "platform": "win32",
+    "python_version": "3.12.14",
+    "tokenizer_version": "0.14.0"
+  },
+  "schema_version": 1,
+  "scope": "synthetic_local_cli_and_same_user_named_pipe_broker",
+  "status": "passed"
+}

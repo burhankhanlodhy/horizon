@@ -287,3 +287,5 @@ horizon/_build_info.py
 
 # Personal Desktop MCP broker settings; copy local-settings.example.json
 desktop/mcp/local-settings.json
+desktop/mcp/companion-settings.json
+desktop/mcp/prepared-vault/

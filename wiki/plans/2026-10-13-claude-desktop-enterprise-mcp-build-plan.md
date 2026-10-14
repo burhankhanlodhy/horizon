@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink for Claude Desktop Enterprise: comprehensive MCP savings build plan"
 type: feature-plan
-status: phase-c-in-progress
+status: phase-d-local-companion-and-cli-implemented-target-app-validation-pending
 date: 2026-10-13
 pilot_scope: local-files-and-documents
 revision: 2
@@ -15,37 +15,48 @@ This revised plan builds an MCP-first ContextShrink savings suite: current-messa
 
 The scope is every practical, testable savings mechanism around a chat using ContextShrink. Mechanisms requiring an input panel, companion, user/admin settings, or demonstrated host capabilities are explicitly distinguished from ordinary MCP tools. Earlier chat-history rewriting and mandatory new-chat checkpointing are not part of the requested workflow.
 
-Planning and internal review are complete. Phase A's diagnostic runtime and
-contract foundation passed local SDK verification (50 tests plus the real SDK
-subprocess probe), and the user reports a basic live Claude Desktop discovery
-and exact fixture-open check. The SDK runtime report remains SDK-only evidence;
-the live check is recorded separately in the Phase A notes. Repeated-read,
-line-retrieval, and live error behavior remain unverified, as do MCP Apps
-compatibility and Enterprise billing. Phase B's local source/snapshot layer and
-same-user Windows broker are implemented and locally verified (91 desktop MCP
-tests passed, 1 skipped; independent combined verification: 93 passed, 1
-skipped; plus 11 synthetic-only smoke checks). The user reports that a basic
-live Claude Desktop local-profile flow passed search, exact open, line
-retrieval, and stats; a separate live diagnostic consumed a fresh handle from
-a second client. Cross-SID ACL behavior, cloud-provider behavior, Enterprise
-billing, Apps compatibility, and companion authorization scope remain
-unverified; Phase B exit is still in progress. Phase C local implementation is
-now verified with 155 desktop MCP tests passing and one skipped. Its synthetic
-SDK evaluation and sample-source checks do not establish live Claude Desktop
-Phase C compatibility or a billing change. Durations, limits, and launch
-targets below remain proposed engineering assumptions.
+Planning and internal review are complete. Phases A-C have local implementations
+with targeted runtime, broker, retrieval, fidelity, and payload-evaluation
+coverage; the phase notes record each command and its limits. User-reported
+basic live Desktop checks exist for A and B, but broader live error/lifecycle
+behavior, cross-SID ACLs, cloud-provider behavior, Phase C client compatibility,
+and whole-task Enterprise billing remain unverified. Phase C's synthetic A/B
+evaluation is unfavorable on its captured example (the optimized task uses
+more estimated tokens), so it supports no positive savings claim. Phase D now
+includes a standalone local browser companion, explicit session-scoped recovery
+imports, `reference_only`, and the manual CLI route described in
+[`2026-10-14-claude-desktop-phase-d.md`](2026-10-14-claude-desktop-phase-d.md).
+The synthetic real-broker/HTTP probe and local GUI review pass. This is not a
+Claude Desktop composer hook or MCP App; native Tauri integration/packaging is
+deferred, and target-app compatibility and billing remain unverified.
+The current worktree verification reports 321 passed and 1 platform-specific
+skip for the desktop MCP suite plus the MCP dependency-contract and CCR HTTP
+compatibility tests; scoped Ruff checks pass. Live target-app and Enterprise
+usage/billing validation remain external gates.
+
+The user separately reports a Claude Desktop compact-mode check returning
+`alpha`, `ready`, `periodic-heartbeat`, and `48` for the repeated-log fixture,
+and a source-backed open of version `ddb02b…` returning Alex with deadline
+`2026-11-30`. A later open returned `source_unavailable`, which is consistent
+with removal/revocation but does not prove that lifecycle or identify why the
+source became unavailable. These observations are separate from SDK test
+results and do not establish general Desktop compatibility or billing savings.
 
 Phase B is a reduced-scope, read-only consume pilot. The diagnostic profile
 remains unchanged and is still the default. Source-byte quotas do not bound
 worker RSS; a worker deadline timeout kills/restarts the worker and clears all
-shared snapshots and handles. Privileged companion APIs and operation-scoped
-authorization capabilities are not implemented and remain future Phase D
-work. These limits, plus pending cross-SID, broader target-app error/lifecycle,
-cloud-provider, and Enterprise billing checks, preclude a full Enterprise
-production-readiness claim.
+shared snapshots and handles. The companion adds no privileged broker
+operation or root-grant API: it creates generated files only within the
+explicit approved staging root and calls the existing read-only `open`
+operation. Broader cross-SID, cloud-provider, target-app error/lifecycle, and
+Enterprise billing checks remain pending, so the work does not establish full
+Enterprise production readiness.
 
 Phase C local implementation work for M2/M3/M10 is tracked separately in
 [`2026-10-13-claude-desktop-phase-c.md`](2026-10-13-claude-desktop-phase-c.md).
+The Phase D companion/CLI implementation and its remaining target-app and
+product gates are tracked in
+[`2026-10-14-claude-desktop-phase-d.md`](2026-10-14-claude-desktop-phase-d.md).
 Local token counts remain estimates, and per-call raw-equivalent payloads are
 counterfactuals rather than observed task savings. Full MCP/host overhead and
 Enterprise billing require separate measurement; Phase C implementation does
@@ -60,7 +71,7 @@ Desktop checks remain pending.
 | A | Local SDK verification and basic live Desktop discovery/open passed; broader client checks pending | M0 |
 | B | Local implementation and basic live Desktop flow passed; broader security and enterprise checks pending | M1, M8 |
 | C | Local retrieval, compression/selection, reversible formats and SDK payload evaluation passed; live Desktop and Enterprise validation pending | M2, M3, M10 |
-| D | Current-message preparation and companion/App input workflow | M9 |
+| D | Local browser companion, session-scoped staging, reference-only packets and CLI implemented; target-app validation pending | M9 |
 | E | Batch/query computation, output instructions and artifacts | M11, M12 |
 | F | Digital documents, runtime packaging and installation | M4, M5 |
 | G | Enterprise trials, suite hardening and beta rollout | M6, M7, M13, M14 |

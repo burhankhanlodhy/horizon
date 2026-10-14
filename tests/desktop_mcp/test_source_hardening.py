@@ -182,10 +182,6 @@ def test_reserved_device_names_with_extensions_are_denied_in_catalog_and_reads(
     assert reader.catalog("", limit=10) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="hard-link policy undecided: a same-user hard link in a root still reads outside data",
-)
 def test_hard_link_inside_root_to_outside_file_is_denied(tmp_path: Path) -> None:
     root = _approved(tmp_path)
     outside_dir = tmp_path / "outside"
@@ -199,10 +195,53 @@ def test_hard_link_inside_root_to_outside_file_is_denied(tmp_path: Path) -> None
         pytest.skip("hard link creation is unavailable on this filesystem")
 
     reader = SourceReader((root,))
-    # Current-behaviour assertion: a hard link whose directory entry lives in
-    # the approved root but whose data lives outside must not be served.
+    # A link inside an approved root must not expose a multiply-linked file.
     with pytest.raises(SourceAccessError) as error:
         reader.read(str(link))
+    assert error.value.code == "source_unapproved"
+    with pytest.raises(SourceAccessError) as access_error:
+        reader.check_access(str(link))
+    assert access_error.value.code == "source_unapproved"
+    assert reader.catalog("", limit=10) == []
+
+
+def test_single_link_file_remains_readable_and_snapshot_accessible(tmp_path: Path) -> None:
+    root = _approved(tmp_path)
+    source = root / "single.md"
+    source.write_bytes(b"single-link content\n")
+    reader = SourceReader((root,))
+    assert os.stat(source).st_nlink == 1
+
+    opened = reader.read(str(source))
+    assert opened.text == "single-link content\n"
+    assert reader.check_access(str(source)) == opened.root_key
+
+    backend = LocalBackend(reader)
+    snapshot = backend.open(str(source))
+    assert snapshot is not None
+    pinned = backend.open(snapshot["source_id"])
+    assert pinned is not None
+    assert pinned["text"] == "single-link content\n"
+
+
+def test_adding_hard_link_revokes_existing_snapshot_access(tmp_path: Path) -> None:
+    root = _approved(tmp_path)
+    source = root / "single.md"
+    source.write_bytes(b"originally single-link\n")
+    backend = LocalBackend(SourceReader((root,)))
+    snapshot = backend.open(str(source))
+    assert snapshot is not None
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_link = outside_dir / "new-link.md"
+    try:
+        os.link(source, outside_link)
+    except (OSError, NotImplementedError):
+        pytest.skip("hard link creation is unavailable on this filesystem")
+
+    with pytest.raises(LocalBackendError) as error:
+        backend.open(snapshot["source_id"])
     assert error.value.code == "source_unapproved"
 
 

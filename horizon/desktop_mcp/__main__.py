@@ -30,6 +30,26 @@ def _parser() -> argparse.ArgumentParser:
     )
     broker.add_argument("--config", type=Path, required=True)
 
+    companion = commands.add_parser(
+        "companion",
+        help="open the local graphical request-preparation companion",
+        description=(
+            "Prepare a request locally in a browser. It does not contact a model, "
+            "send a message, or change Claude Desktop configuration."
+        ),
+    )
+    companion.add_argument(
+        "--config", type=Path, help="explicit local MCP config for existing broker reads"
+    )
+    companion.add_argument(
+        "--staging-root",
+        type=Path,
+        help="one exact approved root from --config; enables session-scoped pasted-context import",
+    )
+    companion.add_argument(
+        "--no-browser", action="store_true", help="print the local URL without opening a browser"
+    )
+
     doctor = commands.add_parser("doctor", help="write a local runtime capability report")
     doctor.add_argument("--output", type=Path)
 
@@ -39,11 +59,22 @@ def _parser() -> argparse.ArgumentParser:
         description="Exercise the local MCP SDK stdio path; this does not verify Claude Desktop compatibility.",
     )
     probe.add_argument("--output", type=Path)
+
+    commands.add_parser(
+        "prepare",
+        help="prepare a local request packet for manual review and copying",
+        description="Prepare locally; this command never sends to Claude or uses the clipboard.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    values = list(sys.argv[1:] if argv is None else argv)
+    if values and values[0] == "prepare":
+        from .preparation_cli import main as prepare_main
+
+        return prepare_main(values[1:])
+    args = _parser().parse_args(values)
     if args.command == "broker":
         from .broker import BrokerService
         from .broker_transport import BrokerTransportError
@@ -78,6 +109,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"error": code}, separators=(",", ":")), file=sys.stderr)
             return 2
         return 0
+
+    if args.command == "companion":
+        from .companion import CompanionError, serve_companion
+
+        try:
+            return serve_companion(
+                config=args.config,
+                staging_root=args.staging_root,
+                open_browser=not args.no_browser,
+            )
+        except (CompanionError, ConfigurationError) as exc:
+            code = getattr(exc, "code", "companion_start_failed")
+            print(json.dumps({"error": code}, separators=(",", ":")), file=sys.stderr)
+            return 2
 
     if args.command == "serve":
         try:

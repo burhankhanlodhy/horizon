@@ -114,6 +114,7 @@ class SourceReader:
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode):
                 raise SourceAccessError("source_unavailable")
+            _require_single_link(before)
             self._check_cloud_state(descriptor)
             before_identity = _identity_for_fd(descriptor, before)
             if before.st_size > self.max_source_bytes:
@@ -163,6 +164,7 @@ class SourceReader:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise SourceAccessError("source_unavailable")
+            _require_single_link(info)
             self._check_cloud_state(descriptor)
             return root.root_key
         except SourceAccessError:
@@ -351,6 +353,7 @@ class SourceReader:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise SourceAccessError("source_unavailable")
+            _require_single_link(info)
             self._check_cloud_state(descriptor)
             final = _final_path_for_fd(descriptor)
             if _is_network_final_path(final) or not _is_within(final, root.final_path):
@@ -475,8 +478,22 @@ def _is_within(candidate: str, root: str) -> bool:
         return False
 
 
-def _file_state(info: os.stat_result) -> tuple[int, int, int, int]:
-    return (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode)
+def _require_single_link(info: os.stat_result) -> None:
+    """Reject files whose link count cannot prove a single directory entry."""
+
+    link_count = getattr(info, "st_nlink", None)
+    if type(link_count) is not int or link_count != 1:
+        raise SourceAccessError("source_unapproved")
+
+
+def _file_state(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+        info.st_mode,
+        getattr(info, "st_nlink", -1),
+    )
 
 
 def _identity_for_fd(descriptor: int, info: os.stat_result) -> str:
