@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ def _make_backend(settings: DesktopSettings) -> Any:
     reader = SourceReader(settings.approved_roots, max_source_bytes=settings.max_source_bytes)
     return LocalBackend(
         reader,
+        artifact_root=settings.artifact_root,
         ttl_seconds=settings.snapshot_ttl_seconds,
         max_snapshot_bytes=settings.max_snapshot_bytes,
         max_store_bytes=settings.max_store_bytes,
@@ -53,6 +55,15 @@ def _make_backend(settings: DesktopSettings) -> Any:
         min_compaction_gain_tokens=getattr(settings, "min_compaction_gain_tokens", 64),
         min_compaction_gain_percent=getattr(settings, "min_compaction_gain_percent", 5.0),
     )
+
+
+def _close_backend(backend: Any | None) -> None:
+    close = getattr(backend, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
 
 
 class Runtime:
@@ -70,10 +81,18 @@ class Runtime:
         self._check_broker_identity(self.settings)
         self.backend: Any | None = _make_backend(self.settings)
 
+    def _drop_backend(self) -> None:
+        backend, self.backend = self.backend, None
+        _close_backend(backend)
+
+    def close(self) -> None:
+        """Release the backend's artifact store on worker shutdown."""
+        self._drop_backend()
+
     def _check_broker_identity(self, settings: DesktopSettings) -> None:
         actual = (settings.broker_id, settings.max_broker_clients, settings.broker_timeout_seconds)
         if actual != self.expected_identity:
-            self.backend = None
+            self._drop_backend()
             self.settings = settings
             raise BrokerError("broker_restart_required")
 
@@ -81,7 +100,7 @@ class Runtime:
         try:
             updated = _load_local_settings(self.config_path)
         except ConfigurationError:
-            self.backend = None
+            self._drop_backend()
             raise BrokerError("configuration_unavailable") from None
         self._check_broker_identity(updated)
         rebuild = self.backend is None or any(
@@ -99,16 +118,17 @@ class Runtime:
                 "eval_arm",
                 "min_compaction_gain_tokens",
                 "min_compaction_gain_percent",
+                "artifact_root",
             )
         )
         if rebuild:
             # A grant or bound change drops snapshots and every outstanding ID.
-            self.backend = None
+            self._drop_backend()
             self.settings = updated
             try:
                 self.backend = _make_backend(updated)
             except Exception:
-                self.backend = None
+                self._drop_backend()
                 raise BrokerError("configuration_unavailable") from None
         self.settings = updated
 
@@ -136,6 +156,25 @@ class Runtime:
                     result_token_budget=args.get("result_token_budget"),
                     cursor=args.get("cursor"),
                 )
+            elif operation == "analyze":
+                result = self.backend.analyze(
+                    args["source_id"],
+                    args["operation"],
+                    result_token_budget=args.get("result_token_budget"),
+                )
+            elif operation == "render":
+                result = self.backend.render(
+                    args["source_id"],
+                    fmt=args["format"],
+                    title=args["title"],
+                    operation=args.get("operation"),
+                    formula_policy=args.get("formula_policy", "escape"),
+                )
+            elif operation == "retrieve_batch":
+                result = self.backend.retrieve_batch(
+                    args["requests"],
+                    result_token_budget=args.get("result_token_budget"),
+                )
             elif operation == "retrieve":
                 selector = args.get("selector")
                 if selector is None:
@@ -155,7 +194,9 @@ class Runtime:
         except Exception as exc:
             code = getattr(exc, "code", None)
             if isinstance(code, str) and code.replace("_", "").isalnum() and len(code) <= 64:
-                raise BrokerError(code) from None
+                raise BrokerError(
+                    code, _safe_error_metadata(getattr(exc, "metadata", None))
+                ) from None
             raise BrokerError("source_operation_failed") from None
         if not isinstance(result, dict):
             raise BrokerError("source_unavailable")
@@ -170,6 +211,23 @@ class Runtime:
                 }
                 return {"error": {"code": "result_too_large"}, "metadata": metadata}
         return result
+
+
+_ERROR_METADATA_KEYS = ("source_id", "version", "line_count", "output_rows")
+
+
+def _safe_error_metadata(metadata: Any) -> dict[str, Any] | None:
+    """Keep only the known opaque identifiers and counts an error may carry."""
+    if not isinstance(metadata, dict):
+        return None
+    safe = {
+        key: metadata[key]
+        for key in _ERROR_METADATA_KEYS
+        if isinstance(metadata.get(key), (str, int))
+        and not isinstance(metadata.get(key), bool)
+        and len(str(metadata[key])) <= 256
+    }
+    return safe or None
 
 
 def _read_request() -> dict[str, Any] | None:
@@ -209,6 +267,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-max-clients", type=int, required=True)
     parser.add_argument("--expected-timeout", type=int, required=True)
     args = parser.parse_args(argv)
+    # The broker owns this process: it ends it by closing stdin (so cleanup
+    # runs) and kills it on a timeout. A console Ctrl+C/Ctrl+Break reaches the
+    # whole process group and must not kill the worker before that cleanup.
+    for name in ("SIGINT", "SIGBREAK"):
+        if hasattr(signal, name):
+            try:
+                signal.signal(getattr(signal, name), signal.SIG_IGN)
+            except (ValueError, OSError):
+                pass
     protocol_stdout = sys.__stdout__
     sys.stdout = sys.stderr
     try:
@@ -220,30 +287,33 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (ConfigurationError, BrokerError):
         return 2
-    while True:
-        try:
-            request = _read_request()
-            if request is None:
-                return 0
+    try:
+        while True:
             try:
-                result = runtime.request(request["operation"], request["args"])
+                request = _read_request()
+                if request is None:
+                    return 0
+                try:
+                    result = runtime.request(request["operation"], request["args"])
+                except BrokerError as exc:
+                    result = {"error": {"code": exc.code}, "metadata": exc.metadata}
+                except Exception:
+                    result = {"error": {"code": "source_operation_failed"}}
+                payload = json.dumps(
+                    {"result": result}, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                if len(payload) > MAX_FRAME_BYTES:
+                    payload = b'{"result":{"error":{"code":"result_too_large"}}}'
+                protocol_stdout.buffer.write(b"CSM\x01" + len(payload).to_bytes(4, "big") + payload)
+                protocol_stdout.buffer.flush()
             except BrokerError as exc:
-                result = {"error": {"code": exc.code}, "metadata": exc.metadata}
-            except Exception:
-                result = {"error": {"code": "source_operation_failed"}}
-            payload = json.dumps(
-                {"result": result}, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-            if len(payload) > MAX_FRAME_BYTES:
-                payload = b'{"result":{"error":{"code":"result_too_large"}}}'
-            protocol_stdout.buffer.write(b"CSM\x01" + len(payload).to_bytes(4, "big") + payload)
-            protocol_stdout.buffer.flush()
-        except BrokerError as exc:
-            payload = json.dumps(
-                {"result": {"error": {"code": exc.code}}}, separators=(",", ":")
-            ).encode()
-            protocol_stdout.buffer.write(b"CSM\x01" + len(payload).to_bytes(4, "big") + payload)
-            protocol_stdout.buffer.flush()
+                payload = json.dumps(
+                    {"result": {"error": {"code": exc.code}}}, separators=(",", ":")
+                ).encode()
+                protocol_stdout.buffer.write(b"CSM\x01" + len(payload).to_bytes(4, "big") + payload)
+                protocol_stdout.buffer.flush()
+    finally:
+        runtime.close()
 
 
 if __name__ == "__main__":

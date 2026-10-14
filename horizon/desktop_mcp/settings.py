@@ -118,7 +118,11 @@ class DesktopSettings(BaseModel):
             artifact = _comparable(self.artifact_root)
             for root in self.approved_roots:
                 approved = _comparable(root)
-                if artifact == approved or approved in artifact.parents or artifact in approved.parents:
+                if (
+                    artifact == approved
+                    or approved in artifact.parents
+                    or artifact in approved.parents
+                ):
                     raise ValueError("artifact_root must not overlap an approved root")
         return self
 

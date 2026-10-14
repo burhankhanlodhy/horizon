@@ -88,6 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 signal.signal(signal.SIGINT, lambda *_: stop_event.set())
                 signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+                if hasattr(signal, "SIGBREAK"):
+                    # Ctrl+Break would otherwise end the broker without cleanup.
+                    signal.signal(signal.SIGBREAK, lambda *_: stop_event.set())
             except (ValueError, OSError):
                 pass
             service.serve(stop_event=stop_event)

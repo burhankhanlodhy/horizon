@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase E deterministic work and artifacts"
 date: 2026-10-14
-status: e1-core-complete-e2-pending
+status: e2-wiring-complete-e3-pending
 phase: E
 milestones: [M11, M12]
 ---
@@ -24,7 +24,7 @@ operation is a validated, bounded, typed specification.
 | Stage | Scope | Status |
 |---|---|---|
 | E1 | Pure core: `tables`, `operations`, `batching`, `answer_contract`, `artifacts` with unit tests | complete locally |
-| E2 | Backend/broker wiring; compute profile with `contextshrink_analyze` and `contextshrink_render`; contracts | pending |
+| E2 | Backend/broker wiring; compute profile with `contextshrink_analyze`, `contextshrink_render` and `contextshrink_retrieve_batch`; contracts | complete locally |
 | E3 | Companion artifact browser, user-operated export, revocation, SDK evaluation | pending |
 
 E1 modules have no MCP, broker, network, or model dependencies.
@@ -255,6 +255,52 @@ allowed sets, `title` is a string of 1-120 characters, `requests` has 1-16 items
 of exactly `{source_id, selector}` with selectors checked by the existing
 `_validate_selector`. Unknown keys fail. `BrokerClient` gains `analyze`,
 `render` and `retrieve_batch` with the backend's signatures.
+
+## E2 review and end-to-end results
+
+A scratch probe ran a real broker process, the real MCP stdio server and an
+SDK client against a synthetic 5,000-row CSV with `tool_profile: "compute"`:
+
+- The compute profile listed seven tools; the source profile's four schemas are
+  identical to `main`.
+- A grouped count/sum/mean over all 5,000 rows returned exact totals with an
+  estimated 501 delivered tokens against a 44,400-token raw-equivalent payload
+  for the same source. This is one synthetic per-call counterfactual, not a
+  task-level or billing saving.
+- Render produced Markdown and a 5,000-row CSV (88 KB) while returning only a
+  manifest; no filesystem path appeared in any result.
+- `retrieve_batch` merged two overlapping requests into one block and reported
+  an unknown source per item.
+- A 5,000-row projection returned `analysis_result_too_large` with
+  `output_rows`, never a truncated table.
+
+The probe found two defects, both fixed with tests:
+
+1. The worker dropped error metadata, so `analysis_result_too_large` (and the
+   existing exact-read `result_too_large`) reached clients without
+   `source_id`/`version`/`output_rows`. The worker now forwards an allowlisted
+   set of opaque identifiers and counts.
+2. Artifact files survived broker shutdown. The broker hard-killed its worker
+   even on a clean stop, Ctrl+Break was not handled, and a console interrupt
+   also reached the worker. Now the broker closes the worker's input and waits
+   up to three seconds before any kill, handles SIGBREAK like SIGINT, and the
+   worker ignores console interrupts. As a crash backstop, a new artifact
+   store removes generated artifact files older than the one-hour maximum
+   lifetime (plus a margin) from earlier sessions, without following links
+   or deleting recursively.
+
+Verification: `pytest tests/desktop_mcp` plus the MCP dependency-contract and
+CCR HTTP tests report 638 passed, 1 skipped; ruff check and format pass.
+
+## E3 scope
+
+- Companion artifact browser with user-operated Save As/Open. This needs a
+  role decision first: broker clients are not role-separated today, so an
+  artifact listing/read operation must not be reachable from the MCP adapter.
+- Revocation surfaced in the browser, and HTML/chart previews from safe
+  templates only.
+- SDK evaluation of analyze/render/batch tasks against raw exact reads,
+  counting schemas, instructions and every call.
 
 ## E1 review decisions
 

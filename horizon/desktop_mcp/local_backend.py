@@ -2,16 +2,34 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from .measurement import LocalUsageLedger, TokenEstimator
-from .policies import CursorSigner, PolicyError, present_selected_scope, present_snapshot
+from .artifacts import ArtifactError, ArtifactStore, Dependency
+from .batching import BatchError, fuse_reads
+from .measurement import LocalUsageLedger, TokenEstimator, finalize_accounting
+from .operations import OPERATIONS_VERSION, OperationError, run_operation
+from .policies import (
+    POLICY_VERSION,
+    CursorSigner,
+    PolicyError,
+    present_selected_scope,
+    present_snapshot,
+)
 from .selectors import SelectorError, select_exact
 from .snapshots import SnapshotError, SnapshotStore, SourceSnapshot
 from .source_access import OpenedSource, SourceAccessError, SourceReader
+from .tables import ResultTable, Table, TableError, parse_table
+from .text_lines import split_physical_lines
+
+_RENDER_FORMATS = frozenset({"csv", "json", "markdown", "text"})
+_RENDER_POLICIES = frozenset({"escape", "reject"})
+_TABLE_CACHE_MAX = 4
+_ARTIFACT_TTL_CAP_SECONDS = 3600
 
 
 class LocalBackendError(ValueError):
@@ -40,6 +58,7 @@ class LocalBackend:
         eval_arm: str = "optimized",
         min_compaction_gain_tokens: int = 64,
         min_compaction_gain_percent: int = 5,
+        artifact_root: Path | None = None,
     ) -> None:
         if eval_arm not in {"optimized", "raw"}:
             raise ValueError("eval_arm must be optimized or raw")
@@ -64,6 +83,11 @@ class LocalBackend:
         self._catalog_count = 0
         self._catalog_truncated = False
         self._catalog_skipped = 0
+        self._ttl_seconds = ttl_seconds
+        self._artifact_root = Path(artifact_root) if artifact_root is not None else None
+        self.artifact_store: ArtifactStore | None = None
+        self._artifact_closed = False
+        self._table_cache: OrderedDict[tuple[str, str], Table] = OrderedDict()
 
     def update_roots(self, roots: tuple[Path, ...] | list[Path]) -> None:
         """Replace local grants and clear all snapshots; intended for local UI only."""
@@ -358,6 +382,169 @@ class LocalBackend:
             )
             raise
 
+    def analyze(
+        self,
+        source_id: str,
+        operation: dict[str, Any],
+        *,
+        result_token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Run one validated typed operation over every parsed row of a snapshot."""
+        if not isinstance(source_id, str) or not source_id.startswith("cs1_"):
+            raise LocalBackendError("snapshot_unknown")
+        if not isinstance(operation, dict):
+            raise LocalBackendError("invalid_arguments")
+        budget = self._effective_budget(result_token_budget)
+        started = time.perf_counter()
+        try:
+            with self._lock:
+                snapshot = self._get_authorized_snapshot(source_id)
+                outcome = run_operation(self._parsed_table(snapshot), operation)
+                payload = self._analysis_payload(snapshot, outcome, budget)
+                self._observe(
+                    "contextshrink_analyze",
+                    payload,
+                    mode="computed",
+                    status="success",
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
+                return payload
+        except (SourceAccessError, SnapshotError, TableError, OperationError) as exc:
+            self._record_error("contextshrink_analyze", "computed", started, exc.code)
+            raise LocalBackendError(exc.code) from None
+        except LocalBackendError as exc:
+            self._record_error("contextshrink_analyze", "computed", started, exc.code)
+            raise
+
+    def render(
+        self,
+        source_id: str,
+        *,
+        fmt: str,
+        title: str,
+        operation: dict[str, Any] | None = None,
+        formula_policy: str = "escape",
+    ) -> dict[str, Any]:
+        """Store a rendered table under the artifact root and return its manifest only."""
+        if not isinstance(source_id, str) or not source_id.startswith("cs1_"):
+            raise LocalBackendError("snapshot_unknown")
+        if not isinstance(fmt, str) or fmt not in _RENDER_FORMATS:
+            raise LocalBackendError("invalid_arguments")
+        # "raw" is never model-facing; only the companion may request it, and it
+        # does not go through this method.
+        if not isinstance(formula_policy, str) or formula_policy not in _RENDER_POLICIES:
+            raise LocalBackendError("invalid_arguments")
+        if operation is not None and not isinstance(operation, dict):
+            raise LocalBackendError("invalid_arguments")
+        started = time.perf_counter()
+        try:
+            with self._lock:
+                store = self._artifact_store_locked()
+                snapshot = self._get_authorized_snapshot(source_id)
+                table = self._parsed_table(snapshot)
+                if operation is None:
+                    result = ResultTable(
+                        tuple(table.columns),
+                        tuple(tuple(row.values) for row in table.rows),
+                        tuple(dict(row.ref) for row in table.rows),
+                    )
+                    lineage: dict[str, Any] = {"source_rows": len(table.rows)}
+                else:
+                    outcome = run_operation(table, operation)
+                    result = outcome.table
+                    lineage = outcome.lineage
+                dependency = Dependency(
+                    source_id=snapshot.source_id,
+                    version=snapshot.version,
+                    root_key=snapshot.root_key,
+                )
+                manifest = store.create(
+                    fmt,
+                    result,
+                    title=title,
+                    dependencies=(dependency,),
+                    formula_policy=formula_policy,
+                )
+                self._observe(
+                    "contextshrink_render",
+                    None,
+                    mode="artifact",
+                    status="success",
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
+                return {
+                    "tool": "render",
+                    "artifact": manifest,
+                    "lineage": lineage,
+                    "delivery": "stored_locally_not_in_result",
+                }
+        except (
+            SourceAccessError,
+            SnapshotError,
+            TableError,
+            OperationError,
+            ArtifactError,
+        ) as exc:
+            self._record_error("contextshrink_render", "artifact", started, exc.code)
+            raise LocalBackendError(exc.code) from None
+        except LocalBackendError as exc:
+            self._record_error("contextshrink_render", "artifact", started, exc.code)
+            raise
+
+    def retrieve_batch(
+        self,
+        requests: list[dict[str, Any]],
+        *,
+        result_token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Fuse 1-16 exact selector reads into merged blocks under one budget."""
+        budget = self._effective_budget(result_token_budget)
+        started = time.perf_counter()
+        try:
+            with self._lock:
+                # Sources that fail authorization are simply absent, so fuse_reads
+                # reports them per item as source_unknown.
+                snapshots: dict[str, SourceSnapshot] = {}
+                if isinstance(requests, list):
+                    for item in requests:
+                        source_id = item.get("source_id") if isinstance(item, dict) else None
+                        if not isinstance(source_id, str) or source_id in snapshots:
+                            continue
+                        try:
+                            snapshots[source_id] = self._get_authorized_snapshot(source_id)
+                        except LocalBackendError:
+                            continue
+                payload = fuse_reads(
+                    snapshots,
+                    requests,
+                    max_result_bytes=self.max_result_bytes,
+                    token_budget=budget,
+                    estimator=self.estimator,
+                )
+                self._observe(
+                    "contextshrink_retrieve_batch",
+                    None,
+                    mode="batch",
+                    status="fallback" if payload.get("deferred") else "success",
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
+                return payload
+        except BatchError as exc:
+            self._record_error("contextshrink_retrieve_batch", "batch", started, exc.code)
+            raise LocalBackendError(exc.code) from None
+        except LocalBackendError as exc:
+            self._record_error("contextshrink_retrieve_batch", "batch", started, exc.code)
+            raise
+
+    def close(self) -> None:
+        """Close the artifact store and drop cached tables; safe to call repeatedly."""
+        with self._lock:
+            self._artifact_closed = True
+            self._table_cache.clear()
+            store, self.artifact_store = self.artifact_store, None
+            if store is not None:
+                store.close()
+
     def stats(self) -> dict[str, Any]:
         with self._lock:
             usage = self.store.stats()
@@ -493,3 +680,128 @@ class LocalBackend:
     def _kind_from_source(source: str) -> str:
         suffix = Path(source).suffix.lower().lstrip(".")
         return suffix if suffix else "text"
+
+    def _effective_budget(self, requested: int | None) -> int:
+        if requested is None:
+            return self.result_token_budget
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+            raise LocalBackendError("invalid_arguments")
+        return min(requested, self.result_token_budget)
+
+    def _record_error(self, tool: str, mode: str, started: float, code: str) -> None:
+        self._observe(
+            tool,
+            None,
+            mode=mode,
+            status="error",
+            latency_ms=(time.perf_counter() - started) * 1000,
+            error_code=code,
+        )
+
+    def _parsed_table(self, snapshot: SourceSnapshot) -> Table:
+        """Parse an authorized snapshot once per (source_id, version); caller holds the lock."""
+        key = (snapshot.source_id, snapshot.version)
+        cached = self._table_cache.get(key)
+        if cached is not None:
+            self._table_cache.move_to_end(key)
+            return cached
+        table = parse_table(snapshot.text, snapshot.kind)
+        self._table_cache[key] = table
+        while len(self._table_cache) > _TABLE_CACHE_MAX:
+            self._table_cache.popitem(last=False)
+        return table
+
+    @staticmethod
+    def _canonical_json(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    def _analysis_payload(
+        self, snapshot: SourceSnapshot, outcome: Any, budget: int
+    ) -> dict[str, Any]:
+        result = outcome.table
+        payload: dict[str, Any] = {
+            "tool": "analyze",
+            "source_id": snapshot.source_id,
+            "version": snapshot.version,
+            "kind": snapshot.kind,
+            "operations_version": OPERATIONS_VERSION,
+            "columns": list(result.columns),
+            "rows": [list(row) for row in result.rows],
+            "row_refs": list(result.row_refs),
+            "values": list(outcome.values),
+            "lineage": outcome.lineage,
+            "coverage": "computed over every parsed row of this source version",
+        }
+        metadata = {
+            "source_id": snapshot.source_id,
+            "version": snapshot.version,
+            "output_rows": len(result.rows),
+        }
+        encoded = self._canonical_json(payload)
+        if (
+            len(encoded.encode("utf-8")) > self.max_result_bytes
+            or self.estimator.count_text(encoded) > budget
+        ):
+            raise LocalBackendError("analysis_result_too_large", metadata)
+        # Raw baseline: the same whole-source payload shape policies.py uses for
+        # exact reads, built here so no private policy helper is imported.
+        line_count = max(1, len(split_physical_lines(snapshot.text)))
+        raw_payload = {
+            "source_id": snapshot.source_id,
+            "version": snapshot.version,
+            "kind": snapshot.kind,
+            "mode": "exact",
+            "coverage": "complete source snapshot",
+            "selected_lines": {"start": 1, "end": line_count},
+            "line_count": line_count,
+            "text": snapshot.text,
+            "approved_local_files": True,
+            "digest": snapshot.digest,
+            "byte_count": snapshot.byte_count,
+            "extractor_version": snapshot.extractor_version,
+            "policy_version": POLICY_VERSION,
+            "fidelity": "byte_exact",
+            "more_available": False,
+            "next_cursor": None,
+            "result_token_budget_applied": False,
+        }
+        accounted = finalize_accounting(
+            payload,
+            raw_payload,
+            snapshot.text,
+            encoded,
+            estimator=self.estimator,
+        )
+        if len(self._canonical_json(accounted).encode("utf-8")) > self.max_result_bytes:
+            raise LocalBackendError("analysis_result_too_large", metadata)
+        return accounted
+
+    def _artifact_store_locked(self) -> ArtifactStore:
+        """Create the artifact store on first render; caller holds the lock."""
+        if self._artifact_closed or self._artifact_root is None:
+            raise LocalBackendError("render_unavailable")
+        if self.artifact_store is None:
+            try:
+                self.artifact_store = ArtifactStore(
+                    self._artifact_root,
+                    dependency_check=self._dependencies_current,
+                    ttl_seconds=min(self._ttl_seconds, _ARTIFACT_TTL_CAP_SECONDS),
+                )
+            except ArtifactError as exc:
+                raise LocalBackendError(exc.code) from None
+        return self.artifact_store
+
+    def _dependencies_current(self, dependencies: tuple[Dependency, ...]) -> bool:
+        """Re-authorize every dependency; any failure or drift revokes the artifact."""
+        with self._lock:
+            try:
+                for dependency in dependencies:
+                    snapshot = self._get_authorized_snapshot(dependency.source_id)
+                    if (
+                        snapshot.version != dependency.version
+                        or snapshot.root_key != dependency.root_key
+                    ):
+                        return False
+            except Exception:
+                return False
+            return True

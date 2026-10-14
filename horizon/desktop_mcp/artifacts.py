@@ -12,7 +12,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -44,6 +46,59 @@ class ArtifactError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+_SESSION_DIR = re.compile(r"\.contextshrink-artifacts-[0-9a-f]{32}")
+_ARTIFACT_FILE = re.compile(r"artifact-[0-9a-f]{32}\.(?:csv|json|md|txt)")
+# Artifacts live at most an hour; a file older than this plus a margin is
+# expired in every session, so removing it can never affect live results.
+STALE_ARTIFACT_SECONDS = 3600 + 300
+_REPARSE_POINT = 0x400
+
+
+def _plain(entry: os.DirEntry[str], *, directory: bool) -> bool:
+    """True for a real file/directory: no symlink, junction or reparse point."""
+    try:
+        info = entry.stat(follow_symlinks=False)
+    except OSError:
+        return False
+    if entry.is_symlink() or getattr(info, "st_file_attributes", 0) & _REPARSE_POINT:
+        return False
+    return stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+
+
+def sweep_stale_sessions(base_dir: Path, *, now: float) -> int:
+    """Best-effort removal of expired artifact files left by a crashed session.
+
+    Only generated names are touched, links are never followed, and nothing is
+    removed recursively; an empty session directory is removed last.
+    """
+    removed = 0
+    try:
+        sessions = list(os.scandir(base_dir))
+    except OSError:
+        return 0
+    for session in sessions:
+        if not _SESSION_DIR.fullmatch(session.name) or not _plain(session, directory=True):
+            continue
+        try:
+            files = list(os.scandir(session.path))
+        except OSError:
+            continue
+        for item in files:
+            if not _ARTIFACT_FILE.fullmatch(item.name) or not _plain(item, directory=False):
+                continue
+            try:
+                if now - item.stat(follow_symlinks=False).st_mtime > STALE_ARTIFACT_SECONDS:
+                    os.unlink(item.path)
+                    removed += 1
+            except OSError:
+                continue
+        try:
+            os.rmdir(session.path)
+        except OSError:
+            pass
+    return removed
 
 
 @dataclass(frozen=True)
@@ -239,6 +294,7 @@ class ArtifactStore:
         self._bytes = 0
         self._closed = False
         session_name = f".contextshrink-artifacts-{uuid.uuid4().hex}"
+        sweep_stale_sessions(Path(base_dir), now=clock())
         try:
             self._fs = PinnedStagingDirectory.open(Path(base_dir), session_name)
         except (StagingFilesystemError, OSError, ValueError):
