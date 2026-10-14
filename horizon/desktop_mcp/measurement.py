@@ -31,10 +31,15 @@ _ALLOWED_TOOLS = frozenset(
         "contextshrink_open",
         "contextshrink_retrieve",
         "contextshrink_stats",
+        "contextshrink_analyze",
+        "contextshrink_render",
+        "contextshrink_retrieve_batch",
         "unknown",
     }
 )
-_ALLOWED_MODES = frozenset({"exact", "compact", "focused", "overview", "unknown"})
+_ALLOWED_MODES = frozenset(
+    {"exact", "compact", "focused", "overview", "computed", "artifact", "batch", "unknown"}
+)
 _ALLOWED_STATUS = frozenset({"success", "error", "fallback", "unknown"})
 _SAFE_CODE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _CACHE_LOAD_LOCK = threading.Lock()
