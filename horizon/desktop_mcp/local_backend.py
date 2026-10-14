@@ -322,7 +322,12 @@ class LocalBackend:
         try:
             with self._lock:
                 snapshot = self._get_authorized_snapshot(source_id)
-                selected = select_exact(snapshot.text, values, kind=snapshot.kind)
+                selected = select_exact(
+                    snapshot.text,
+                    values,
+                    kind=snapshot.kind,
+                    blocks=snapshot.blocks,
+                )
                 result = present_selected_scope(
                     snapshot,
                     selected,
@@ -689,6 +694,9 @@ class LocalBackend:
                 digest=opened.digest,
                 byte_count=opened.byte_count,
                 identity=opened.identity,
+                extractor_version=opened.extractor_version,
+                blocks=opened.blocks,
+                warnings=opened.warnings,
             )
         except SnapshotError as exc:
             raise LocalBackendError(exc.code) from None

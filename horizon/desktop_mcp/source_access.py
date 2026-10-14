@@ -16,6 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from .extractors import (
+    DOCUMENT_KINDS,
+    DocumentBlock,
+    ExtractedDocument,
+    ExtractionError,
+    extract_document,
+)
+
 _DEFAULT_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_CATALOG_ENTRIES = 1000
 _MAX_CATALOG_LIMIT = 100
@@ -39,6 +47,8 @@ _SUPPORTED_SUFFIXES = {
     ".patch",
     ".paths",
     ".search",
+    ".pdf",
+    ".docx",
 }
 _WINDOWS_RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.I)
 
@@ -61,6 +71,12 @@ class OpenedSource:
     digest: str
     byte_count: int
     identity: str
+    # "text-v1" for UTF-8 text sources; e.g. "pdf-pypdf-6.20.1-v1" for documents.
+    extractor_version: str = "text-v1"
+    # Document block spans into ``text`` (PDF pages, DOCX paragraphs/tables).
+    blocks: tuple[DocumentBlock, ...] = ()
+    # Stable omission/reliability codes reported by the document extractor.
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,12 +150,22 @@ class SourceReader:
             if before_identity != after_identity or _file_state(before) != _file_state(after):
                 raise SourceAccessError("source_changed")
             raw = b"".join(chunks)
-            if b"\x00" in raw:
-                raise SourceAccessError("source_invalid_text")
-            try:
-                text = raw.decode("utf-8", errors="strict")
-            except UnicodeDecodeError:
-                raise SourceAccessError("source_invalid_text") from None
+            kind = candidate.suffix.casefold().lstrip(".")
+            if kind in DOCUMENT_KINDS:
+                # Extraction runs only after every handle, size and change check.
+                document = _extract_or_raise(raw, kind)
+                text = document.text
+                extractor_version = document.extractor_version
+                blocks = document.blocks
+                warnings = document.warnings
+            else:
+                if b"\x00" in raw:
+                    raise SourceAccessError("source_invalid_text")
+                try:
+                    text = raw.decode("utf-8", errors="strict")
+                except UnicodeDecodeError:
+                    raise SourceAccessError("source_invalid_text") from None
+                extractor_version, blocks, warnings = "text-v1", (), ()
             return OpenedSource(
                 root_key=root.root_key,
                 relative_path=relative,
@@ -147,6 +173,9 @@ class SourceReader:
                 digest=hashlib.sha256(raw).hexdigest(),
                 byte_count=len(raw),
                 identity=after_identity,
+                extractor_version=extractor_version,
+                blocks=blocks,
+                warnings=warnings,
             )
         except SourceAccessError:
             raise
@@ -399,6 +428,13 @@ class SourceReader:
             cloud_base = 0x9000001A
             if tag is None or (tag & ~0x0000F000) != cloud_base:
                 raise SourceAccessError("source_unavailable")
+
+
+def _extract_or_raise(raw: bytes, kind: str) -> ExtractedDocument:
+    try:
+        return extract_document(raw, kind)
+    except ExtractionError as exc:
+        raise SourceAccessError(exc.code) from None
 
 
 def _reject_unsafe_path_text(value: str, *, is_root: bool = False) -> None:
