@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: Phase G evidence hardening"
 date: 2026-10-14
-status: in-progress
+status: complete-locally
 phase: G
 milestones: [M6, M7, M13, M14]
 ---
@@ -199,3 +199,39 @@ The runbook pass found two gaps that block a real pilot.
 - **Metadata store.** `pilot_metadata withdraw --participant-code CODE
   --confirm` deletes only that participant's records, keeps the others, and
   records nothing about the withdrawn person beyond a count.
+
+## Results
+
+All findings and plan gaps above are fixed on `claude/phase-g-hardening`.
+`pytest tests/desktop_mcp` plus the MCP dependency-contract and CCR HTTP
+tests report 1,345 passed, 2 skipped (POSIX-only), and `ruff check` and
+`ruff format --check` pass.
+
+The coordinator checked these directly rather than relying only on agent
+tests:
+
+- **Decision rule.** A clear saving with real evidence is
+  `savings_supported`, and mixed results are `inconclusive`. Synthetic,
+  unverified and small samples give `none` with reasons, independent of
+  input order.
+- **Synthetic economics report.** It contains no "USD", flags placeholder
+  rates, has every claim `none`, and has no observed usage or verified
+  provenance. An admin export is recorded only as a digest and size, never
+  a path.
+- **Real-cohort allocation.** The secret seed never appears in the
+  assignment file and its commitment matches. Verification passes with the
+  true seed and fails with a one-character seed change or swapped arms, and
+  operator-chosen codes are refused.
+- **Real bundle.** It validates, and `verify-sources` refuses a hard link to
+  a file outside the source folder. The task book holds no source content
+  and no expected values.
+
+Review corrections made during the work:
+
+- The factorial's output factor was first tied to artifact rendering. It is
+  now the concise output contract, with every other mechanism held fixed.
+- Pilot codes pasted from Windows text files are trimmed.
+
+Still external, as before: the real pilot with consent and blinded
+scoring, refreshed Enterprise exports, packaged clean-machine checks,
+signing, and the privacy and release reviews.
