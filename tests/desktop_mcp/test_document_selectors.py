@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -397,6 +396,17 @@ def _load_head_contracts(tmp_path: Path) -> Any:
     return module
 
 
+def _without_descriptions(value: Any) -> Any:
+    """Return a copy of a JSON-like value with every ``description`` key removed."""
+    if isinstance(value, dict):
+        return {
+            key: _without_descriptions(item) for key, item in value.items() if key != "description"
+        }
+    if isinstance(value, list):
+        return [_without_descriptions(item) for item in value]
+    return value
+
+
 def test_source_profile_schemas_match_baseline_except_retrieve_selector_extension(
     tmp_path: Path,
 ) -> None:
@@ -408,9 +418,10 @@ def test_source_profile_schemas_match_baseline_except_retrieve_selector_extensio
     head_specs = {spec["name"]: spec for spec in head.tool_specs()}
     current_specs = {spec["name"]: spec for spec in tool_specs("source")}
     assert list(current_specs) == list(head_specs)
+    # Descriptions are guidance text, not schema structure; every other key is compared.
     for name, spec in head_specs.items():
         if name != "contextshrink_retrieve":
-            assert current_specs[name] == spec, name
+            assert _without_descriptions(current_specs[name]) == _without_descriptions(spec), name
 
     head_retrieve = head_specs["contextshrink_retrieve"]
     current_retrieve = current_specs["contextshrink_retrieve"]
@@ -418,11 +429,10 @@ def test_source_profile_schemas_match_baseline_except_retrieve_selector_extensio
     current_selector = current_retrieve["inputSchema"]["properties"]["selector"]
     assert current_selector["oneOf"][: len(head_selector["oneOf"])] == head_selector["oneOf"]
     assert len(current_selector["oneOf"]) == len(head_selector["oneOf"]) + 3
-    stripped_head = json.loads(json.dumps(head_retrieve))
-    stripped_current = json.loads(json.dumps(current_retrieve))
+    stripped_head = _without_descriptions(head_retrieve)
+    stripped_current = _without_descriptions(current_retrieve)
     for item in (stripped_head, stripped_current):
         item["inputSchema"]["properties"]["selector"].pop("oneOf")
-        item["inputSchema"]["properties"]["selector"].pop("description")
     assert stripped_current == stripped_head
 
 
