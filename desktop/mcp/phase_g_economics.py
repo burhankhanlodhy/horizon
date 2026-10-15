@@ -1,14 +1,19 @@
 """Offline, synthetic-first Phase G M13 cost and output-contract evaluator.
 
-The input references the metadata-only ``phase_g_study/v1`` JSON contract but
-does not import its implementation. Per-request/per-model token usage is a
+The study bundle and assignment set are checked by ``horizon.desktop_mcp.pilot_study``
+(the M6 contract); savings decisions and factorial effects come from
+``evidence_stats`` and ``factorial``. Per-request/per-model token usage is a
 separate M13 sidecar; admin usage windows are never split across tasks or
 requests. No network, provider, or account credentials are used.
+
+Run with ``PYTHONPATH`` set to the repository root, or from the repository
+root directly; this file adds the root to ``sys.path`` itself.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import hashlib
 import json
 import re
@@ -19,15 +24,31 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from horizon.desktop_mcp import pilot_study  # noqa: E402
+from horizon.desktop_mcp.evidence_stats import (  # noqa: E402
+    Interval,
+    PairedUnit,
+    paired_difference_interval,
+    savings_decision,
+)
+from horizon.desktop_mcp.factorial import FactorialCell, FactorialError, analyze_factorial  # noqa: E402
+
 SCHEMA_VERSION = "phase_g_economics/v1"
 STUDY_SCHEMA_VERSION = "phase_g_study/v1"
 ARMS = ("A", "B", "C_normal", "C_tuned")
-WILLIAMS = (
-    ("A", "B", "C_tuned", "C_normal"),
-    ("B", "C_normal", "A", "C_tuned"),
-    ("C_normal", "C_tuned", "B", "A"),
-    ("C_tuned", "A", "C_normal", "B"),
-)
+# Fixed reporting constant for the cluster bootstrap. It is deliberately not the
+# allocation seed: committed real cohorts never reveal theirs in this report.
+BOOTSTRAP_SEED = 20261014
+# The primary savings comparison: candidate B_full against the recorded normal workflow.
+PRIMARY_REFERENCE = "C_normal"
+PRIMARY_CANDIDATE = "B_full"
+FACTORIAL_CONDITIONS = ("F00", "F10", "F01", "F11")
+FACTORIAL_FLAGS = ("input_reduction", "output_contract")
+RATE_SOURCES = {"placeholder", "published_price_list", "contract"}
 BASE_CONDITIONS = {"A": "A", "B_full": "B", "C_normal": "C_normal", "C_tuned": "C_tuned"}
 ABLATIONS = {
     "B_no_source",
@@ -85,11 +106,44 @@ SCORE_VALUES = {
     "unsupported_claim": {"yes", "no", "unknown", "unscored"},
 }
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+TASK_ID = re.compile(r"^t_[a-z0-9_]{1,40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 DECIMAL_TEXT = re.compile(r"^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,8})?$")
 CURRENCY = re.compile(r"^[A-Z]{3}$")
+ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 SYNTHETIC_PARTICIPANT = re.compile(r"^syn-p-[a-z0-9]{4,24}$")
-PSEUDONYM = re.compile(r"^(?:p_[a-f0-9]{12,32}|P-[A-F0-9]{8})$")
+PSEUDONYM = re.compile(r"^p_[a-z2-7]{10}$")
+# Admin exports are hashed, never parsed: a bounded read keeps memory fixed.
+MAX_ADMIN_EXPORT_BYTES = 64 * 1024 * 1024
+# Keys whose values are money amounts; placeholder rates relabel them as units.
+PLACEHOLDER_AMOUNT_KEYS = frozenset(
+    {
+        "total_cost",
+        "cost_per_assigned_task",
+        "cost_per_successful_task",
+        "weighted_cost_per_assigned_task",
+        "weighted_cost_per_successful_task",
+        "weighted_expected_cost_per_assigned_task",
+        "signed_difference_vs_native_normal",
+        "signed_candidate_minus_reference_cost_mean",
+        "modeled_total_cost",
+        "mean_cost",
+        "estimate",
+        "lower",
+        "upper",
+    }
+)
+# M6 contract error codes are reported with the economics vocabulary.
+PILOT_ASSIGNMENT_CODES = {
+    "assignment_order_seed_mismatch": "assignment_williams_order_invalid",
+    "assignment_blind_code_seed_mismatch": "assignment_derived_id_mismatch",
+    "assignment_id_invalid": "assignment_derived_id_mismatch",
+    "pair_id_invalid": "assignment_derived_id_mismatch",
+    "assignment_pair_missing": "assignment_participant_task_coverage_invalid",
+    "assignment_arm_or_order_missing": "assignment_arm_set_invalid",
+    "assignment_study_mismatch": "assignment_contract_mismatch",
+    "assignment_bundle_or_arm_mismatch": "assignment_contract_mismatch",
+}
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 MAX_ASSIGNMENTS = 100_000
 MAX_RUNS = 500_000
@@ -244,6 +298,59 @@ def _validate_quality(value: Any) -> dict[str, str]:
     return value
 
 
+def _check_factorial_profile(profile: dict[str, Any]) -> None:
+    """Per-cell check. Factorial IDs are F<input><output>: first digit input reduction,
+    second output contract. Input reduction is on when preparation and retrieval are both
+    enabled and off when both are disabled. The flags must be booleans matching the digits.
+    Output contract is decided across cells by ``_check_factorial_cells``.
+    """
+    for flag in FACTORIAL_FLAGS:
+        if type(profile[flag]) is not bool:
+            raise EconomicsError("factorial_condition_invalid")
+    condition = profile["condition_id"]
+    input_on, output_on = condition[1] == "1", condition[2] == "1"
+    if profile["input_reduction"] is not input_on or profile["output_contract"] is not output_on:
+        raise EconomicsError("factorial_condition_invalid")
+    input_state = "enabled" if input_on else "disabled"
+    if profile["preparation"] != input_state or profile["retrieval"] != input_state:
+        raise EconomicsError("factorial_condition_invalid")
+
+
+def _check_factorial_cells(profiles: dict[str, dict[str, Any]]) -> None:
+    """Cross-cell check for the 2x2. Output contract is the concise output contract.
+
+    F00 and F10 (output contract off) share one concise_instructions value, F01 and F11
+    (output contract on) share a different one, and every other setting is identical.
+    Artifact rendering is a separate mechanism, held fixed across all four cells.
+    """
+    present = [condition for condition in FACTORIAL_CONDITIONS if condition in profiles]
+    if not present:
+        return
+    if len(present) != len(FACTORIAL_CONDITIONS):
+        raise EconomicsError("factorial_profile_missing")
+    cells = [profiles[condition] for condition in FACTORIAL_CONDITIONS]
+    for field in (
+        "model",
+        "settings",
+        "effort",
+        "artifact",
+        "compute",
+        "source_access",
+        "tool_settings",
+    ):
+        if len({cell[field] for cell in cells}) != 1:
+            raise EconomicsError("factorial_condition_invalid")
+    concise = {
+        condition: profiles[condition]["concise_instructions"] for condition in FACTORIAL_CONDITIONS
+    }
+    if (
+        concise["F00"] != concise["F10"]
+        or concise["F01"] != concise["F11"]
+        or concise["F00"] == concise["F01"]
+    ):
+        raise EconomicsError("factorial_condition_invalid")
+
+
 def _validate_input(value: Any) -> dict[str, Any]:
     root = _keys(
         deepcopy(value),
@@ -322,10 +429,14 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 "operator_instruction",
                 "synthetic_sources",
                 "synthetic_check",
+                "synthetic_observed",
             },
             "task_invalid",
         )
-        task_id, stratum = _identifier(item["task_id"]), _identifier(item["stratum"])
+        task_id = _identifier(item["task_id"], "task_id_invalid")
+        if TASK_ID.fullmatch(task_id) is None:
+            raise EconomicsError("task_id_invalid")
+        stratum = _identifier(item["stratum"])
         _identifier(item["locale"])
         if task_id in task_strata or stratum not in weights:
             raise EconomicsError("task_duplicate_or_stratum_invalid")
@@ -369,21 +480,32 @@ def _validate_input(value: Any) -> dict[str, Any]:
             raise EconomicsError("synthetic_check_invalid")
         task_strata[task_id] = stratum
 
+    try:
+        pilot_study.validate_bundle(bundle)
+    except pilot_study.PilotStudyError:
+        raise EconomicsError("study_bundle_invalid") from None
     assignment_set = _keys(
         root["assignment_set"],
-        {"schema_version", "study_id", "bundle_sha256", "seed", "arms", "assignments"},
+        {
+            "schema_version",
+            "study_id",
+            "bundle_sha256",
+            "seed_mode",
+            "seed",
+            "seed_commitment",
+            "arms",
+            "assignments",
+        },
         "assignment_set_invalid",
     )
     if (
         assignment_set["schema_version"] != STUDY_SCHEMA_VERSION
         or assignment_set["study_id"] != bundle["study_id"]
         or assignment_set["arms"] != list(ARMS)
-        or not isinstance(assignment_set["bundle_sha256"], str)
-        or not re.fullmatch(r"[0-9a-f]{64}", assignment_set["bundle_sha256"])
-        or assignment_set["bundle_sha256"] != _canonical_digest(bundle)
     ):
         raise EconomicsError("assignment_contract_mismatch")
-    _integer(assignment_set["seed"], high=2**32 - 1)
+    if assignment_set["seed_mode"] not in {"public_synthetic", "committed_secret"}:
+        raise EconomicsError("seed_mode_invalid")
     assignment_rows = assignment_set["assignments"]
     if (
         not isinstance(assignment_rows, list)
@@ -465,60 +587,57 @@ def _validate_input(value: Any) -> dict[str, Any]:
         raise EconomicsError("assignment_arm_set_invalid")
     if root["evidence_class"] == "synthetic" and participant_kinds != {"synthetic"}:
         raise EconomicsError("synthetic_evidence_contains_real_participants")
-    participant_positions = {
-        participant_id: index
-        for index, participant_id in enumerate(
-            sorted({key[0] for key in pair_groups})
-        )
-    }
+    # Synthetic seeds are public; real cohorts must use a committed secret seed.
+    expected_seed_mode = (
+        "public_synthetic" if root["evidence_class"] == "synthetic" else "committed_secret"
+    )
+    if assignment_set["seed_mode"] != expected_seed_mode:
+        raise EconomicsError("seed_mode_evidence_mismatch")
+    participant_ids = sorted({key[0] for key in pair_groups})
     expected_pairs = {
         (participant_id, task_id)
-        for participant_id in participant_positions
+        for participant_id in participant_ids
         for task_id in task_positions
     }
     if set(pair_groups) != expected_pairs:
         raise EconomicsError("assignment_participant_task_coverage_invalid")
-    for (participant_id, task_id), arm_to_id in pair_groups.items():
-        ordered_arms = WILLIAMS[
-            (participant_positions[participant_id] + task_positions[task_id] + assignment_set["seed"])
-            % len(WILLIAMS)
-        ]
+    for arm_to_id in pair_groups.values():
         group_rows = [assignments[assignment_id] for assignment_id in arm_to_id.values()]
         if {row["order"] for row in group_rows} != {1, 2, 3, 4}:
             raise EconomicsError("assignment_order_invalid")
-        if any(
-            arm_to_id.get(arm) is None or assignments[arm_to_id[arm]]["order"] != order
-            for order, arm in enumerate(ordered_arms, 1)
-        ):
-            raise EconomicsError("assignment_williams_order_invalid")
-        expected_pair = "pair_" + hashlib.sha256(
-            f"{bundle['study_id']}|{participant_id}|{task_id}".encode()
-        ).hexdigest()[:20]
-        for arm, assignment_id in arm_to_id.items():
-            row = assignments[assignment_id]
-            expected_assignment = "asg_" + hashlib.sha256(
-                f"{STUDY_SCHEMA_VERSION}|{bundle['study_id']}|{participant_id}|{task_id}|{arm}".encode()
-            ).hexdigest()[:24]
-            expected_score = "score_" + hashlib.sha256(assignment_id.encode("utf-8")).hexdigest()[:24]
-            expected_blind = "blind_" + hashlib.sha256(
-                f"{bundle['study_id']}|{participant_id}|{task_id}|{assignment_set['seed']}|blind|{arm}".encode()
-            ).hexdigest()[:8]
-            if (
-                row["assignment_id"] != expected_assignment
-                or row["score_id"] != expected_score
-                or row["pair_id"] != expected_pair
-                or row["blind_arm_code"] != expected_blind
-            ):
-                raise EconomicsError("assignment_derived_id_mismatch")
+    # Williams order, blind aliases, pair/assignment/score IDs and the bundle digest
+    # are the M6 contract's job. Synthetic sets are recomputed from their public seed;
+    # committed real sets are structural only until the seed is revealed.
+    try:
+        pilot_study.validate_assignment_set(bundle, assignment_set)
+    except pilot_study.PilotStudyError as error:
+        raise EconomicsError(
+            PILOT_ASSIGNMENT_CODES.get(error.code, "assignment_contract_invalid")
+        ) from None
+    allocation_verification = (
+        "public_seed_recomputed"
+        if assignment_set["seed_mode"] == "public_synthetic"
+        else "committed_seed_structural_only"
+    )
 
     raw_profiles = root["condition_profiles"]
-    if not isinstance(raw_profiles, list) or len(raw_profiles) != len(CONDITIONS):
+    if not isinstance(raw_profiles, list) or not (
+        len(CONDITIONS) <= len(raw_profiles) <= len(CONDITIONS) + len(FACTORIAL_CONDITIONS)
+    ):
         raise EconomicsError("condition_profiles_invalid")
     profiles: dict[str, dict[str, Any]] = {}
     for raw_profile in raw_profiles:
-        profile = _keys(raw_profile, set(PROFILE_FIELDS), "condition_profile_invalid")
+        is_factorial = isinstance(raw_profile, dict) and raw_profile.get("condition_id") in (
+            FACTORIAL_CONDITIONS
+        )
+        expected_fields = set(PROFILE_FIELDS) | (set(FACTORIAL_FLAGS) if is_factorial else set())
+        profile = _keys(raw_profile, expected_fields, "condition_profile_invalid")
         condition = profile["condition_id"]
-        if not isinstance(condition, str) or condition not in CONDITIONS or condition in profiles:
+        if (
+            not isinstance(condition, str)
+            or condition not in CONDITIONS | set(FACTORIAL_CONDITIONS)
+            or condition in profiles
+        ):
             raise EconomicsError("condition_profile_invalid")
         for field in ("model", "settings", "effort", "concise_instructions", "tool_settings"):
             value = profile[field]
@@ -541,9 +660,12 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 "not_applicable",
             }:
                 raise EconomicsError("condition_profile_mechanism_invalid")
+        if is_factorial:
+            _check_factorial_profile(profile)
         profiles[condition] = profile
-    if set(profiles) != CONDITIONS:
+    if not CONDITIONS <= set(profiles):
         raise EconomicsError("condition_profiles_incomplete")
+    _check_factorial_cells(profiles)
     if any(profiles["B_full"][name] != "enabled" for name in MECHANISMS):
         raise EconomicsError("full_package_profile_incomplete")
     for condition, mechanism in ABLATION_MECHANISM.items():
@@ -724,6 +846,7 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 "cost_amount",
                 "cost_missing_reason",
                 "currency",
+                "export_sha256",
             },
             "usage_window_invalid",
         )
@@ -731,6 +854,11 @@ def _validate_input(value: Any) -> dict[str, Any]:
         if window_id in window_ids:
             raise EconomicsError("usage_window_duplicate")
         window_ids.add(window_id)
+        if root["evidence_class"] != "synthetic" and (
+            not isinstance(window["export_sha256"], str)
+            or SHA256.fullmatch(window["export_sha256"]) is None
+        ):
+            raise EconomicsError("usage_window_export_digest_required")
         _identifier(window["participant_id"])
         if (
             not isinstance(window["arm"], str)
@@ -816,14 +944,29 @@ def _validate_input(value: Any) -> dict[str, Any]:
     if not isinstance(root["rate_cards"], list) or len(root["rate_cards"]) > 256:
         raise EconomicsError("rate_cards_invalid")
     currencies: set[str] = set()
+    rate_sources: set[str] = set()
+    rate_card_meta: list[dict[str, Any]] = []
     for raw in root["rate_cards"]:
-        card = _keys(raw, {"model", "currency", "denominator", "rates"}, "rate_card_invalid")
+        card = _keys(
+            raw,
+            {"model", "currency", "denominator", "rates", "rate_source", "as_of"},
+            "rate_card_invalid",
+        )
         model = _identifier(card["model"])
-        if (
-            model in rate_cards
-            or not isinstance(card["currency"], str)
-            or CURRENCY.fullmatch(card["currency"]) is None
-        ):
+        if model in rate_cards:
+            raise EconomicsError("rate_card_invalid")
+        if card["rate_source"] not in RATE_SOURCES:
+            raise EconomicsError("rate_source_invalid")
+        if not isinstance(card["as_of"], str) or ISO_DATE.fullmatch(card["as_of"]) is None:
+            raise EconomicsError("rate_as_of_invalid")
+        try:
+            _dt.date.fromisoformat(card["as_of"])
+        except ValueError:
+            raise EconomicsError("rate_as_of_invalid") from None
+        if card["rate_source"] == "placeholder":
+            if card["currency"] is not None:
+                raise EconomicsError("placeholder_rate_currency_forbidden")
+        elif not isinstance(card["currency"], str) or CURRENCY.fullmatch(card["currency"]) is None:
             raise EconomicsError("rate_card_invalid")
         if card["denominator"] != "per_1m_tokens":
             raise EconomicsError("rate_denominator_invalid")
@@ -832,12 +975,28 @@ def _validate_input(value: Any) -> dict[str, Any]:
             key: _decimal(rate, code="rate_invalid", high=Decimal("1000000"))
             for key, rate in rates.items()
         }
-        rate_cards[model] = {"currency": card["currency"], "rates": parsed}
-        currencies.add(card["currency"])
+        rate_cards[model] = {
+            "currency": card["currency"],
+            "rates": parsed,
+            "rate_source": card["rate_source"],
+        }
+        rate_sources.add(card["rate_source"])
+        if card["currency"] is not None:
+            currencies.add(card["currency"])
+        rate_card_meta.append(
+            {
+                "model": model,
+                "rate_source": card["rate_source"],
+                "as_of": card["as_of"],
+                "currency": card["currency"],
+            }
+        )
+    rates_are_placeholder = "placeholder" in rate_sources
+    if rates_are_placeholder and rate_sources != {"placeholder"}:
+        # Placeholder units and priced money must never be summed in one report.
+        raise EconomicsError("rate_source_mixed")
     if len(currencies) > 1:
         raise EconomicsError("rate_currency_mismatch")
-    if currencies and not isinstance(next(iter(currencies)), str):
-        raise EconomicsError("rate_currency_invalid")
 
     runs = root["runs"]
     if not isinstance(runs, list) or len(runs) > MAX_RUNS:
@@ -873,8 +1032,13 @@ def _validate_input(value: Any) -> dict[str, Any]:
         assignment_id = _identifier(run["assignment_id"])
         condition_id = run["condition_id"]
         assigned = assignments.get(assignment_id)
-        if assigned is None or not isinstance(condition_id, str) or condition_id not in CONDITIONS:
+        if (
+            assigned is None
+            or not isinstance(condition_id, str)
+            or condition_id not in CONDITIONS | set(FACTORIAL_CONDITIONS)
+        ):
             raise EconomicsError("run_assignment_or_condition_invalid")
+        # Ablations and factorial cells attach to the block's B assignment.
         expected_arm = BASE_CONDITIONS.get(condition_id, "B")
         if assigned["arm"] != expected_arm:
             raise EconomicsError("run_arm_mismatch")
@@ -923,6 +1087,8 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 raise EconomicsError("service_cost_missing_reason_required")
         elif run["service_cost_missing_reason"] is not None:
             raise EconomicsError("service_cost_missing_reason_unexpected")
+        if condition_id in FACTORIAL_CONDITIONS and condition_id not in profiles:
+            raise EconomicsError("factorial_profile_missing")
         if condition_id in BASE_CONDITIONS:
             observation = observation_by_id[assignment_id]
             profile = profiles[condition_id]
@@ -1044,6 +1210,8 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 raise EconomicsError("service_cost_category_invalid")
             if item["included_in_provider_cost"] is not False:
                 raise EconomicsError("service_cost_double_count_guard")
+            if rates_are_placeholder and item["amount"] is not None:
+                raise EconomicsError("service_cost_requires_non_placeholder_rates")
             if item["amount"] is None:
                 if (
                     not isinstance(item["missing_reason"], str)
@@ -1135,15 +1303,6 @@ def _validate_input(value: Any) -> dict[str, Any]:
                 raise EconomicsError("baseline_run_missing")
 
     rate_cards_by_model = rate_cards
-    for run in run_index.values():
-        for request in run["requests"]:
-            if request["model"] not in rate_cards_by_model:
-                continue
-            if currencies and rate_cards_by_model[request["model"]]["currency"] not in currencies:
-                raise EconomicsError("rate_currency_mismatch")
-
-    if len(currencies) > 1:
-        raise EconomicsError("modeled_currency_mismatch")
 
     scenarios = root["sensitivity_scenarios"]
     if not isinstance(scenarios, list) or len(scenarios) > 32:
@@ -1176,8 +1335,15 @@ def _validate_input(value: Any) -> dict[str, Any]:
         "profile_deviations": profile_deviations,
         "condition_profiles": profiles,
         "rates": rate_cards_by_model,
+        "rate_card_meta": rate_card_meta,
+        "rates_are_placeholder": rates_are_placeholder,
         "weights": {key: _decimal(amount) for key, amount in weights.items()},
         "refresh_max_age_hours": plan["refresh_max_age_hours"],
+        "plan": {
+            "minimum_completed_per_arm": plan["minimum_completed_per_arm"],
+            "target_participants": plan["target_participants"],
+        },
+        "allocation_verification": allocation_verification,
     }
     return root
 
@@ -1369,8 +1535,15 @@ def _aggregate_costs(
         "cost_per_successful_unavailable_reason": "no_successful_tasks"
         if successful == 0
         else None,
+        "cost_per_assigned_task_basis": _point_basis(assigned),
+        "cost_per_successful_task_basis": _point_basis(successful),
         "unknown_cost_inputs": dict(sorted(reasons.items())),
     }
+
+
+def _point_basis(n: int) -> dict[str, Any]:
+    """Cost ratios are point estimates; their denominator count is always reported."""
+    return {"kind": "point_estimate", "n": n}
 
 
 def _run_rows_for_condition(
@@ -1401,11 +1574,61 @@ def _comparability(left: dict[str, Any], right: dict[str, Any]) -> tuple[bool, l
     return not mismatch, mismatch
 
 
+def _gate_units(minimum: int) -> int:
+    """Predeclared pair minimum. evidence_stats needs at least two units for any interval."""
+    return max(2, minimum)
+
+
+def _gate_clusters(minimum: int) -> int:
+    """Predeclared participant target. evidence_stats needs at least two clusters."""
+    return max(2, minimum)
+
+
+def _interval_json(interval: Interval) -> dict[str, Any]:
+    return {
+        "estimate": _decimal_text(interval.estimate),
+        "lower": _decimal_text(interval.lower),
+        "upper": _decimal_text(interval.upper),
+        "confidence": _decimal_text(interval.confidence),
+        "method": interval.method,
+        "resamples": interval.resamples,
+        "seed": interval.seed,
+        "n_units": interval.n_units,
+        "n_clusters": interval.n_clusters,
+    }
+
+
+def _savings_block(
+    units: list[PairedUnit],
+    normalized: dict[str, Any],
+    *,
+    evidence_class: str,
+    provenance_verified: bool,
+) -> dict[str, Any]:
+    """Cluster-bootstrap interval and the savings decision for (candidate - reference) cost."""
+    interval = paired_difference_interval(units, seed=BOOTSTRAP_SEED)
+    decision = savings_decision(
+        interval,
+        min_units=_gate_units(normalized["plan"]["minimum_completed_per_arm"]),
+        min_clusters=_gate_clusters(normalized["plan"]["target_participants"]),
+        evidence_class=evidence_class,
+        provenance_verified=provenance_verified,
+    )
+    return {"interval": _interval_json(interval), "decision": decision}
+
+
 def _paired_summary(
-    normalized: dict[str, Any], reference: str, candidate: str, rates: dict[str, Any]
+    normalized: dict[str, Any],
+    reference: str,
+    candidate: str,
+    rates: dict[str, Any],
+    *,
+    evidence_class: str,
+    provenance_verified: bool,
 ) -> dict[str, Any]:
     compared = matched = 0
     differences: list[Decimal] = []
+    units: list[PairedUnit] = []
     reasons: Counter[str] = Counter()
     profile_unknown_fields = [
         f"{condition}.{field}"
@@ -1432,9 +1655,7 @@ def _paired_summary(
             reasons["condition_profile_unknown"] += 1
             continue
         profile_mismatch = list(normalized["profile_deviations"].get((ref_id, reference), []))
-        profile_mismatch.extend(
-            normalized["profile_deviations"].get((cand_id, candidate), [])
-        )
+        profile_mismatch.extend(normalized["profile_deviations"].get((cand_id, candidate), []))
         comparable, mismatch = _comparability(ref, cand)
         if profile_mismatch or not comparable:
             reasons.update(profile_mismatch)
@@ -1446,7 +1667,14 @@ def _paired_summary(
             reasons.update(ref_unknown + cand_unknown)
             reasons["pair_cost_unavailable"] += 1
             continue
-        differences.append(cand_cost - ref_cost)
+        difference = cand_cost - ref_cost
+        differences.append(difference)
+        units.append(
+            PairedUnit(
+                cluster_id=normalized["assignments"][ref_id]["participant_id"],
+                difference=difference,
+            )
+        )
         matched += 1
     mean = sum(differences, Decimal(0)) / Decimal(matched) if matched else None
     return {
@@ -1458,6 +1686,12 @@ def _paired_summary(
         "condition_profile_unknown_fields": profile_unknown_fields,
         "signed_candidate_minus_reference_cost_mean": _decimal_text(mean),
         "currency": next(iter({card["currency"] for card in rates.values()}), None),
+        **_savings_block(
+            units,
+            normalized,
+            evidence_class=evidence_class,
+            provenance_verified=provenance_verified,
+        ),
     }
 
 
@@ -1502,6 +1736,9 @@ def _weighted_summary(
         "weighted_cost_per_successful_task": _decimal_text(weighted_success),
         "weighted_assigned_unavailable_strata": missing_cost,
         "weighted_success_unavailable_reason": success_unavailable_reason,
+        "weighted_cost_per_successful_task_basis": _point_basis(
+            sum(entry["successful_count"] for entry in strata.values())
+        ),
         "currency": next(iter({card["currency"] for card in rates.values()}), None),
     }
 
@@ -1630,7 +1867,34 @@ def _sensitivity(
     return out
 
 
-def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
+def _enterprise_units(windows: list[dict[str, Any]]) -> list[PairedUnit]:
+    """Per-participant (candidate - reference) window cost, when both arms have a priced window."""
+    by_pair = {(window["participant_id"], window["arm"]): window for window in windows}
+    units: list[PairedUnit] = []
+    for participant in sorted({key[0] for key in by_pair}):
+        reference = by_pair.get((participant, BASE_CONDITIONS[PRIMARY_REFERENCE]))
+        candidate = by_pair.get((participant, BASE_CONDITIONS[PRIMARY_CANDIDATE]))
+        if reference is None or candidate is None:
+            continue
+        if reference["cost_amount"] is None or candidate["cost_amount"] is None:
+            continue
+        if reference["currency"] is None or reference["currency"] != candidate["currency"]:
+            continue
+        units.append(
+            PairedUnit(
+                cluster_id=participant,
+                difference=Decimal(candidate["cost_amount"]) - Decimal(reference["cost_amount"]),
+            )
+        )
+    return units
+
+
+def _enterprise_observed(
+    data: dict[str, Any],
+    normalized: dict[str, Any],
+    export_digests: set[str],
+    provenance_verified: bool,
+) -> dict[str, Any]:
     assignments = normalized["assignments"]
     observations = normalized["observations"]
     windows = data["usage_windows"]
@@ -1695,10 +1959,10 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
         window_assignment_ids
     )
     fresh = bool(windows) and len(freshness) == len(windows) and all(freshness)
+
     def window_attribution_documented(window: dict[str, Any]) -> bool:
         activity_classified = window["unrelated_activity"] == "none" or (
-            window["unrelated_activity"] == "present_excluded"
-            and bool(window["exclusion_codes"])
+            window["unrelated_activity"] == "present_excluded" and bool(window["exclusion_codes"])
         )
         return (
             window["mapping_confidence"] in {"high", "medium"}
@@ -1741,8 +2005,7 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
         arm_fresh = bool(rows) and all(
             0
             <= (
-                _datetime_utc(data["as_of_utc"])
-                - _datetime_utc(window["refreshed_at_utc"])
+                _datetime_utc(data["as_of_utc"]) - _datetime_utc(window["refreshed_at_utc"])
             ).total_seconds()
             <= normalized["refresh_max_age_hours"] * 3600
             for window in rows
@@ -1756,8 +2019,7 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
         cost_total = None
         if (
             arm_evidence_usable
-            and
-            rows
+            and rows
             and all(window["cost_amount"] is not None for window in rows)
             and len(currency_set) == 1
         ):
@@ -1769,7 +2031,7 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
             usage_coverage[bucket] = coverage
             usage_totals[bucket] = (
                 str(sum(window["usage_buckets"][bucket] for window in rows))
-            if arm_evidence_usable and rows and coverage == len(rows)
+                if arm_evidence_usable and rows and coverage == len(rows)
                 else None
             )
         successes = successful_by_arm[arm]
@@ -1790,6 +2052,7 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
             "cost_per_successful_task": _decimal_text(cost_total / Decimal(successes))
             if cost_total is not None and scores_complete and successes
             else None,
+            "cost_per_successful_task_basis": _point_basis(successes),
             "cost_per_successful_unavailable_reason": (
                 "blind_scoring_incomplete"
                 if not scores_complete
@@ -1809,6 +2072,8 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
         status, reason = "pending", "usage_window_mapping_incomplete"
     elif not attribution_documented:
         status, reason = "pending", "mapping_or_exclusion_evidence_incomplete"
+    elif not provenance_verified:
+        status, reason = "admin_export_unverified", "admin_export_unverified"
     elif not values_available:
         status, reason = "pending", "usage_measurements_unavailable"
     elif not values_complete:
@@ -1820,10 +2085,26 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
     else:
         status, reason = "available_with_attribution_limits", None
     currencies = {window["currency"] for window in windows if window["currency"] is not None}
+    usable = status == "available_with_attribution_limits"
+    decision = savings_decision(
+        paired_difference_interval(_enterprise_units(windows), seed=BOOTSTRAP_SEED),
+        min_units=_gate_units(normalized["plan"]["minimum_completed_per_arm"]),
+        min_clusters=_gate_clusters(normalized["plan"]["target_participants"]),
+        evidence_class=data["evidence_class"],
+        provenance_verified=provenance_verified,
+    )
+    if not usable:
+        decision = {
+            "claim": "none",
+            "reasons": [*decision["reasons"], "enterprise_observed_incomplete"],
+            "rule": decision["rule"],
+        }
     return {
         "status": status,
         "enterprise_usage_observed": bool(real_ids)
+        and provenance_verified
         and status in {"partial", "available_with_attribution_limits"},
+        "provenance_verified": provenance_verified,
         "reason": reason,
         "window_count": len(windows),
         "fresh_window_count": sum(freshness),
@@ -1856,20 +2137,114 @@ def _enterprise_observed(data: dict[str, Any], normalized: dict[str, Any]) -> di
                 "cost_amount": window["cost_amount"],
                 "cost_missing_reason": window["cost_missing_reason"],
                 "currency": window["currency"],
+                "export_verified": window["export_sha256"] in export_digests,
             }
             for window in windows
         ],
         "causal_claim": False,
-        "savings_claim": "none",
+        "savings_claim": decision["claim"],
+        "savings_decision": decision,
         "allocation_note": "Admin window totals remain per window and are not split across requests or tasks.",
     }
 
 
-def _build_report(value: Any) -> dict[str, Any]:
+def _export_records(value: Any) -> list[dict[str, Any]]:
+    """Admin export digests supplied by the caller; only sha256 and byte size are kept."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 256:
+        raise EconomicsError("admin_exports_invalid")
+    records: list[dict[str, Any]] = []
+    for raw in value:
+        item = _keys(raw, {"sha256", "bytes"}, "admin_exports_invalid")
+        if not isinstance(item["sha256"], str) or SHA256.fullmatch(item["sha256"]) is None:
+            raise EconomicsError("admin_exports_invalid")
+        _integer(item["bytes"], high=MAX_ADMIN_EXPORT_BYTES, code="admin_exports_invalid")
+        records.append({"sha256": item["sha256"], "bytes": item["bytes"]})
+    return sorted(records, key=lambda record: (record["sha256"], record["bytes"]))
+
+
+def _read_admin_export(path: Path) -> dict[str, Any]:
+    """Hash an admin export in bounded chunks. The path is never returned or stored."""
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_ADMIN_EXPORT_BYTES:
+                    raise EconomicsError("admin_export_too_large")
+                digest.update(chunk)
+    except OSError:
+        raise EconomicsError("admin_export_unavailable") from None
+    return {"sha256": digest.hexdigest(), "bytes": size}
+
+
+def _label_placeholder_units(value: Any) -> Any:
+    """Relabel every money amount as placeholder units and drop currency fields."""
+    if isinstance(value, dict):
+        labelled: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "currency":
+                labelled[key] = None
+            elif key in PLACEHOLDER_AMOUNT_KEYS and (item is None or isinstance(item, str)):
+                labelled[key] = None if item is None else {"placeholder_units": item}
+            else:
+                labelled[key] = _label_placeholder_units(item)
+        return labelled
+    if isinstance(value, list):
+        return [_label_placeholder_units(item) for item in value]
+    return value
+
+
+def _factorial_section(
+    normalized: dict[str, Any], *, evidence_class: str, provenance_verified: bool
+) -> dict[str, Any]:
+    cells: list[FactorialCell] = []
+    for (assignment_id, condition_id), run in normalized["runs"].items():
+        if condition_id not in FACTORIAL_CONDITIONS:
+            continue
+        assignment = normalized["assignments"][assignment_id]
+        cost, _currency, _unknown = _run_cost(run, normalized["rates"])
+        cells.append(
+            FactorialCell(
+                unit_id=assignment["pair_id"],
+                cluster_id=assignment["participant_id"],
+                arm=condition_id,
+                cost=cost,
+                success=_successful(run["status"], run["quality"]),
+            )
+        )
+    if not cells:
+        return {"status": "not_run"}
+    try:
+        return analyze_factorial(
+            cells,
+            seed=BOOTSTRAP_SEED,
+            min_units=_gate_units(normalized["plan"]["minimum_completed_per_arm"]),
+            min_clusters=_gate_clusters(normalized["plan"]["target_participants"]),
+            evidence_class=evidence_class,
+            provenance_verified=provenance_verified,
+        )
+    except FactorialError:
+        raise EconomicsError("factorial_invalid") from None
+
+
+def _build_report(value: Any, admin_exports: list[dict[str, Any]]) -> dict[str, Any]:
     input_digest = _canonical_digest(value)
+    records = _export_records(admin_exports)
+    export_digests = {record["sha256"] for record in records}
     data = _validate_input(value)
     normalized = data.pop("_normalized")
     rates = normalized["rates"]
+    placeholder = normalized["rates_are_placeholder"]
+    evidence_class = data["evidence_class"]
+    windows = data["usage_windows"]
+    window_verified = [window["export_sha256"] in export_digests for window in windows]
+    provenance_verified = evidence_class != "synthetic" and bool(windows) and all(window_verified)
     conditions: dict[str, Any] = {}
     for condition in sorted(CONDITIONS):
         rows = _run_rows_for_condition(normalized, condition)
@@ -1880,12 +2255,33 @@ def _build_report(value: Any) -> dict[str, Any]:
             "weighted": _weighted_summary(normalized, condition, rates),
         }
     paired = [
-        _paired_summary(normalized, "C_normal", "B_full", rates),
-        _paired_summary(normalized, "C_tuned", "B_full", rates),
-        _paired_summary(normalized, "A", "B_full", rates),
+        _paired_summary(
+            normalized,
+            reference,
+            candidate,
+            rates,
+            evidence_class=evidence_class,
+            provenance_verified=provenance_verified,
+        )
+        for reference, candidate in (
+            (PRIMARY_REFERENCE, PRIMARY_CANDIDATE),
+            ("C_tuned", PRIMARY_CANDIDATE),
+            ("A", PRIMARY_CANDIDATE),
+        )
     ]
     for ablation in sorted(ABLATIONS):
-        paired.append(_paired_summary(normalized, ablation, "B_full", rates))
+        paired.append(
+            _paired_summary(
+                normalized,
+                ablation,
+                PRIMARY_CANDIDATE,
+                rates,
+                evidence_class=evidence_class,
+                provenance_verified=provenance_verified,
+            )
+        )
+    primary = paired[0]
+    savings_claim = primary["decision"]["claim"]
     workload_outcomes: dict[str, dict[str, int | str]] = {}
     for arm in ARMS:
         rows = [
@@ -1907,12 +2303,39 @@ def _build_report(value: Any) -> dict[str, Any]:
                 Decimal(unsupported) / Decimal(assigned) if assigned else None
             ),
         }
-    report = {
+    currency = next(iter({card["currency"] for card in rates.values()}), None)
+    modeled = {
+        "rates_are_placeholder": placeholder,
+        "amount_unit": "placeholder_units" if placeholder else "currency",
+        "currency": currency,
+        "rate_cards": normalized["rate_card_meta"],
+        "rate_denominator": "per_1m_tokens",
+        "success_rule": "completed_and_correct_complete_cited_without_unsupported_claim",
+        "conditions": conditions,
+        "paired_comparisons": paired,
+        "output_contract_comparison": _output_contracts(normalized),
+        "sensitivity_scenarios": _sensitivity(normalized, data["sensitivity_scenarios"]),
+        "mechanism_effects_are_not_additive": True,
+    }
+    factorial = _factorial_section(
+        normalized, evidence_class=evidence_class, provenance_verified=provenance_verified
+    )
+    if placeholder:
+        modeled = _label_placeholder_units(modeled)
+        factorial = _label_placeholder_units(factorial)
+    return {
         "schema_version": SCHEMA_VERSION,
-        "evidence_class": data["evidence_class"],
+        "evidence_class": evidence_class,
         "study_id": data["study_bundle"]["study_id"],
         "input_sha256": input_digest,
         "report_as_of_utc": data["as_of_utc"],
+        "provenance": {
+            "provenance_verified": provenance_verified,
+            "admin_exports": records,
+            "verified_window_count": sum(window_verified),
+            "unverified_window_count": len(window_verified) - sum(window_verified),
+            "note": "Digests show that the supplied admin exports match the windows. They do not prove the exports are genuine.",
+        },
         "sample": {
             "task_count": len(normalized["task_strata"]),
             "assignment_count": len(normalized["assignments"]),
@@ -1920,54 +2343,57 @@ def _build_report(value: Any) -> dict[str, Any]:
             "participant_kind": next(
                 iter({row["participant_kind"] for row in normalized["assignments"].values()})
             ),
+            "allocation_verification": normalized["allocation_verification"],
             "stratum_weights": {
                 key: _decimal_text(value) for key, value in sorted(normalized["weights"].items())
             },
             "workload_outcomes_by_arm": workload_outcomes,
         },
         "condition_profiles": {
-            key: dict(normalized["condition_profiles"][key]) for key in sorted(CONDITIONS)
+            key: dict(normalized["condition_profiles"][key])
+            for key in sorted(normalized["condition_profiles"])
         },
         "payload_estimate": _payload_estimate(normalized),
-        "modeled_economics": {
-            "currency": next(iter({card["currency"] for card in rates.values()}), None),
-            "rate_denominator": "per_1m_tokens",
-            "success_rule": "completed_and_correct_complete_cited_without_unsupported_claim",
-            "conditions": conditions,
-            "paired_comparisons": paired,
-            "output_contract_comparison": _output_contracts(normalized),
-            "sensitivity_scenarios": _sensitivity(normalized, data["sensitivity_scenarios"]),
-            "mechanism_effects_are_not_additive": True,
-        },
-        "enterprise_observed": _enterprise_observed(data, normalized),
+        "modeled_economics": modeled,
+        "factorial": factorial,
+        "enterprise_observed": _enterprise_observed(
+            data, normalized, export_digests, provenance_verified
+        ),
         "assumptions_and_limits": [
             "Modeled costs use only the explicitly supplied per-model rate cards and M13 request sidecar; no live pricing or universal fallback rate is used.",
+            "Placeholder rate cards are unit labels, not prices: every modeled amount is reported as placeholder_units and currency is null.",
             "Every request and model listed in the M13 sidecar contributes its uncached input, cache-write, cache-read, and billed-output buckets.",
             "Billed output is inclusive; visible output estimates are diagnostic and are never added to billed output a second time.",
             "Incremental service costs are added only when explicitly supplied and explicitly marked as not already included in provider cost.",
             "A missing rate, token bucket, or service charge keeps task cost and aggregate totals unavailable instead of becoming zero.",
             "Paired deltas require matching source snapshot, model, settings, and counter version; unmatched pairs remain in cost coverage and are excluded from paired attribution.",
-            "Cost per successful task includes all assigned-task costs, including failed attempts, divided by the declared completed-and-quality-passing task count.",
+            "Cost per successful task includes all assigned-task costs, including failed attempts, divided by the declared completed-and-quality-passing task count; it is a point estimate reported with its n.",
+            "Savings decisions use a cluster bootstrap over participants with a fixed reporting seed, and claim support only with verified provenance and the predeclared minimum pairs and participants.",
             "Artifact delivery is evaluated for correctness and completeness; deterministic rendering does not imply free model output or zero service cost.",
             "Sensitivity scenarios are parameterized what-if calculations, not observed Enterprise spend, forecasts, or a savings promise.",
             "Admin usage windows are aggregated by arm and are never split across individual requests or tasks.",
+            "Factorial effects are per participant-task block with a cluster bootstrap; the interaction term never makes a savings claim.",
         ],
-        "savings_claim": "none",
+        "savings_claim": savings_claim,
     }
-    return report
 
 
-def build_report(value: Any) -> dict[str, Any]:
+def build_report(value: Any, admin_exports: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     # Aggregate sums and weighted ratios must retain the full precision of the
     # bounded input amounts; the Decimal default context can erase tiny charges
     # beside a large amount before serialization.
     with localcontext() as context:
         context.prec = 80
-        return _build_report(value)
+        return _build_report(value, admin_exports or [])
 
 
-def run(input_path: Path, output_path: Path | None = None) -> dict[str, Any]:
-    report = build_report(_safe_load(input_path))
+def run(
+    input_path: Path,
+    output_path: Path | None = None,
+    admin_export_paths: list[Path] | tuple[Path, ...] = (),
+) -> dict[str, Any]:
+    exports = [_read_admin_export(Path(path)) for path in admin_export_paths]
+    report = build_report(_safe_load(input_path), exports)
     payload = (
         json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
     )
@@ -1989,9 +2415,17 @@ def main(argv: list[str] | None = None) -> int:
         help="M13 JSON with M6 study contract and economics sidecar",
     )
     parser.add_argument("--output", type=Path, required=True, help="explicit report JSON path")
+    parser.add_argument(
+        "--admin-export",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="administrator export file; repeat for each export. Only its SHA-256 and size are reported.",
+    )
     args = parser.parse_args(argv)
     try:
-        report = run(args.input, args.output)
+        report = run(args.input, args.output, args.admin_export)
     except EconomicsError as error:
         print(json.dumps({"error": error.code}, separators=(",", ":")), file=sys.stderr)
         return 2
