@@ -20,6 +20,8 @@
         "${user_config.tool_profile}",
         "--artifact-root",
         "${user_config.artifact_root}",
+        "--pilot-method",
+        "${user_config.pilot_method}",
         "--approved-roots",
         "${user_config.approved_roots}"
       ],
@@ -46,6 +48,13 @@
       "title": "Artifact folder",
       "description": "Optional folder where render writes table files. Leave empty to disable render.",
       "required": false
+    },
+    "pilot_method": {
+      "type": "string",
+      "title": "Pilot method",
+      "description": "normal uses ContextShrink as designed. exact_only turns compression and selection off for self-test method A.",
+      "required": false,
+      "default": "normal"
     }
   },
   "compatibility": {

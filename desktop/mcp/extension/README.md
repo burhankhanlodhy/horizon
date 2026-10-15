@@ -24,8 +24,8 @@ Run from the repository root with the project virtual environment:
 ```powershell
 .venv\Scripts\python.exe desktop\mcp\extension\build_extension.py build
 .venv\Scripts\python.exe desktop\mcp\extension\build_extension.py validate
-.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py pack --version 0.1.1
-.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py all --version 0.1.1
+.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py pack --version 0.1.2
+.venv\Scripts\python.exe desktop\mcp\extension\build_extension.py all --version 0.1.2
 ```
 
 - `build` runs PyInstaller in `--onedir --console` mode and writes
@@ -36,7 +36,7 @@ Run from the repository root with the project virtual environment:
 - `validate` checks the required manifest fields, the `server.mcp_config`
   shape, that every `${user_config.X}` in `mcp_config` is declared and every
   declared key is used, `compatibility.platforms == ["win32"]`, and that the
-  `tools` names equal `tool_specs("compute")`. When the build output exists, it
+  `tools` names equal `tool_specs("source")` and `tools_generated` is true. When the build output exists, it
   also checks that the entry point file is present.
 - `pack` refuses to run if validation fails. It writes
   `dist\contextshrink-desktop-<version>.mcpb` with `manifest.json` first and
@@ -56,6 +56,25 @@ manifest it packs and never edits the template.
   search and read. MCPB expands it into separate `--approved-roots` arguments.
 - `tool_profile` (string, default `source`): `source` or `compute`.
 - `artifact_root` (directory, optional): the folder that `render` writes to.
+- `pilot_method` (string, default `normal`): see Pilot method below.
+
+## Pilot method
+
+`pilot_method` selects the evaluation arm for self-test runs. It is passed as
+`--pilot-method normal|exact_only`.
+
+- `normal` (default): ContextShrink works as designed (compact and focused
+  presentations, selection on).
+- `exact_only`: self-test method A. It maps to the backend setting
+  `eval_arm="raw"`, which turns compression and selection off. Every open
+  returns exact text, whatever `mode` is requested (`compact`, `focused` and
+  `overview` are served as `exact`).
+
+Any other value makes the server exit with status 2 and print
+`{"error":"extension_pilot_method_invalid"}` on stderr. The setting is written to
+the extension settings file as `eval_arm`, so changing it rebuilds the backend
+on the next call. `contextshrink_stats` reports the arm as `evaluation_arm`
+(`raw` for `exact_only`, `optimized` for `normal`).
 
 ## Local smoke results
 
