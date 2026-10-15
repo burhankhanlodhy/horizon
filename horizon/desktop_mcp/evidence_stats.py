@@ -20,6 +20,9 @@ SAVINGS_RULE = (
 
 CONSENTED_DEIDENTIFIED = "consented_deidentified"
 SYNTHETIC = "synthetic"
+# One person measuring their own account from its billing meter. Claims from
+# it apply to that account and task set only.
+SELF_METERED = "self_metered"
 
 _MIN_RESAMPLES = 1000
 _MAX_RESAMPLES = 100000
@@ -198,8 +201,13 @@ def savings_decision(
     min_clusters: int,
     evidence_class: str,
     provenance_verified: bool,
+    eligible_classes: frozenset[str] = frozenset({"consented_deidentified"}),
 ) -> dict:
     """Turn an interval on (candidate - reference) cost into a claim.
+
+    ``eligible_classes`` names the evidence classes that may support a claim.
+    The multi-participant pilot keeps the default; the single-account self
+    test passes ``{SELF_METERED}``, whose claims are scoped to that account.
 
     Returns ``{"claim", "reasons", "rule"}``. The claim is ``"none"`` with
     reasons when any gate fails. Otherwise it is ``"savings_supported"`` when
@@ -215,11 +223,22 @@ def savings_decision(
     if not isinstance(provenance_verified, bool):
         raise StatsError("provenance_verified_invalid")
 
+    if (
+        not isinstance(eligible_classes, frozenset)
+        or not eligible_classes
+        or SYNTHETIC in eligible_classes
+    ):
+        raise StatsError("eligible_classes_invalid")
+
     reasons: list[str] = []
     if evidence_class == SYNTHETIC:
         reasons.append("synthetic_evidence")
-    elif evidence_class != CONSENTED_DEIDENTIFIED:
-        reasons.append("evidence_not_consented_deidentified")
+    elif evidence_class not in eligible_classes:
+        reasons.append(
+            "evidence_not_consented_deidentified"
+            if eligible_classes == frozenset({CONSENTED_DEIDENTIFIED})
+            else "evidence_class_not_eligible"
+        )
     if not provenance_verified:
         reasons.append("provenance_unverified")
     if interval.n_units < min_units:
@@ -247,6 +266,7 @@ __all__ = [
     "Interval",
     "PairedUnit",
     "SAVINGS_RULE",
+    "SELF_METERED",
     "StatsError",
     "SYNTHETIC",
     "paired_difference_interval",
