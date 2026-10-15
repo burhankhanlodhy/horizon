@@ -27,7 +27,26 @@ from fractions import Fraction
 from itertools import combinations
 from typing import Any
 
+from horizon.desktop_mcp.evidence_stats import (
+    CONSENTED_DEIDENTIFIED,
+    SYNTHETIC,
+    Interval,
+    PairedUnit,
+    paired_difference_interval,
+    savings_decision,
+)
+
 SCHEMA_VERSION = "phase_g_study/v1"
+# Build plan section 11 ("Three baselines"): A is the raw gateway with the same
+# tools and limits, B is ContextShrink. A-vs-B isolates the compression and
+# selection effect; marketed savings claims compare against C_normal or C_tuned
+# in the economics harness, not here. The difference is B - A; the existing
+# paired_A_minus_B field keeps its original sign.
+CANDIDATE_ARM = "B"
+REFERENCE_ARM = "A"
+INTERVAL_SEED = 20261014
+SYNTHETIC_VALUE_LABEL = "synthetic_fixture_values, not measurements"
+PARTICIPANT_VALUE_LABEL = "participant_supplied_inner_payload_estimate, not billing data"
 ARM_IDS = ("A", "B", "C_normal", "C_tuned")
 OUTCOME_STATUSES = (
     "completed",
@@ -1048,6 +1067,23 @@ def _quality_status(has_scores: bool, criterion: str | None) -> str:
     return "scored" if criterion else "pending_pass_criterion"
 
 
+def _interval_json(interval: Interval) -> dict[str, Any]:
+    def text(value: Decimal | None) -> str | None:
+        return None if value is None else str(value)
+
+    return {
+        "estimate": text(interval.estimate),
+        "lower": text(interval.lower),
+        "upper": text(interval.upper),
+        "confidence": text(interval.confidence),
+        "method": interval.method,
+        "resamples": interval.resamples,
+        "seed": interval.seed,
+        "n_units": interval.n_units,
+        "n_clusters": interval.n_clusters,
+    }
+
+
 def _allocation_verification(seed_mode: str, seed_revealed: bool) -> str:
     if seed_mode == "public_synthetic":
         return "public_synthetic_seed_verified"
@@ -1148,6 +1184,10 @@ def build_report(
         values = [row["metrics"][key] for key in fields]
         return sum(values) if all(value is not None for value in values) else None
 
+    is_synthetic = not any(
+        row["participant_kind"] == "pseudonymous" for row in assignments["assignments"]
+    )
+    value_label = SYNTHETIC_VALUE_LABEL if is_synthetic else PARTICIPANT_VALUE_LABEL
     payload_arm: dict[str, Any] = {}
     for arm in ARM_IDS:
         rows = [row for row in observed if row["arm"] == arm]
@@ -1160,6 +1200,7 @@ def build_report(
             "counter_versions": sorted(
                 {row["counter_version"] for row in rows if row["counter_version"]}
             ),
+            "value_label": value_label,
         }
 
     pair_index: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
@@ -1201,6 +1242,25 @@ def build_report(
                     "signed_delta_a_minus_b": payload_total(a) - payload_total(b),
                 }
             )
+    evidence_class = SYNTHETIC if is_synthetic else CONSENTED_DEIDENTIFIED
+    units = [
+        PairedUnit(
+            cluster_id=row["participant_id"],
+            difference=Decimal(row["b_estimated_tokens"] - row["a_estimated_tokens"]),
+        )
+        for row in comparable_pairs
+    ]
+    min_units = max(2, manifest["study_plan"]["minimum_completed_per_arm"])
+    min_clusters = max(2, manifest["study_plan"]["target_participants"])
+    interval = paired_difference_interval(units, seed=INTERVAL_SEED)
+    decision = savings_decision(
+        interval,
+        min_units=min_units,
+        min_clusters=min_clusters,
+        evidence_class=evidence_class,
+        # Pilot token counts are participant-supplied estimates, not billing data.
+        provenance_verified=False,
+    )
     payload_comparison = {
         "comparison": "paired_A_minus_B",
         "status": "available_estimate" if comparable_pairs else "unavailable",
@@ -1214,6 +1274,19 @@ def build_report(
         else None,
         "paired_estimates": comparable_pairs,
         "scope": "completed_pairs_matching_source_snapshot_model_settings_and_counter_version",
+        "value_label": value_label,
+        "statistical_comparison": {
+            "comparison": f"paired_{CANDIDATE_ARM}_minus_{REFERENCE_ARM}_candidate_minus_reference",
+            "candidate_arm": CANDIDATE_ARM,
+            "reference_arm": REFERENCE_ARM,
+            "cluster": "participant",
+            "interval": _interval_json(interval),
+            "min_units": min_units,
+            "min_clusters": min_clusters,
+            "decision": decision,
+            "decision_scope": "pilot token estimates are not billing data; provenance_unverified"
+            " blocks any savings claim",
+        },
     }
     pair_arms = {(r["participant_id"], r["arm"]) for r in assignments["assignments"]}
     window_arms = {(r["participant_id"], r["arm"]) for r in windows}
@@ -1351,7 +1424,7 @@ def build_report(
             "network_calls": 0,
             "raw_prompts_or_source_data_persisted": False,
         },
-        "claims": {"savings_claim": "none"},
+        "claims": {"savings_claim": decision["claim"]},
         "limitations": [
             "token and payload counts are estimates, not Claude usage",
             "synthetic checks validate harness rules only and are not participant quality scores",
