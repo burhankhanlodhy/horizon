@@ -9,9 +9,15 @@ Plan for one day: about 3 to 4 hours of work, then one check about 4 hours
 after your last reading. You will run 48 chats in total, with 12 tasks, each
 done once with each of the four methods.
 
+On a laptop without Python, use the portable kit instead of the commands below.
+Build it with `python desktop/mcp/self-test/build_kit.py`. It writes
+`desktop/mcp/extension/dist/ContextShrink-SelfTest-<version>.zip` with the
+generated documents, a launcher (`Start Self Test.cmd`) and its own short
+`GUIDE.txt`.
+
 ## Before the day
 
-1. **Install extension 0.1.2 on the test laptop.** Fully quit Claude Desktop from
+1. **Install extension 0.1.3 on the test laptop.** Fully quit Claude Desktop from
    the tray, remove the old ContextShrink in Settings → Extensions, install the
    `.mcpb` file, and approve the folder that holds your task documents.
 2. **Write your pack.** Copy `desktop/mcp/self-test/pack.template.json` and
