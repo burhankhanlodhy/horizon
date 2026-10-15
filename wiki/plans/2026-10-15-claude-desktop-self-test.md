@@ -1,7 +1,7 @@
 ---
 title: "ContextShrink Desktop MCP: single-account self test"
 date: 2026-10-15
-status: in-progress
+status: ready-for-owner-testing
 phase: G
 ---
 
@@ -165,3 +165,26 @@ claims apply only to this account, this model setting and this task set.
 | Self-test core | `horizon/desktop_mcp/self_test.py`, pack template, tests |
 | Terminal wizard | `desktop/mcp/self_test.py`, tests |
 | Plain-language guide | `desktop/mcp/SELF-TEST-GUIDE.md` (coordinator) |
+
+## Status
+
+All four pieces are built, plus read-mode guidance in the tool
+descriptions, so method B uses the modes that actually save tokens. It
+costs about 191 estimated tokens per chat; CSV is excluded because
+compact has no CSV fold.
+
+Verification: `pytest tests/desktop_mcp` plus the MCP dependency-contract
+and CCR HTTP tests report 1,522 passed, 2 skipped, and lint and format
+pass. The frozen 0.1.2 build was smoke-tested:
+
+- the manifest carries `pilot_method`;
+- the server reports 0.1.2;
+- `exact_only` reports `evaluation_arm: raw` and serves a focused request
+  as exact text;
+- `normal` reports `optimized` and focuses.
+
+The wizard's init/status/run screens were checked by hand. It refuses the
+example pack and a placeholder model label.
+
+The owner runs it next: install 0.1.2, write the 16-task pack, then follow
+`desktop/mcp/SELF-TEST-GUIDE.md`.
