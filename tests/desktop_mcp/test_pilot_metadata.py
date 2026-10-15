@@ -1,7 +1,8 @@
-"""Consent, retention and allowlisted export for local pilot metadata."""
+"""Consent, retention, allowlisted export and failure handling for local pilot metadata."""
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -10,12 +11,29 @@ from pathlib import Path
 
 import pytest
 
+from horizon.desktop_mcp import pilot_metadata
 from horizon.desktop_mcp.pilot_metadata import (
     PilotMetadataError,
     PilotMetadataStore,
     main,
     new_participant_code,
 )
+
+TASK_ID = "t_doc_qa_01"
+PAIR_ID = "pair_0123456789abcdef0123"
+
+# Name-like, handle-like, machine-like, email and path values that must never pass
+# as a free-text-ish identifier.
+NAME_LIKE_VALUES = [
+    "burhan.lodhi",
+    "BURHAN-PC",
+    "DESKTOP-AB12CD",
+    "john_smith",
+    "burhan@example.com",
+    "C:/Users/Burhan/source.pdf",
+    "/home/burhan/notes",
+    "P-0123ABCD",
+]
 
 
 def _record(**overrides: object) -> dict[str, object]:
@@ -34,8 +52,8 @@ def _record(**overrides: object) -> dict[str, object]:
     }
     result: dict[str, object] = {
         "participant_code": new_participant_code(),
-        "task_id": "doc-qa-01",
-        "pair_id": "pair-01",
+        "task_id": TASK_ID,
+        "pair_id": PAIR_ID,
         "arm": "B",
         "locale": "en-US",
         "desktop_version": "1.0.0",
@@ -79,6 +97,22 @@ def _record(**overrides: object) -> dict[str, object]:
     }
     result.update(overrides)
     return result
+
+
+def _enabled_store(tmp_path: Path, **kwargs: object) -> PilotMetadataStore:
+    store = PilotMetadataStore(tmp_path / "pilot" / "metadata.json", **kwargs)  # type: ignore[arg-type]
+    assert store.consent(accepted=True)["enabled"] is True
+    return store
+
+
+def _store_with_record(tmp_path: Path) -> tuple[PilotMetadataStore, Path]:
+    store = _enabled_store(tmp_path)
+    assert store.add_record(_record()) == {"recorded": True, "records": 1}
+    return store, store.path
+
+
+def _temp_files(directory: Path) -> list[str]:
+    return sorted(p.name for p in directory.iterdir() if p.name.endswith(".tmp"))
 
 
 def test_collection_is_off_by_default_and_cancel_writes_nothing(tmp_path: Path) -> None:
@@ -131,6 +165,7 @@ def test_consented_records_are_bounded_previewable_exportable_and_deletable(tmp_
         {"source_path": "C:/private/source.pdf"},
         {"tool_arguments": {"query": "secret"}},
         {"task_id": "full raw prompt with spaces"},
+        {"pair_id": "pair-01"},
         {"participant_code": "Burhan"},
         {"effort": "set administrator instructions"},
         {"call_count": True},
@@ -139,10 +174,63 @@ def test_consented_records_are_bounded_previewable_exportable_and_deletable(tmp_
 def test_unallowlisted_or_unbounded_values_are_rejected(
     tmp_path: Path, changes: dict[str, object]
 ) -> None:
-    store = PilotMetadataStore(tmp_path / "metadata.json")
+    store = _enabled_store(tmp_path)
     with pytest.raises(PilotMetadataError, match="record_invalid"):
-        store.consent(accepted=True)
         store.add_record(_record(**changes))
+    assert store.preview()["records"] == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "participant_code",
+        "task_id",
+        "pair_id",
+        "model",
+        "desktop_version",
+        "extension_version",
+        "counter_version",
+        "locale",
+    ],
+)
+@pytest.mark.parametrize("value", NAME_LIKE_VALUES)
+def test_name_or_machine_like_identifiers_are_rejected(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    store = _enabled_store(tmp_path)
+    with pytest.raises(PilotMetadataError, match="record_invalid"):
+        store.add_record(_record(**{field: value}))
+    assert store.preview()["records"] == []
+
+
+def test_generated_identifiers_are_accepted(tmp_path: Path) -> None:
+    store = _enabled_store(tmp_path)
+    accepted = [
+        {"participant_code": new_participant_code()},
+        {"participant_code": "p_abcdefghij"},
+        {"participant_code": "p_234567abcd"},
+        {"task_id": "t_numeric_lookup"},
+        {"task_id": "t_" + "a" * 40},
+        {"pair_id": "pair_" + "f" * 20},
+        {"model": "claude-sonnet-4-0"},
+        {"model": "gpt-5.6"},
+        {"model": "gemini-2.5-pro"},
+        {"model": "o3"},
+        {"model": "synthetic-model-1"},
+        {"desktop_version": "0.5.3"},
+        {"extension_version": "0.1.1-beta.2"},
+        {"counter_version": "synthetic-counter-v1"},
+    ]
+    for index, changes in enumerate(accepted, start=1):
+        assert store.add_record(_record(**changes)) == {"recorded": True, "records": index}
+
+
+def test_new_participant_codes_match_the_study_format() -> None:
+    codes = {new_participant_code() for _ in range(50)}
+    assert len(codes) == 50
+    for code in codes:
+        assert pilot_metadata._PARTICIPANT_RE.fullmatch(code)
+        assert code.startswith("p_") and len(code) == 12
 
 
 def test_missing_numbers_need_reasons_and_expiry_deletes_records(tmp_path: Path) -> None:
@@ -195,8 +283,7 @@ def test_edited_future_consent_cannot_extend_retention(tmp_path: Path) -> None:
 
 
 def test_export_does_not_replace_existing_file_without_explicit_overwrite(tmp_path: Path) -> None:
-    store = PilotMetadataStore(tmp_path / "metadata.json")
-    store.consent(accepted=True)
+    store = _enabled_store(tmp_path)
     target = tmp_path / "existing.json"
     target.write_text("keep", encoding="utf-8")
     with pytest.raises(PilotMetadataError, match="export_exists"):
@@ -246,6 +333,202 @@ def test_restart_removes_only_old_store_temporary_files(tmp_path: Path) -> None:
     assert not stale.exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
     assert fresh.read_text(encoding="utf-8") == "active"
+
+
+# --- Caps -----------------------------------------------------------------
+
+
+def test_record_limit_rejects_the_record_after_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pilot_metadata, "_MAX_RECORDS", 2)
+    store = _enabled_store(tmp_path)
+    assert store.add_record(_record())["records"] == 1
+    assert store.add_record(_record())["records"] == 2
+    before = store.path.read_bytes()
+    with pytest.raises(PilotMetadataError, match="record_limit"):
+        store.add_record(_record())
+    assert store.path.read_bytes() == before
+    assert store.status()["records"] == 2
+
+
+def test_export_too_large_is_refused_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    monkeypatch.setattr(pilot_metadata, "_MAX_EXPORT_BYTES", 512)
+    output = tmp_path / "review" / "export.json"
+    before = path.read_bytes()
+    with pytest.raises(PilotMetadataError, match="export_too_large"):
+        store.export(output)
+    assert not output.exists()
+    assert not output.parent.exists()
+    assert path.read_bytes() == before
+
+
+def test_store_size_cap_refuses_write_and_keeps_store_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _enabled_store(tmp_path)
+    before = store.path.read_bytes()
+    monkeypatch.setattr(pilot_metadata, "_MAX_STORE_BYTES", len(before) + 10)
+    with pytest.raises(PilotMetadataError, match="store_too_large"):
+        store.add_record(_record())
+    assert store.path.read_bytes() == before
+
+
+def test_record_input_at_64_kib_is_accepted_and_one_byte_more_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _enabled_store(tmp_path)
+    limit = pilot_metadata._MAX_RECORD_INPUT_BYTES
+    assert limit == 64 * 1024
+
+    text = json.dumps(_record())
+    at_limit = tmp_path / "at-limit.json"
+    at_limit.write_text(text + " " * (limit - len(text)), encoding="utf-8")
+    assert at_limit.stat().st_size == limit
+    assert main(["--store", str(store.path), "record", "--input", str(at_limit)]) == 0
+    assert json.loads(capsys.readouterr().out)["records"] == 1
+
+    over = tmp_path / "over-limit.json"
+    over.write_bytes(b" " * (limit + 1))
+    assert main(["--store", str(store.path), "record", "--input", str(over)]) == 1
+    assert json.loads(capsys.readouterr().out) == {"error": "record_input_too_large"}
+    assert store.status()["records"] == 1
+
+
+# --- Failure injection ----------------------------------------------------
+
+
+def test_export_into_unusable_destination_directory_fails_safely(tmp_path: Path) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(PilotMetadataError, match="export_failed"):
+        store.export(blocker / "export.json")
+    assert blocker.read_text(encoding="utf-8") == "not a directory"
+    assert path.read_bytes() == before
+
+
+def test_temporary_file_permission_error_exports_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    output = tmp_path / "review" / "export.json"
+
+    def deny(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(pilot_metadata.tempfile, "mkstemp", deny)
+    with pytest.raises(PilotMetadataError, match="export_failed"):
+        store.export(output)
+    assert not output.exists()
+    assert _temp_files(output.parent) == []
+    assert path.read_bytes() == before
+
+
+def test_replace_permission_error_keeps_existing_export_and_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    target = tmp_path / "review" / "export.json"
+    target.parent.mkdir()
+    target.write_text("keep", encoding="utf-8")
+
+    def deny(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(pilot_metadata.os, "replace", deny)
+    with pytest.raises(PilotMetadataError, match="export_failed"):
+        store.export(target, overwrite=True)
+    assert target.read_text(encoding="utf-8") == "keep"
+    assert _temp_files(target.parent) == []
+    assert path.read_bytes() == before
+
+
+def test_disk_full_during_export_write_leaves_no_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    output = tmp_path / "review" / "export.json"
+
+    def disk_full(_fd: int) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(pilot_metadata.os, "fsync", disk_full)
+    with pytest.raises(PilotMetadataError, match="export_failed"):
+        store.export(output)
+    assert not output.exists()
+    assert _temp_files(output.parent) == []
+    assert path.read_bytes() == before
+
+
+def test_disk_full_during_store_write_keeps_store_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+
+    def disk_full(_fd: int) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(pilot_metadata.os, "fsync", disk_full)
+    with pytest.raises(PilotMetadataError, match="store_unavailable"):
+        store.add_record(_record())
+    assert path.read_bytes() == before
+    assert _temp_files(path.parent) == []
+    assert store.status()["records"] == 1
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_interrupted_export_between_temp_write_and_replace_leaves_no_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overwrite: bool
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    output = tmp_path / "review" / "export.json"
+    output.parent.mkdir()
+    if overwrite:
+        output.write_text("keep", encoding="utf-8")
+
+    def interrupt(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    # Default export publishes with os.link; overwrite publishes with os.replace.
+    monkeypatch.setattr(pilot_metadata.os, "replace" if overwrite else "link", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        store.export(output, overwrite=overwrite)
+
+    if overwrite:
+        assert output.read_text(encoding="utf-8") == "keep"
+    else:
+        assert not output.exists()
+    assert _temp_files(output.parent) == []
+    assert path.read_bytes() == before
+
+
+def test_interrupted_export_during_fsync_leaves_no_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, path = _store_with_record(tmp_path)
+    before = path.read_bytes()
+    output = tmp_path / "review" / "export.json"
+
+    def interrupt(_fd: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pilot_metadata.os, "fsync", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        store.export(output)
+    assert not output.exists()
+    assert _temp_files(output.parent) == []
+    assert path.read_bytes() == before
 
 
 def test_cli_record_flow_requires_consent_and_only_ingests_allowlisted_json(

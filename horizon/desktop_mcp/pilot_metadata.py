@@ -28,10 +28,22 @@ _MAX_STORE_BYTES = 8 * 1024 * 1024
 _MAX_EXPORT_BYTES = 16 * 1024 * 1024
 _MAX_RECORD_INPUT_BYTES = 64 * 1024
 _STALE_TEMP_SECONDS = 3600
-_PARTICIPANT_RE = re.compile(r"^P-[0-9A-F]{8}$")
-_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
-_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$")
-_COUNTER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+_PARTICIPANT_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+# Participant codes are generated here or by the study harness; never a real name.
+_PARTICIPANT_RE = re.compile(r"^p_[a-z2-7]{10}$")
+# Task ids are the bundle's task_id values. The bundle validator (pilot_study.SAFE_ID)
+# accepts a broader character set; this store deliberately narrows it to an opaque
+# "t_" token so that plain names ("john_smith"), dotted handles ("burhan.lodhi") and
+# uppercase machine names ("BURHAN-PC") cannot pass. Bundle task ids must use this
+# format before they reach the store. A name that happens to fit the pattern cannot
+# be detected generally; that residual risk is accepted and documented here.
+_TASK_ID_RE = re.compile(r"^t_[a-z0-9_]{1,40}$")
+# pilot_study._hash_id("pair_", ..., 20): "pair_" plus 20 lowercase hex characters.
+_PAIR_ID_RE = re.compile(r"^pair_[a-f0-9]{20}$")
+# Allowlist of known model-id shapes; anything else (including free text) is rejected.
+_MODEL_RE = re.compile(r"^(?:claude|gpt|gemini|o[0-9]|synthetic)[a-z0-9._-]{0,63}$")
+_VERSION_RE = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:[-+][a-z0-9.]{1,16})?$")
+_COUNTER_RE = re.compile(r"^[a-z][a-z0-9]{0,31}(?:-[a-z0-9.]{1,31}){0,3}$")
 _ARMS = frozenset({"A", "B", "C_normal", "C_tuned"})
 _TASK_STATES = frozenset({"success", "failure", "unsupported", "bypassed", "timeout"})
 _SCORER_STATES = frozenset({"pending", "scored", "withheld", "unavailable"})
@@ -150,7 +162,7 @@ def default_store_path() -> Path:
 
 def new_participant_code() -> str:
     """Return a random pseudonymous study code; identity mapping stays elsewhere."""
-    return f"P-{secrets.token_hex(4).upper()}"
+    return "p_" + "".join(secrets.choice(_PARTICIPANT_ALPHABET) for _ in range(10))
 
 
 def _utc_now() -> str:
@@ -178,12 +190,10 @@ def _parse_time(value: Any, field: str) -> datetime:
         return parsed.astimezone(timezone.utc)
     except (OSError, OverflowError, ValueError):
         raise PilotMetadataError("record_invalid") from None
-    if parsed.tzinfo is None:
-        raise PilotMetadataError("record_invalid")
 
 
-def _safe_slug(value: Any) -> bool:
-    return isinstance(value, str) and _SLUG_RE.fullmatch(value) is not None
+def _matches(value: Any, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
 def _is_choice(value: Any, choices: frozenset[str]) -> bool:
@@ -204,30 +214,23 @@ def validate_record(
     record["consent_at"] = consent_at
     record["recorded_at"] = recorded_at if recorded_at is not None else _utc_now()
 
-    if not isinstance(record["participant_code"], str) or not _PARTICIPANT_RE.fullmatch(
-        record["participant_code"]
-    ):
+    if not _matches(record["participant_code"], _PARTICIPANT_RE):
         raise PilotMetadataError("record_invalid")
-    for key in ("task_id", "pair_id"):
-        if record[key] is not None and not _safe_slug(record[key]):
-            raise PilotMetadataError("record_invalid")
-    if record["task_id"] is None or not _is_choice(record["arm"], _ARMS):
+    if not _matches(record["task_id"], _TASK_ID_RE):
         raise PilotMetadataError("record_invalid")
-    if record["locale"] is not None and (
-        not isinstance(record["locale"], str)
-        or not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}", record["locale"])
+    if record["pair_id"] is not None and not _matches(record["pair_id"], _PAIR_ID_RE):
+        raise PilotMetadataError("record_invalid")
+    if not _is_choice(record["arm"], _ARMS):
+        raise PilotMetadataError("record_invalid")
+    if record["locale"] is not None and not (
+        isinstance(record["locale"], str)
+        and re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}", record["locale"], re.IGNORECASE)
     ):
         raise PilotMetadataError("record_invalid")
     for key in ("desktop_version", "extension_version"):
-        if record[key] is not None and (
-            not isinstance(record[key], str)
-            or len(record[key]) > 48
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]*", record[key])
-        ):
+        if record[key] is not None and not _matches(record[key], _VERSION_RE):
             raise PilotMetadataError("record_invalid")
-    if record["model"] is not None and (
-        not isinstance(record["model"], str) or not _MODEL_RE.fullmatch(record["model"])
-    ):
+    if record["model"] is not None and not _matches(record["model"], _MODEL_RE):
         raise PilotMetadataError("record_invalid")
     if record["effort"] is not None and not _is_choice(record["effort"], _EFFORTS):
         raise PilotMetadataError("record_invalid")
@@ -235,9 +238,8 @@ def validate_record(
         record["tool_profile"], _TOOL_PROFILES
     ):
         raise PilotMetadataError("record_invalid")
-    if record["counter_version"] is not None and (
-        not isinstance(record["counter_version"], str)
-        or not _COUNTER_RE.fullmatch(record["counter_version"])
+    if record["counter_version"] is not None and not _matches(
+        record["counter_version"], _COUNTER_RE
     ):
         raise PilotMetadataError("record_invalid")
 
