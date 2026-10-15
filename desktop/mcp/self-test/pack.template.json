@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "kind": "self_test_pack",
+  "study_id": "st_example_replace",
+  "model_label": "Claude <model> at <effort>",
+  "minimums": {"paired_units": 12, "groups": 6},
+  "quality_tolerance": 1,
+  "groups": [
+    {"group_id": "g1", "tasks": ["t_example_01", "t_example_02"]},
+    {"group_id": "g2", "tasks": ["t_example_03", "t_example_04"]},
+    {"group_id": "g3", "tasks": ["t_example_05", "t_example_06"]},
+    {"group_id": "g4", "tasks": ["t_example_07", "t_example_08"]},
+    {"group_id": "g5", "tasks": ["t_example_09", "t_example_10"]},
+    {"group_id": "g6", "tasks": ["t_example_11", "t_example_12"]},
+    {"group_id": "g7", "tasks": ["t_example_13", "t_example_14"]},
+    {"group_id": "g8", "tasks": ["t_example_15", "t_example_16"]}
+  ],
+  "tasks": [
+    {
+      "task_id": "t_example_01",
+      "source_files": ["example_contract_01.pdf"],
+      "question": "EXAMPLE, replace before use: What is the renewal notice period?",
+      "answer": {"kind": "text_contains", "expected": "90 days"}
+    },
+    {
+      "task_id": "t_example_02",
+      "source_files": ["example_invoice_02.docx"],
+      "question": "EXAMPLE, replace before use: What is the invoice total?",
+      "answer": {"kind": "number", "expected": "1234.50", "tolerance": "0.01"}
+    },
+    {
+      "task_id": "t_example_03",
+      "source_files": ["example_notes_03.md"],
+      "question": "EXAMPLE, replace before use: When does the contract end?",
+      "answer": {"kind": "date", "expected": "2026-03-31"}
+    },
+    {
+      "task_id": "t_example_04",
+      "source_files": ["example_policy_04.txt"],
+      "question": "EXAMPLE, replace before use: Does the policy allow exports?",
+      "answer": {"kind": "choice", "expected": ["Yes", "No"]}
+    },
+    {
+      "task_id": "t_example_05",
+      "source_files": ["example_report_05.pdf"],
+      "question": "EXAMPLE, replace before use: Which city is the head office in?",
+      "answer": {"kind": "text_contains", "expected": "Berlin"}
+    },
+    {
+      "task_id": "t_example_06",
+      "source_files": ["example_data_06.csv"],
+      "question": "EXAMPLE, replace before use: How many rows have status open?",
+      "answer": {"kind": "number", "expected": "42"}
+    },
+    {
+      "task_id": "t_example_07",
+      "source_files": ["example_memo_07.docx"],
+      "question": "EXAMPLE, replace before use: When was the memo issued?",
+      "answer": {"kind": "date", "expected": "2025-11-02"}
+    },
+    {
+      "task_id": "t_example_08",
+      "source_files": ["example_form_08.json"],
+      "question": "EXAMPLE, replace before use: What is the status on the form?",
+      "answer": {"kind": "choice", "expected": ["Approved", "Rejected", "Pending"]}
+    },
+    {
+      "task_id": "t_example_09",
+      "source_files": ["example_timesheet_09.csv"],
+      "question": "EXAMPLE, replace before use: How many hours were logged in total?",
+      "answer": {"kind": "number", "expected": "7.5"}
+    },
+    {
+      "task_id": "t_example_10",
+      "source_files": ["example_brief_10.md"],
+      "question": "EXAMPLE, replace before use: What is the project name?",
+      "answer": {"kind": "text_contains", "expected": "Project Atlas"}
+    },
+    {
+      "task_id": "t_example_11",
+      "source_files": ["example_terms_11.pdf"],
+      "question": "EXAMPLE, replace before use: What are the payment terms?",
+      "answer": {"kind": "text_contains", "expected": "net 30"}
+    },
+    {
+      "task_id": "t_example_12",
+      "source_files": ["example_rates_12.json"],
+      "question": "EXAMPLE, replace before use: What is the rate as a decimal?",
+      "answer": {"kind": "number", "expected": "0.15", "tolerance": "0.005"}
+    },
+    {
+      "task_id": "t_example_13",
+      "source_files": ["example_letter_13.txt"],
+      "question": "EXAMPLE, replace before use: What date is on the letter?",
+      "answer": {"kind": "date", "expected": "2026-01-15"}
+    },
+    {
+      "task_id": "t_example_14",
+      "source_files": ["example_matrix_14.csv"],
+      "question": "EXAMPLE, replace before use: Which option is marked as selected?",
+      "answer": {"kind": "choice", "expected": ["Option A", "Option B"]}
+    },
+    {
+      "task_id": "t_example_15",
+      "source_files": ["example_budget_15.docx"],
+      "question": "EXAMPLE, replace before use: What is the approved budget?",
+      "answer": {"kind": "number", "expected": "1500", "tolerance": "10"}
+    },
+    {
+      "task_id": "t_example_16",
+      "source_files": ["example_readme_16.md"],
+      "question": "EXAMPLE, replace before use: Which version is described?",
+      "answer": {"kind": "text_contains", "expected": "version 2"}
+    }
+  ]
+}
