@@ -51,7 +51,38 @@ def amount(value: Any) -> Any:
     return value["placeholder_units"] if isinstance(value, dict) else value
 
 
-def _bundle(*, minimum: int = 1, target: int = 4) -> dict[str, Any]:
+def _bundle(*, minimum: int = 1, target: int = 4, pilot: bool = False) -> dict[str, Any]:
+    if pilot:
+        return {
+            "schema_version": "phase_g_study/v1",
+            "bundle_kind": "pilot_task_bundle",
+            "study_id": "economics-test",
+            "study_plan": {
+                "target_participants": target,
+                "minimum_completed_per_arm": minimum,
+                "stopping_rule": "complete_predeclared_bundle_or_stop_at_target",
+                "stratum_weights": {"simple": "0.5", "complex": "0.5"},
+                "refresh_max_age_hours": 24,
+            },
+            "tasks": [
+                {
+                    "task_id": f"t_{stratum}",
+                    "stratum": stratum,
+                    "locale": "en-US",
+                    "operator_instruction": "Answer from the attached source only.",
+                    "sources": [
+                        {
+                            "source_id": "source-1",
+                            "format": "txt",
+                            "file_name": f"{stratum}-source.txt",
+                            "sha256": hashlib.sha256(stratum.encode()).hexdigest(),
+                            "bytes": 128,
+                        }
+                    ],
+                }
+                for stratum in ("simple", "complex")
+            ],
+        }
     return {
         "schema_version": "phase_g_study/v1",
         "bundle_kind": "synthetic_task_bundle",
@@ -415,6 +446,7 @@ def cohort_input(
     minimum: int = 2,
     target: int = 4,
     export_sha256: str = EXPORT_SHA256,
+    pilot: bool = False,
 ) -> dict[str, Any]:
     """Consented committed-secret cohort. Candidate B uses (2 + delta) million tokens per task.
 
@@ -422,7 +454,7 @@ def cohort_input(
     (candidate - reference) difference is ``delta`` per task.
     """
     participants = PARTICIPANTS[: len(deltas)]
-    bundle = _bundle(minimum=minimum, target=target)
+    bundle = _bundle(minimum=minimum, target=target, pilot=pilot)
     cohort = pilot_study.build_assignments(
         bundle,
         list(participants),
@@ -1333,6 +1365,111 @@ def test_admin_export_read_is_bounded_and_missing_file_is_sanitized(
     monkeypatch.setattr(economics, "MAX_ADMIN_EXPORT_BYTES", 64 * 1024 * 1024)
     with pytest.raises(economics.EconomicsError, match="admin_export_unavailable"):
         economics._read_admin_export(tmp_path / "missing.csv")
+
+
+def _withdrawals(participants: list[str], study_id: str = "economics-test") -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "study_id": study_id,
+        "withdrawals": [
+            {"participant_id": participant, "withdrawn_at_utc": "2026-10-20T09:00:00Z"}
+            for participant in participants
+        ],
+    }
+
+
+def test_withdrawn_participant_rows_are_excluded_from_interval_and_counts() -> None:
+    withdrawn = PARTICIPANTS[3]
+    report = economics.build_report(
+        cohort_input((-1, -1, -1, -1), minimum=2), EXPORTS, _withdrawals([withdrawn])
+    )
+    interval = _paired(report, "C_normal")["interval"]
+    assert interval["n_clusters"] == 3
+    assert interval["n_units"] == 6
+    assert _paired(report, "C_normal")["matched_pair_count"] == 6
+    assert report["enterprise_observed"]["window_count"] == 12
+    sample = report["sample"]
+    assert sample["withdrawn_participants"] == 1
+    assert sample["withdrawn_assignments_by_arm"] == {"A": 2, "B": 2, "C_normal": 2, "C_tuned": 2}
+    # The digest and count still cover the full cohort.
+    assert sample["assignment_count"] == 32
+
+
+def test_supported_savings_drops_to_none_once_withdrawals_break_the_gate() -> None:
+    cohort = cohort_input((-1, -1, -1, -1), minimum=2, target=4)
+    supported = economics.build_report(cohort, EXPORTS)
+    assert supported["savings_claim"] == "savings_supported"
+    assert supported["enterprise_observed"]["savings_claim"] == "savings_supported"
+
+    report = economics.build_report(cohort, EXPORTS, _withdrawals([PARTICIPANTS[0]]))
+    decision = _paired(report, "C_normal")["decision"]
+    assert decision["claim"] == "none"
+    assert "below_min_clusters" in decision["reasons"]
+    assert report["savings_claim"] == "none"
+    enterprise = report["enterprise_observed"]
+    assert enterprise["savings_claim"] == "none"
+    assert "below_min_clusters" in enterprise["savings_decision"]["reasons"]
+
+
+def test_report_contains_no_withdrawn_participant_id() -> None:
+    withdrawn = PARTICIPANTS[2]
+    report = economics.build_report(cohort_input(), EXPORTS, _withdrawals([withdrawn]))
+    assert withdrawn not in json.dumps(report)
+    assert report["sample"]["withdrawn_participants"] == 1
+
+
+def test_real_pilot_bundle_consented_input_runs_end_to_end() -> None:
+    data = cohort_input((-1, -1, -1, -1), pilot=True)
+    assert data["study_bundle"]["bundle_kind"] == "pilot_task_bundle"
+    report = economics.build_report(data, EXPORTS)
+    assert report["savings_claim"] == "savings_supported"
+    assert report["enterprise_observed"]["savings_claim"] == "savings_supported"
+    assert report["modeled_economics"]["currency"] == "USD"
+    withdrawn = economics.build_report(data, EXPORTS, _withdrawals([PARTICIPANTS[1]]))
+    assert withdrawn["sample"]["withdrawn_participants"] == 1
+
+
+def test_pilot_bundle_cannot_be_declared_synthetic() -> None:
+    data = cohort_input((-1, -1, -1, -1), pilot=True)
+    data["evidence_class"] = "synthetic"
+    with pytest.raises(economics.EconomicsError, match="pilot_bundle_requires_consented_evidence"):
+        economics.build_report(data)
+
+
+def test_withdrawal_file_is_checked_against_the_study_and_the_cohort() -> None:
+    cohort = cohort_input((-1, -1, -1, -1))
+    with pytest.raises(economics.EconomicsError, match="withdrawals_invalid"):
+        economics.build_report(cohort, EXPORTS, _withdrawals([PARTICIPANTS[0]], "other-study"))
+    with pytest.raises(economics.EconomicsError, match="withdrawal_unknown_participant"):
+        economics.build_report(cohort, EXPORTS, _withdrawals(["p_zzzzzzzzzz"]))
+
+
+def test_cli_withdrawals_flag_removes_participant_before_reporting(tmp_path: Path) -> None:
+    export = tmp_path / "export.csv"
+    export.write_bytes(EXPORT_BYTES)
+    input_path = tmp_path / "cohort.json"
+    input_path.write_text(json.dumps(cohort_input((-1, -1, -1, -1))), encoding="utf-8")
+    withdrawals_path = tmp_path / "withdrawals.json"
+    withdrawals_path.write_text(json.dumps(_withdrawals([PARTICIPANTS[1]])), encoding="utf-8")
+    output = tmp_path / "report.json"
+    assert (
+        economics.main(
+            [
+                "--input",
+                str(input_path),
+                "--output",
+                str(output),
+                "--admin-export",
+                str(export),
+                "--withdrawals",
+                str(withdrawals_path),
+            ]
+        )
+        == 0
+    )
+    text = output.read_text(encoding="utf-8")
+    assert PARTICIPANTS[1] not in text
+    assert json.loads(text)["sample"]["withdrawn_participants"] == 1
 
 
 def test_fixture_report_golden() -> None:

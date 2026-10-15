@@ -351,7 +351,28 @@ def _check_factorial_cells(profiles: dict[str, dict[str, Any]]) -> None:
         raise EconomicsError("factorial_condition_invalid")
 
 
-def _validate_input(value: Any) -> dict[str, Any]:
+def _withdrawn_participants(document: Any, study_id: str) -> frozenset[str]:
+    """Validate a withdrawal file against the study id; no document means no withdrawals."""
+    if document is None:
+        return frozenset()
+    try:
+        return pilot_study.validate_withdrawals(document, study_id=study_id)
+    except pilot_study.PilotStudyError:
+        raise EconomicsError("withdrawals_invalid") from None
+
+
+def _without(rows: Any, key: str, values: frozenset[str] | set[str]) -> Any:
+    """Drop rows whose string ``key`` is in ``values``. Malformed rows are left for validation."""
+    if not isinstance(rows, list):
+        return rows
+    return [
+        row
+        for row in rows
+        if not (isinstance(row, dict) and isinstance(row.get(key), str) and row[key] in values)
+    ]
+
+
+def _validate_input(value: Any, withdrawal_doc: Any = None) -> dict[str, Any]:
     root = _keys(
         deepcopy(value),
         {
@@ -384,12 +405,17 @@ def _validate_input(value: Any) -> dict[str, Any]:
         {"schema_version", "bundle_kind", "study_id", "study_plan", "tasks"},
         "study_bundle_invalid",
     )
-    if (
-        bundle["schema_version"] != STUDY_SCHEMA_VERSION
-        or bundle["bundle_kind"] != "synthetic_task_bundle"
-    ):
+    if bundle["schema_version"] != STUDY_SCHEMA_VERSION or bundle["bundle_kind"] not in {
+        "synthetic_task_bundle",
+        pilot_study.PILOT_BUNDLE_KIND,
+    }:
         raise EconomicsError("study_schema_unsupported")
     _identifier(bundle["study_id"])
+    if bundle["bundle_kind"] == pilot_study.PILOT_BUNDLE_KIND and (
+        root["evidence_class"] == "synthetic"
+    ):
+        raise EconomicsError("pilot_bundle_requires_consented_evidence")
+    withdrawn = _withdrawn_participants(withdrawal_doc, bundle["study_id"])
     plan = _keys(
         bundle["study_plan"],
         {
@@ -418,21 +444,23 @@ def _validate_input(value: Any) -> dict[str, Any]:
     tasks = bundle["tasks"]
     if not isinstance(tasks, list) or not tasks or len(tasks) > 500:
         raise EconomicsError("tasks_invalid")
+    real_bundle = bundle["bundle_kind"] == pilot_study.PILOT_BUNDLE_KIND
+    task_keys = (
+        {"task_id", "stratum", "locale", "operator_instruction", "sources"}
+        if real_bundle
+        else {
+            "task_id",
+            "stratum",
+            "locale",
+            "operator_instruction",
+            "synthetic_sources",
+            "synthetic_check",
+            "synthetic_observed",
+        }
+    )
     task_strata: dict[str, str] = {}
     for task in tasks:
-        item = _keys(
-            task,
-            {
-                "task_id",
-                "stratum",
-                "locale",
-                "operator_instruction",
-                "synthetic_sources",
-                "synthetic_check",
-                "synthetic_observed",
-            },
-            "task_invalid",
-        )
+        item = _keys(task, task_keys, "task_invalid")
         task_id = _identifier(item["task_id"], "task_id_invalid")
         if TASK_ID.fullmatch(task_id) is None:
             raise EconomicsError("task_id_invalid")
@@ -446,38 +474,41 @@ def _validate_input(value: Any) -> dict[str, Any]:
             or len(item["operator_instruction"]) > 1200
         ):
             raise EconomicsError("operator_instruction_invalid")
-        sources = item["synthetic_sources"]
-        if not isinstance(sources, list) or len(sources) > 8:
-            raise EconomicsError("synthetic_sources_invalid")
-        source_ids: set[str] = set()
-        for raw_source in sources:
-            source = _keys(
-                raw_source, {"source_id", "format", "content"}, "synthetic_source_invalid"
-            )
-            source_id = _identifier(source["source_id"])
-            if (
-                source_id in source_ids
-                or not isinstance(source["format"], str)
-                or source["format"] not in {"txt", "md", "json", "csv", "unsupported_fixture"}
-            ):
-                raise EconomicsError("synthetic_source_invalid")
-            if not isinstance(source["content"], str) or len(source["content"]) > 64_000:
-                raise EconomicsError("synthetic_source_content_invalid")
-            source_ids.add(source_id)
-        check = _keys(item["synthetic_check"], {"kind", "expected"}, "synthetic_check_invalid")
-        if not isinstance(check["kind"], str) or check["kind"] not in {
-            "integer_equal",
-            "boolean_equal",
-            "literal_equal",
-        }:
-            raise EconomicsError("synthetic_check_invalid")
-        if check["kind"] == "integer_equal":
-            _integer(check["expected"])
-        elif check["kind"] == "boolean_equal":
-            if type(check["expected"]) is not bool:
+        if not real_bundle:
+            # Synthetic sources carry their content; real sources are file descriptors whose
+            # shape pilot_study.validate_bundle checks below.
+            sources = pilot_study.task_source_snapshot(item)
+            if not isinstance(sources, list) or len(sources) > 8:
+                raise EconomicsError("synthetic_sources_invalid")
+            source_ids: set[str] = set()
+            for raw_source in sources:
+                source = _keys(
+                    raw_source, {"source_id", "format", "content"}, "synthetic_source_invalid"
+                )
+                source_id = _identifier(source["source_id"])
+                if (
+                    source_id in source_ids
+                    or not isinstance(source["format"], str)
+                    or source["format"] not in {"txt", "md", "json", "csv", "unsupported_fixture"}
+                ):
+                    raise EconomicsError("synthetic_source_invalid")
+                if not isinstance(source["content"], str) or len(source["content"]) > 64_000:
+                    raise EconomicsError("synthetic_source_content_invalid")
+                source_ids.add(source_id)
+            check = _keys(item["synthetic_check"], {"kind", "expected"}, "synthetic_check_invalid")
+            if not isinstance(check["kind"], str) or check["kind"] not in {
+                "integer_equal",
+                "boolean_equal",
+                "literal_equal",
+            }:
                 raise EconomicsError("synthetic_check_invalid")
-        elif not isinstance(check["expected"], str) or len(check["expected"]) > 120:
-            raise EconomicsError("synthetic_check_invalid")
+            if check["kind"] == "integer_equal":
+                _integer(check["expected"])
+            elif check["kind"] == "boolean_equal":
+                if type(check["expected"]) is not bool:
+                    raise EconomicsError("synthetic_check_invalid")
+            elif not isinstance(check["expected"], str) or len(check["expected"]) > 120:
+                raise EconomicsError("synthetic_check_invalid")
         task_strata[task_id] = stratum
 
     try:
@@ -677,6 +708,33 @@ def _validate_input(value: Any) -> dict[str, Any]:
     for field in ("model", "settings", "effort", "concise_instructions"):
         if profiles["C_tuned"][field] != profiles["B_full"][field]:
             raise EconomicsError("tuned_baseline_profile_mismatch")
+
+    # Withdrawn participants keep their assignment rows (digest and count cover the full
+    # cohort) but contribute no observations, scores, runs, windows or cells to any statistic.
+    if not withdrawn <= set(participant_ids):
+        raise EconomicsError("withdrawal_unknown_participant")
+    all_assignments = assignments
+    withdrawn_by_arm = Counter(
+        row["arm"] for row in all_assignments.values() if row["participant_id"] in withdrawn
+    )
+    withdrawn_assignment_ids = frozenset(
+        assignment_id
+        for assignment_id, row in all_assignments.items()
+        if row["participant_id"] in withdrawn
+    )
+    withdrawn_score_ids = frozenset(
+        all_assignments[assignment_id]["score_id"] for assignment_id in withdrawn_assignment_ids
+    )
+    assignments = {
+        assignment_id: row
+        for assignment_id, row in all_assignments.items()
+        if assignment_id not in withdrawn_assignment_ids
+    }
+    pair_groups = {key: group for key, group in pair_groups.items() if key[0] not in withdrawn}
+    root["observations"] = _without(root["observations"], "assignment_id", withdrawn_assignment_ids)
+    root["scores"] = _without(root["scores"], "score_id", withdrawn_score_ids)
+    root["usage_windows"] = _without(root["usage_windows"], "participant_id", withdrawn)
+    root["runs"] = _without(root["runs"], "assignment_id", withdrawn_assignment_ids)
 
     observations = root["observations"]
     if not isinstance(observations, list) or len(observations) != len(assignments):
@@ -1344,6 +1402,9 @@ def _validate_input(value: Any) -> dict[str, Any]:
             "target_participants": plan["target_participants"],
         },
         "allocation_verification": allocation_verification,
+        "all_assignment_count": len(all_assignments),
+        "withdrawn_participant_count": len(withdrawn),
+        "withdrawn_by_arm": {arm: withdrawn_by_arm.get(arm, 0) for arm in ARMS},
     }
     return root
 
@@ -2233,11 +2294,13 @@ def _factorial_section(
         raise EconomicsError("factorial_invalid") from None
 
 
-def _build_report(value: Any, admin_exports: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_report(
+    value: Any, admin_exports: list[dict[str, Any]], withdrawal_doc: Any = None
+) -> dict[str, Any]:
     input_digest = _canonical_digest(value)
     records = _export_records(admin_exports)
     export_digests = {record["sha256"] for record in records}
-    data = _validate_input(value)
+    data = _validate_input(value, withdrawal_doc)
     normalized = data.pop("_normalized")
     rates = normalized["rates"]
     placeholder = normalized["rates_are_placeholder"]
@@ -2338,10 +2401,13 @@ def _build_report(value: Any, admin_exports: list[dict[str, Any]]) -> dict[str, 
         },
         "sample": {
             "task_count": len(normalized["task_strata"]),
-            "assignment_count": len(normalized["assignments"]),
+            "assignment_count": normalized["all_assignment_count"],
             "condition_run_count": len(normalized["runs"]),
+            "withdrawn_participants": normalized["withdrawn_participant_count"],
+            "withdrawn_assignments_by_arm": normalized["withdrawn_by_arm"],
             "participant_kind": next(
-                iter({row["participant_kind"] for row in normalized["assignments"].values()})
+                iter({row["participant_kind"] for row in normalized["assignments"].values()}),
+                None,
             ),
             "allocation_verification": normalized["allocation_verification"],
             "stratum_weights": {
@@ -2378,22 +2444,28 @@ def _build_report(value: Any, admin_exports: list[dict[str, Any]]) -> dict[str, 
     }
 
 
-def build_report(value: Any, admin_exports: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def build_report(
+    value: Any,
+    admin_exports: list[dict[str, Any]] | None = None,
+    withdrawals: Any = None,
+) -> dict[str, Any]:
     # Aggregate sums and weighted ratios must retain the full precision of the
     # bounded input amounts; the Decimal default context can erase tiny charges
     # beside a large amount before serialization.
     with localcontext() as context:
         context.prec = 80
-        return _build_report(value, admin_exports or [])
+        return _build_report(value, admin_exports or [], withdrawals)
 
 
 def run(
     input_path: Path,
     output_path: Path | None = None,
     admin_export_paths: list[Path] | tuple[Path, ...] = (),
+    withdrawals_path: Path | None = None,
 ) -> dict[str, Any]:
     exports = [_read_admin_export(Path(path)) for path in admin_export_paths]
-    report = build_report(_safe_load(input_path), exports)
+    withdrawals = _safe_load(withdrawals_path) if withdrawals_path is not None else None
+    report = build_report(_safe_load(input_path), exports, withdrawals)
     payload = (
         json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
     )
@@ -2423,9 +2495,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="administrator export file; repeat for each export. Only its SHA-256 and size are reported.",
     )
+    parser.add_argument(
+        "--withdrawals",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="participant withdrawal file; withdrawn rows are removed before any statistic",
+    )
     args = parser.parse_args(argv)
     try:
-        report = run(args.input, args.output, args.admin_export)
+        report = run(args.input, args.output, args.admin_export, args.withdrawals)
     except EconomicsError as error:
         print(json.dumps({"error": error.code}, separators=(",", ":")), file=sys.stderr)
         return 2

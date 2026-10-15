@@ -3031,6 +3031,13 @@
       "numeric": "0.25"
     },
     "task_count": 13,
+    "withdrawn_assignments_by_arm": {
+      "A": 0,
+      "B": 0,
+      "C_normal": 0,
+      "C_tuned": 0
+    },
+    "withdrawn_participants": 0,
     "workload_outcomes_by_arm": {
       "A": {
         "assigned_count": 13,
