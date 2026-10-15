@@ -59,9 +59,9 @@ never in the repository, a report, an export or the metadata store
 
 ### 2.1 Predeclare the study plan
 
-The study plan is the `study_plan` object of a bundle file. The bundle must have
-`"bundle_kind": "synthetic_task_bundle"`, which is the only kind the validator
-accepts. The bundle fixes:
+The study plan is the `study_plan` object of a bundle file. Real studies use
+`"bundle_kind": "pilot_task_bundle"` (section 2.5). The synthetic
+`"synthetic_task_bundle"` is for software checks only. The bundle fixes:
 
 | Key | Rule enforced by code |
 |---|---|
@@ -119,6 +119,65 @@ cohort cannot produce a supported claim, whatever the data.
 and `enterprise_observed.enterprise_usage_observed: false`. Its
 `fixture_rule_checks` are not participant quality. The task book contains the
 operator instructions and synthetic sources, with no answer keys.
+
+### 2.5 Real task bundle (authoring)
+
+A real bundle uses `"bundle_kind": "pilot_task_bundle"`. Each task has
+`task_id` (format `t_` plus lowercase letters, digits or underscores), `stratum`,
+`locale`, `operator_instruction` and `sources`. Each source is one file that
+the operator keeps in the study's sources folder:
+
+```json
+{"source_id": "src_t_lookup", "format": "csv", "file_name": "lookup.csv",
+ "sha256": "<64 lowercase hex>", "bytes": 1234}
+```
+
+- `format` is one of `txt`, `md`, `json`, `csv`, `pdf`, `docx`, and the file
+  name must end with the same suffix. A file name is a base name only: no
+  folders, no `..`, no reserved Windows names (`CON`, `NUL`, `COM1`...), at most
+  120 characters, and no name used by another source.
+- `bytes` is between 1 and 26214400 (25 MiB). Compute both values from the file
+  itself, for example:
+
+```powershell
+(Get-FileHash -Algorithm SHA256 "<SOURCES>\lookup.csv").Hash.ToLower()
+(Get-Item "<SOURCES>\lookup.csv").Length
+```
+
+- Source content is never embedded in the bundle. A bundle that contains
+  `content`, `synthetic_*` or answer fields is rejected.
+
+**Answer key.** The expected answers live in a separate file,
+`answer-key.json`, not in the bundle and not in any file given to participants
+or to the task book:
+
+```json
+{"schema_version": "phase_g_study/v1", "study_id": "<STUDY_ID>",
+ "bundle_sha256": "<canonical digest of the bundle>",
+ "keys": [{"task_id": "t_lookup", "kind": "integer_equal", "expected": 42}]}
+```
+
+Each task needs exactly one key. `kind` is `integer_equal`, `boolean_equal` or
+`literal_equal`. The key's `bundle_sha256` must match the bundle, so a
+changed bundle invalidates the key. Store the key with the scorer's materials,
+not with the operator cards. The report only checks the key's digest and task
+coverage (`--answer-key`) and never records its values. Scorers use the key
+locally; scores are entered on the blinded sheet.
+
+### 2.6 Verify sources before any session
+
+Run this after copying the source files into the sources folder, and again
+before the first session and after any file change:
+
+```powershell
+& $PY -B desktop\mcp\phase_g_pilot.py verify-sources --bundle "<STUDY>\bundle.json" --sources-dir "<STUDY>\sources" --output "<STUDY>\sources-verified.json"
+```
+
+The command checks that each named file sits directly in the folder, is not a
+symbolic link, junction or hard link, and matches its declared size and
+SHA-256. It exits `2` and lists each failure (`source_missing`,
+`source_size_mismatch`, `source_hash_mismatch`, `source_link_refused`, ...) if
+anything fails. Do not start sessions until it reports `verified`.
 
 ---
 
@@ -633,18 +692,35 @@ as one.
 ### 9.5 Consent withdrawal
 
 1. Stop sessions for that participant at once.
-2. Metadata store: there is no per-participant delete. `pilot_metadata.py delete
-   --confirm` removes all records and the consent for the whole store. If other
-   participants' records are in the same store, the study owner decides how to
-   remove only that participant's data. Do not edit the JSON by hand; the tool does
-   not support that.
-3. Study files: remove that participant's rows from `observations.json`,
-   `scores-combined.json` and the window file, and rerun `report`. Their assignment
-   rows cannot be removed without breaking `verify-assignments`, because the
-   allocation depends on the full list of codes. Those rows stay pseudonymous, and
-   their tasks count as `not_run`. The study owner decides how to report them.
-4. The study owner removes the code-to-person entry.
-5. Record the withdrawal date, and what was removed and what was kept, in the study
+2. Write the withdrawal file `<STUDY>\withdrawals.json`. It names only the
+   pseudonymous code and the time the withdrawal was received:
+
+   ```json
+   {"schema_version": 1, "study_id": "<STUDY_ID>",
+    "withdrawals": [{"participant_id": "p_xxxxxxxxxx", "withdrawn_at_utc": "2026-10-20T09:00:00Z"}]}
+   ```
+
+   The file must list each withdrawn code once. Synthetic codes and unknown
+   formats are rejected.
+3. Metadata store: `pilot_metadata.py withdraw --participant-code CODE --confirm`
+   deletes only that participant's records and keeps the others. Without
+   `--confirm` it writes nothing. Do not edit the JSON by hand. (`pilot_metadata.py
+   delete --confirm` still removes the whole store and is not a withdrawal.)
+4. Study files: rerun the report with the withdrawal file:
+
+   ```powershell
+   & $PY -B desktop\mcp\phase_g_pilot.py report --bundle "<STUDY>\bundle.json" --assignments "<STUDY>\assignments.json" --observations "<STUDY>\observations.json" --scores "<STUDY>\scores-combined.json" --withdrawals "<STUDY>\withdrawals.json" --as-of-utc <UTC> --output "<STUDY>\report.json"
+   ```
+
+   The report drops every observation, score and usage row for withdrawn
+   participants before any statistics. It marks their assignments as
+   `withdrawn` per arm and shows only the count `withdrawn_participants`. Their
+   rows also leave `min_units` and `min_clusters`. The assignment file itself
+   stays unchanged, so `verify-assignments` still works.
+5. Remove that participant's rows from `observations.json`, `scores-combined.json`
+   and the usage-window file as well, if you keep those files for other uses.
+6. The study owner removes the code-to-person entry.
+7. Record the withdrawal date, and what was removed and what was kept, in the study
    packet.
 
 ---

@@ -59,7 +59,8 @@
       "scores": {
         "no_score": 13,
         "scored": 0
-      }
+      },
+      "withdrawn_assignments": 0
     },
     "B": {
       "assigned": 13,
@@ -108,7 +109,8 @@
       "scores": {
         "no_score": 13,
         "scored": 0
-      }
+      },
+      "withdrawn_assignments": 0
     },
     "C_normal": {
       "assigned": 13,
@@ -157,7 +159,8 @@
       "scores": {
         "no_score": 13,
         "scored": 0
-      }
+      },
+      "withdrawn_assignments": 0
     },
     "C_tuned": {
       "assigned": 13,
@@ -206,7 +209,8 @@
       "scores": {
         "no_score": 13,
         "scored": 0
-      }
+      },
+      "withdrawn_assignments": 0
     }
   },
   "as_of_utc": "2026-10-14T12:00:00Z",
@@ -819,5 +823,6 @@
       "numeric": "0.25"
     },
     "target_participants": 8
-  }
+  },
+  "withdrawn_participants": 0
 }

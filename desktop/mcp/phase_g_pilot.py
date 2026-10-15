@@ -11,7 +11,10 @@ Reveal the seed after collection with `verify-assignments --seed-file`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from horizon.desktop_mcp.pilot_study import (  # noqa: E402
+    PILOT_BUNDLE_KIND,
     SCHEMA_VERSION,
     SEED_HEX,
     PilotStudyError,
@@ -32,14 +36,19 @@ from horizon.desktop_mcp.pilot_study import (  # noqa: E402
     generate_scorer_codes,
     participant_code_kind,
     synthetic_rule_check,
+    task_source_snapshot,
+    validate_answer_key,
     validate_assignment_set,
     validate_bundle,
+    validate_withdrawals,
 )
 
 _DEFAULT_BUNDLE = Path(__file__).with_name("phase_g_pilot_fixtures.json")
 _MAX_INPUT_BYTES = 8 * 1024 * 1024
 _MAX_SEED_FILE_BYTES = 256
 _SYNTHETIC_AS_OF = "2026-10-14T12:00:00Z"
+_HASH_CHUNK_BYTES = 1024 * 1024
+_REPARSE_POINT_ATTRIBUTE = 0x400
 
 
 def _read_json(path: Path) -> Any:
@@ -153,23 +162,115 @@ def make_score_sheet(bundle: Any, assignment_set: Any) -> dict[str, Any]:
 
 
 def make_task_book(bundle: Any) -> dict[str, Any]:
-    """Export runnable operator cards from synthetic-only material, without answer keys."""
+    """Export operator cards. Answer keys are never read; real bundles export source metadata only."""
     manifest = validate_bundle(bundle)
+    real = manifest["bundle_kind"] == PILOT_BUNDLE_KIND
+    tasks = []
+    for task in manifest["tasks"]:
+        card: dict[str, Any] = {
+            "task_id": task["task_id"],
+            "stratum": task["stratum"],
+            "locale": task["locale"],
+            "operator_instruction": task["operator_instruction"],
+            "source_snapshot_sha256": digest_json(task_source_snapshot(task)),
+        }
+        if real:
+            card["sources"] = task["sources"]
+        else:
+            card["synthetic_sources"] = task["synthetic_sources"]
+        tasks.append(card)
     return {
         "schema_version": SCHEMA_VERSION,
         "study_id": manifest["study_id"],
-        "task_book_kind": "synthetic_operator_cards",
-        "tasks": [
-            {
-                "task_id": task["task_id"],
-                "stratum": task["stratum"],
-                "locale": task["locale"],
-                "operator_instruction": task["operator_instruction"],
-                "synthetic_sources": task["synthetic_sources"],
-                "source_snapshot_sha256": digest_json(task["synthetic_sources"]),
-            }
-            for task in manifest["tasks"]
-        ],
+        "task_book_kind": "pilot_operator_cards" if real else "synthetic_operator_cards",
+        "tasks": tasks,
+    }
+
+
+def _is_link_or_reparse(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & _REPARSE_POINT_ATTRIBUTE
+    )
+
+
+def _check_source_file(path: Path, expected: dict[str, Any]) -> str | None:
+    """Return a bounded failure code, or None when the file matches its declaration."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return "source_missing"
+    except OSError:
+        return "source_unavailable"
+    if _is_link_or_reparse(info):
+        return "source_link_refused"
+    if not stat.S_ISREG(info.st_mode):
+        return "source_not_regular_file"
+    if getattr(info, "st_nlink", 1) != 1:
+        return "source_hardlink_refused"
+    if info.st_size != expected["bytes"]:
+        return "source_size_mismatch"
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return "source_unavailable"
+    try:
+        opened = os.fstat(descriptor)
+        same_entry = not info.st_ino or (opened.st_dev, opened.st_ino) == (
+            info.st_dev,
+            info.st_ino,
+        )
+        if opened.st_size != info.st_size or not same_entry:
+            return "source_changed_during_check"
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(descriptor, _HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            digest.update(chunk)
+    except OSError:
+        return "source_unavailable"
+    finally:
+        os.close(descriptor)
+    if total != expected["bytes"]:
+        return "source_size_mismatch"
+    if digest.hexdigest() != expected["sha256"]:
+        return "source_hash_mismatch"
+    return None
+
+
+def verify_sources(bundle: Any, sources_dir: Path) -> dict[str, Any]:
+    """Check each declared source directly inside sources_dir; links and reparse points fail."""
+    manifest = validate_bundle(bundle)
+    if manifest["bundle_kind"] != PILOT_BUNDLE_KIND:
+        raise PilotStudyError("verify_sources_requires_pilot_bundle")
+    try:
+        directory = os.lstat(sources_dir)
+    except FileNotFoundError:
+        raise PilotStudyError("sources_dir_missing") from None
+    except OSError:
+        raise PilotStudyError("sources_dir_unavailable") from None
+    if _is_link_or_reparse(directory):
+        raise PilotStudyError("sources_dir_link_refused")
+    if not stat.S_ISDIR(directory.st_mode):
+        raise PilotStudyError("sources_dir_invalid")
+    failures: list[dict[str, str]] = []
+    checked = 0
+    for task in manifest["tasks"]:
+        for source in task["sources"]:
+            checked += 1
+            code = _check_source_file(sources_dir / source["file_name"], source)
+            if code is not None:
+                failures.append({"source_id": source["source_id"], "code": code})
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "study_id": manifest["study_id"],
+        "bundle_sha256": digest_json(manifest),
+        "status": "verified" if not failures else "failed",
+        "sources_checked": checked,
+        "failures": failures,
     }
 
 
@@ -279,6 +380,7 @@ def make_import_report(
     as_of_utc: str,
     usage_windows: Any = None,
     seed_hex: str | None = None,
+    withdrawn: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     return build_report(
         bundle,
@@ -288,6 +390,7 @@ def make_import_report(
         as_of_utc=as_of_utc,
         usage_windows=usage_windows,
         seed_hex=seed_hex,
+        withdrawn=withdrawn,
     )
 
 
@@ -349,7 +452,7 @@ def _parser() -> argparse.ArgumentParser:
     fixture.add_argument("--output", type=Path)
 
     task_book = sub.add_parser(
-        "task-book", help="export synthetic operator instructions and sources without answer keys"
+        "task-book", help="export operator cards (instructions and sources), never answer keys"
     )
     task_book.add_argument("--bundle", type=Path, default=_DEFAULT_BUNDLE)
     task_book.add_argument("--output", type=Path, required=True)
@@ -387,6 +490,14 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--assignments", type=Path, required=True)
     verify.add_argument("--seed-file", type=Path, required=True)
 
+    sources = sub.add_parser(
+        "verify-sources",
+        help="check real source files in a folder against the bundle's names, sizes and SHA-256",
+    )
+    sources.add_argument("--bundle", type=Path, required=True)
+    sources.add_argument("--sources-dir", type=Path, required=True)
+    sources.add_argument("--output", type=Path)
+
     sheet = sub.add_parser(
         "score-sheet", help="export a blinded score worksheet without arm or participant IDs"
     )
@@ -402,6 +513,12 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--usage-windows", type=Path)
     report.add_argument(
         "--seed-file", type=Path, help="revealed seed; enables allocation recheck in the report"
+    )
+    report.add_argument(
+        "--withdrawals", type=Path, help="withdrawal file; withdrawn rows are dropped first"
+    )
+    report.add_argument(
+        "--answer-key", type=Path, help="scorer-only key; only its digest and coverage are checked"
     )
     report.add_argument("--as-of-utc", required=True)
     report.add_argument("--output", type=Path)
@@ -427,6 +544,10 @@ def main(argv: list[str] | None = None) -> int:
             result = _assign(args)
         elif args.command == "verify-assignments":
             result = _verify(args)
+        elif args.command == "verify-sources":
+            result = verify_sources(_read_json(args.bundle), args.sources_dir)
+            sys.stdout.write(_write_json(result, output))
+            return 0 if result["status"] == "verified" else 2
         elif args.command == "score-sheet":
             bundle = validate_bundle(_read_json(args.bundle))
             assignments = _read_json(args.assignments)
@@ -450,6 +571,11 @@ def main(argv: list[str] | None = None) -> int:
                 score_rows = score_input
             else:
                 raise PilotStudyError("input_array_or_score_sheet_required")
+            withdrawn = (
+                validate_withdrawals(_read_json(args.withdrawals), study_id=bundle["study_id"])
+                if args.withdrawals
+                else frozenset()
+            )
             result = make_import_report(
                 bundle,
                 assignments,
@@ -458,7 +584,15 @@ def main(argv: list[str] | None = None) -> int:
                 as_of_utc=args.as_of_utc,
                 usage_windows=usage,
                 seed_hex=seed_hex,
+                withdrawn=withdrawn,
             )
+            if args.answer_key:
+                key = validate_answer_key(_read_json(args.answer_key), bundle)
+                result["answer_key_check"] = {
+                    "status": "verified",
+                    "task_count": len(key["keys"]),
+                    "values_recorded": False,
+                }
         sys.stdout.write(_write_json(result, output))
         return 0
     except PilotStudyError as error:
