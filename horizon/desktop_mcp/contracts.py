@@ -207,13 +207,22 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "contextshrink_open",
-        "description": "Open a source using a bounded presentation mode.",
+        "description": (
+            "Open a source in one presentation mode; choose by task. compact: for JSON, logs, "
+            "config or diff files; output is verified or labelled normalized and falls back to "
+            "exact when the saving is small. focused: with a query, to answer a specific question "
+            "in a long document; exact passages only, coverage is partial, so use "
+            "contextshrink_retrieve for exact sections. overview: first, to orient in a long "
+            "document; headings or pages only, not a summary. exact (default): for quoting, full "
+            "review, small files, or when the user asks for everything."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "source": {"type": "string", "minLength": 1, "maxLength": 4096},
                 "mode": {
                     "type": "string",
+                    "description": "focused needs a query; see the tool description.",
                     "enum": ["exact", "compact", "focused", "overview"],
                     "default": "exact",
                 },
@@ -233,7 +242,11 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "contextshrink_retrieve",
-        "description": "Retrieve an exact bounded selector from an available source version.",
+        "description": (
+            "Fetch exact sections of an already-opened source version: lines, markdown section, "
+            "JSON pointer, CSV/TSV rows, PDF page, or DOCX paragraph or table. Use it to follow up "
+            "on focused or overview results."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
