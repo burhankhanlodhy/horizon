@@ -288,3 +288,52 @@ def test_stats_error_is_value_error_with_code() -> None:
         _interval([PairedUnit("p1", Decimal("NaN"))])
     assert isinstance(excinfo.value, StatsError)
     assert excinfo.value.code == "difference_invalid"
+
+
+def test_self_metered_evidence_supports_claims_only_when_made_eligible() -> None:
+    from horizon.desktop_mcp.evidence_stats import SELF_METERED
+
+    units = [PairedUnit(f"g{index % 8}", Decimal("-0.05")) for index in range(16)]
+    interval = paired_difference_interval(units, seed=3)
+    default = savings_decision(
+        interval,
+        min_units=12,
+        min_clusters=6,
+        evidence_class=SELF_METERED,
+        provenance_verified=True,
+    )
+    assert default["claim"] == "none"
+    assert default["reasons"] == ["evidence_not_consented_deidentified"]
+    scoped = savings_decision(
+        interval,
+        min_units=12,
+        min_clusters=6,
+        evidence_class=SELF_METERED,
+        provenance_verified=True,
+        eligible_classes=frozenset({SELF_METERED}),
+    )
+    assert scoped["claim"] == "savings_supported"
+    other = savings_decision(
+        interval,
+        min_units=12,
+        min_clusters=6,
+        evidence_class="consented_deidentified",
+        provenance_verified=True,
+        eligible_classes=frozenset({SELF_METERED}),
+    )
+    assert other["reasons"] == ["evidence_class_not_eligible"]
+
+
+def test_synthetic_can_never_be_made_eligible() -> None:
+    interval = paired_difference_interval(
+        [PairedUnit(f"g{index}", Decimal("-1")) for index in range(4)], seed=1
+    )
+    with pytest.raises(StatsError):
+        savings_decision(
+            interval,
+            min_units=2,
+            min_clusters=2,
+            evidence_class="synthetic",
+            provenance_verified=True,
+            eligible_classes=frozenset({"synthetic"}),
+        )
