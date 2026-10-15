@@ -67,6 +67,8 @@ Windows SIDs. These are manual release checks and remain pending:
 | Cross-SID boundary | A second Windows user cannot decrypt the key, acquire another user's active lease, or reap their files | Pending |
 | Rollback and uninstall | Roll back/uninstall while a companion session is live; verify no unrelated approved-root content is removed | Pending |
 | MCP roles and clipboard | Confirm existing fixed source/result roles and explicit-action clipboard behavior remain unchanged | Existing automated role/clipboard coverage; packaged smoke pending |
+| Approved-root setup | On a clean profile, add one synthetic approved root and one staging root in the extension settings; confirm search lists only files under the approved root and that the staging root is refused when it is outside the approved roots; record the Desktop, extension and runtime versions and the settings file path | Pending |
+| Two-chat search, open and retrieve | Open two chats against the same synthetic approved root; search, open and retrieve the same file in each chat; confirm both chats return identical exact text and that no text from one chat appears in the other; record the report IDs and the cleanup of the synthetic root | Pending |
 
 No external study participants, beta uptake, or economy is represented by this
 suite report. Any M6/M13 measurements remain local harness evidence until
