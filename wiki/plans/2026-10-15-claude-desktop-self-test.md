@@ -188,3 +188,86 @@ example pack and a placeholder model label.
 
 The owner runs it next: install 0.1.2, write the 16-task pack, then follow
 `desktop/mcp/SELF-TEST-GUIDE.md`.
+
+## Revision: single-day run on a separate laptop (2026-10-15)
+
+The owner will run the test in one day, on a different laptop that has the
+Enterprise account and no Python or repository. The changes below replace
+the 8-day schedule.
+
+### Design
+
+- **Bigger generated documents.** Each task then costs about $0.10 or more
+  with Opus, which a cent-resolution meter reads cleanly, so each task can be
+  measured on its own.
+  - The pack has **12 groups of 1 task**, and the tasks use generated
+    documents with computed answers.
+  - Pack minimums are `paired_units: 10` and `groups: 8`, so one voided block
+    does not end the study.
+- **Phases.** The 12 groups are split, by seeded order, into halves H1 and
+  H2. A method order O is chosen by seed from the 4-method orders in which A
+  and B are adjacent, so the Pilot method changes once per half.
+  - H1 runs every method in order O.
+  - H2 runs them in `reverse(O)`.
+
+  That gives 8 phases. Each phase is one method over its half's groups, in
+  seeded order, so every task runs once under every method (48 chats). The
+  mirrored order balances position effects such as short-lived prompt
+  caching.
+- **Readings.** Each block is one task, with a reading before and after it.
+  The wizard waits at least 90 seconds after the answer before the "after"
+  reading, because the running total updates within about a minute.
+- **Phase boundaries.** Each phase starts with its setup checklist. For A or
+  B, that includes the restart and stats check, done in its own chat before
+  the phase's first "before" reading. Spend between blocks is therefore
+  expected at phase boundaries, and only recorded as a warning inside a
+  phase.
+- **Reconciliation by date.** For every local date with blocks, the owner
+  enters that date's Claude Desktop line. It must equal the date's last
+  reading minus its first reading, within $0.01 × (blocks that date + 1). A
+  date that fails excludes all of its blocks.
+  - Using the span includes the setup check chats, which are Desktop spend,
+    so they reconcile.
+  - Any non-Desktop spend in the span, such as Claude Code, makes the date
+    fail, so other products must stay idle all day.
+  - A run that crosses midnight, or resumes the next day, reconciles each
+    date separately. One day is recommended, not required.
+- **Exclusions.** A voided block is excluded and redone straight away with a
+  fresh "before" reading, and does not exclude anything else. A block whose
+  delta is out of range is rejected when entered.
+  `provenance_verified` holds only when every date with included blocks is
+  reconciled.
+- **Units.** One unit per group (task), for each method pair, with cluster =
+  group. Comparisons and decisions are otherwise unchanged.
+
+### Portable kit (no Python on the target laptop)
+
+- The self-test CLI moves into the package as
+  `horizon/desktop_mcp/self_test_cli.py`, and the frozen app gains a
+  `self-test` subcommand. So `contextshrink-desktop.exe self-test run ...`
+  works from the bundle. `desktop/mcp/self_test.py` stays as a thin wrapper
+  for development.
+- `desktop/mcp/self-test/make_dataset.py --out DIR [--seed N]` generates
+  `documents/` and `pack.json` deterministically. Every answer is computed
+  from the generated data, and a test re-derives each answer by parsing the
+  files. The documents are a fictional company's material:
+  - a long operations handbook (Markdown, about 60 KB), with 3 tasks;
+  - an order export (JSON, about 120 KB), with 3 lookup tasks;
+  - service event logs with repetitive runs (`.log` is not a pack suffix,
+    so `.txt`, about 100 KB), with 3 tasks;
+  - a platform configuration (JSON, about 40 KB), with 1 task;
+  - a short contract summary (Markdown, about 3 KB), with 1 control task;
+  - a contacts list (CSV, about 3 KB), with 1 control task.
+
+  Answers are lookups with one location each, not sums over large files.
+- **The kit zip** contains:
+  - `Start Self Test.cmd`, which uses `%~dp0` and runs the bundled exe;
+  - `runtime\`, the frozen one-folder app;
+  - `contextshrink-desktop-<version>.mcpb`;
+  - `documents\`, the folder to approve in the extension;
+  - `pack.json`;
+  - `GUIDE.txt`.
+
+  The state lives in `%LOCALAPPDATA%\ContextShrink\self-test\<study_id>`, and
+  the report is written next to the launcher. The extension version is
+  0.1.3.
