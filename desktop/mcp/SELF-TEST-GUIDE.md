@@ -1,148 +1,118 @@
-# ContextShrink self test: plain guide
+# ContextShrink self test: one-day guide
 
 This test answers one question for your own Claude Enterprise account: does
-ContextShrink make your Claude Desktop work cheaper without making the answers
-worse? You run everything yourself. Cost comes from the usage numbers Claude
-Desktop already shows you.
+ContextShrink make Claude Desktop work cheaper without making the answers worse?
+You run everything yourself. Cost comes from the usage numbers Claude Desktop
+shows you.
 
-Expect about 8 measurement days of 1-2 hours each, and probably $5-15 of
-usage in total.
+Plan for one day: about 3 to 4 hours of work, then one check about 4 hours
+after your last reading. You will run 48 chats in total, with 12 tasks, each
+done once with each of the four methods.
 
-## The four methods
+## Before the day
 
-Every task is done four times, once per method, on different days.
-
-| Method | In Claude Desktop |
-|---|---|
-| **A** ContextShrink, compression off | ContextShrink connector **on**, extension *Pilot method* = `exact_only` |
-| **B** ContextShrink | ContextShrink connector **on**, *Pilot method* = `normal` |
-| **C_normal** Plain Claude | ContextShrink connector **off**; attach the files with the paperclip |
-| **C_tuned** Plain Claude, concise | Same as C_normal; the wizard's prompt starts with ContextShrink's short answer rules |
-
-Use the **same model and effort setting** on every day.
-
-## One-time setup
-
-1. **Install extension 0.1.2.**
-   1. Fully quit Claude Desktop from the tray.
-   2. Remove the old ContextShrink in Settings → Extensions.
-   3. Install `contextshrink-desktop-0.1.2.mcpb`.
-   4. Set your approved folder to a folder that holds your task documents.
-2. **Check the Pilot method switch works.**
-   1. Set *Pilot method* to `exact_only`.
-   2. Fully quit and reopen Claude Desktop.
-   3. Ask Claude "show ContextShrink stats". It should report `evaluation_arm: raw`.
-   4. Set it back to `normal`, restart, and check that it now says `optimized`.
-
-   Do this each time you change it.
-3. **Write your task pack.** Copy `desktop/mcp/self-test/pack.template.json`
-   and replace every example.
-   - **16 tasks in 8 groups of 2.** Each task is a question about one or more
-     of your documents, with one clear right answer.
-   - **Answer types:**
-     - `number`, for example a total, with an optional tolerance;
-     - `text_contains`, for example "90 days" (whole words must appear);
-     - `date`;
-     - `choice`, a list of accepted answers.
-   - **Use a good mix:**
-     - a few JSON or log files (where compact mode helps);
-     - long documents with specific questions (where focused mode helps);
-     - a couple of small files (where nothing should help, which is an honest
-       control).
-   - **Pair tasks of similar size** in a group, so each group costs a few cents
-     or more. The meter only shows whole cents.
-   - Set `model_label` to the model and effort you will use, for example
-     "Claude Opus at standard effort".
-4. **Start the study.**
+1. **Install extension 0.1.2 on the test laptop.** Fully quit Claude Desktop from
+   the tray, remove the old ContextShrink in Settings → Extensions, install the
+   `.mcpb` file, and approve the folder that holds your task documents.
+2. **Write your pack.** Copy `desktop/mcp/self-test/pack.template.json` and
+   replace every example. You need 12 tasks, one per group, each with one clear
+   right answer. Set `model_label` to the model and effort you will use, for
+   example "Claude Opus at standard effort". Keep that setting for the whole day.
+3. **Start the study.** From the folder with the test files:
 
    ```powershell
-   & 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' desktop\mcp\self_test.py init --pack my-pack.json
+   python -m horizon.desktop_mcp self-test init --pack my-pack.json
    ```
 
-   This prints your 8-day plan. The method order is shuffled, so do not change
-   it.
+   It prints the plan (8 phases, 48 chats). Do not change the plan.
 
-## Each measurement day
+## During the day
 
-Run this one command and follow what it says. You can stop with `q` at any
-time and run it again to continue.
+Start the run and follow the screens:
 
 ```powershell
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' desktop\mcp\self_test.py run
+python -m horizon.desktop_mcp self-test run
 ```
 
-The wizard will:
+The run works in **phases**. Each phase is one method, Claude Desktop set up
+one way, and the wizard shows:
 
-1. **Show today's method setup.** Set Claude Desktop that way (restart it if
-   you changed *Pilot method*), then type `yes`.
-2. **For each group,** ask for your usage total from Settings → Usage, for
-   example `20.23`.
-3. **For each task,** show the prompt (press `C` to copy it). Start a **new
-   chat** for every task, paste the prompt, attach files if the method says
-   so, and wait for the whole reply. Then paste the line that starts with
-   `ANSWER:`.
-4. After the group, **make you wait 2 minutes**, then ask for the usage total
-   again.
+- **"Phase N of 8: method X"**, with a setup checklist.
+- **Step 1:** type the running total now, before you change anything.
+- **Step 2:** set Claude Desktop up as the checklist says. For methods A and B,
+  the ContextShrink check chat ("show ContextShrink stats") happens now, before
+  this phase's first group. Its spend is expected and is not measured.
+- Then type `yes`.
 
-Rules for measurement days:
+For each group the wizard then does this:
 
-- Only one measurement day per calendar day, finished on the same day.
-- **No other Claude use while a group is running.** That includes other
-  Claude Desktop chats, and Claude Code or Codex if they bill to this
-  account. Tell Claude Code you are measuring so it stays idle.
-- Avoid other Claude Desktop use for the rest of the day, if you can. It
-  shows up in the daily cross-check.
+1. Asks for the total (**before**). Close other Claude chats first.
+2. Shows the prompt. Press `C` then Enter to copy it. Start a **new chat**, paste
+   the prompt, attach files if the method says so, and wait for the full reply.
+3. Asks you to paste the line that starts with `ANSWER:`. Type `V` instead to
+   void the group; it is redone straight away.
+4. Waits **90 seconds**, then asks for the total again (**after**).
 
-## About 4 hours after each day
+Rules for the day:
 
-Run the same `run` command, or this one:
+- **Use no other Claude product all day.** No other Claude Desktop chats, no
+  Claude Code, no Codex. Anything else on this account lands in the same
+  running total and makes the check fail.
+- Restarts happen only when the Pilot method changes. The checklist says so.
+- You can stop at any prompt with `q`. Run the same `run` command later to carry
+  on; the wizard asks about any group left open.
+- If you run past midnight, the wizard warns you when less than 4 hours remain.
+  You can pause and finish tomorrow: each date is checked separately.
+
+## About 4 hours after your last reading
+
+Run this, or run `run` again, which also checks dates when they are due:
 
 ```powershell
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' desktop\mcp\self_test.py reconcile
+python -m horizon.desktop_mcp self-test reconcile
 ```
 
-It asks for that day's **Claude Desktop** line from the daily breakdown by
-product in Settings → Usage. If it doesn't match your readings, the day is
-marked and you will redo it on another day.
+It asks for the **Claude Desktop** line for each date from the daily breakdown by
+product in Settings → Usage. Type it twice, as it asks. If it matches your
+readings, the date counts. If it does not match, the groups on that date are
+left out of the results.
 
 ## At the end
 
 ```powershell
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' desktop\mcp\self_test.py report --output self-test-report.json
+python -m horizon.desktop_mcp self-test report --output self-test-report.json
 ```
 
-The report shows, for each method:
-
-- the total cost;
-- the number of correct answers;
-- the cost per correct answer.
-
-It also gives a verdict for **ContextShrink (B) vs plain Claude (C_normal)**:
+The report gives, for each method, the total spend, the number of correct
+answers and the cost per correct answer. It also gives a verdict for
+**ContextShrink (B) vs plain Claude (C_normal)**:
 
 | Verdict | Meaning |
 |---|---|
-| `savings_supported` | B was cheaper, with enough clean data to be confident, and its answers were not worse |
+| `savings_supported` | B was cheaper, with enough clean data, and its answers were not worse |
 | `inconclusive` | No clear difference |
 | `cost_increase_supported` | B cost more |
 | `none` | Not enough clean data, or B's answers were worse; the reasons are listed |
 
-Every verdict applies to **your account, this model setting and these tasks
-only**. It is evidence for you, not a general promise.
+It also shows the time each phase started and ended, the warnings, and any
+groups left out, with reasons. Every verdict applies to **your account, this
+model setting and these tasks only**.
 
-Use `status` at any time to see what is done and what is next:
+Use `status` at any time to see progress and the next step:
 
 ```powershell
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' desktop\mcp\self_test.py status
+python -m horizon.desktop_mcp self-test status
 ```
 
 ## Good to know
 
-- **Your data stays local.** The wizard stores your readings and whether each
-  answer was right, in `%LOCALAPPDATA%\ContextShrink\self-test\<study_id>`. It
-  never stores answer text or document contents.
+- **Your data stays local.** The wizard stores readings and whether each answer
+  was right, in `%LOCALAPPDATA%\ContextShrink\self-test\<study_id>`. It never
+  stores answer text or document contents.
+- **Warnings do not remove a group.** If Claude Desktop spent money between two
+  groups of the same phase, the wizard lists a warning and keeps the group.
+  Spend at a phase boundary is expected, because of the setup check.
 - **Method A reads in pages.** With compression off, long files come back in
-  pages, so Claude has to fetch the next pages to read everything. That is
-  the intended baseline.
+  pages. That is the intended baseline.
 - **You'll learn the answers.** That is expected. The prompts are fixed and the
-  method order is shuffled across two rounds, so learning affects all methods
-  roughly equally.
+  method order is shuffled, so learning affects all methods roughly equally.
