@@ -16,6 +16,14 @@ call a model, read provider billing APIs, or automate an administrator export.
 The committed fixture is synthetic software-validation data only. It cannot
 stand in for participant quality, Enterprise usage, or financial results.
 
+> **Updated by evidence hardening (2026-10-14).** Real participant codes are
+> `p_` plus 10 characters from `a-z` and `2-7` only; M7 `P-` codes and hex `p_`
+> codes are rejected. Real cohorts use `assign --seed-out` (never `--seed`), and
+> the seed is revealed later with `verify-assignments --seed-file`. Pilot
+> reports never make a savings claim, because provenance is never verified in
+> the pilot path; digest-checked provenance is in `phase_g_economics.py`. The
+> operator procedure is [`desktop/mcp/PILOT-RUNBOOK.md`](../../desktop/mcp/PILOT-RUNBOOK.md).
+
 ## Run the synthetic workflow
 
 Use the primary checkout's Python 3.12 environment from the repository root:
@@ -35,26 +43,40 @@ snippets without answer/check fields. The instructions and sources are
 authored test material, not participant prompts. Neither command uses the
 network or a provider key.
 
-For a real, consented cohort, generate all participant codes in one invocation
+For a real, consented cohort, generate all participant codes with
+`generate-participant-codes` and assign the whole cohort in one `assign` call,
 so the predeclared four-arm Williams blocks balance across participant and
-task positions. Real participant codes accept `p_<12..32 lowercase hex>` and
-the M7-generated `P-<8 uppercase hex>` format; synthetic codes use
-`syn-p-...`. Consent timestamps are required for real codes and must precede
-every task start. Keep the identity-to-code map
-outside the report directory and outside this repository.
+task positions. Real participant codes are `p_` followed by exactly 10
+characters from `a-z` and `2-7` (for example `p_d67rrbqutu`), as produced by
+`generate-participant-codes` or `pilot_metadata.py participant-code`. Synthetic
+codes use `syn-p-...`. Real codes are not accepted in hex form or as the M7
+`P-<8 uppercase hex>` format. Consent timestamps are required for real codes
+and must precede every task start. Keep the identity-to-code map outside the
+report directory and outside this repository. The operating procedure for a
+real cohort is in [`desktop/mcp/PILOT-RUNBOOK.md`](../../desktop/mcp/PILOT-RUNBOOK.md).
 
 ```powershell
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' -B desktop/mcp/phase_g_pilot.py assign --participant-code p_0123456789ab --participant-code p_1123456789ab --participant-code p_2123456789ab --participant-code p_3123456789ab --seed 20261014 --consent-at-utc 2026-10-14T09:00:00Z --output "$env:TEMP\phase-g-assignments.json"
-& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' -B desktop/mcp/phase_g_pilot.py score-sheet --assignments "$env:TEMP\phase-g-assignments.json" --output "$env:TEMP\phase-g-blind-scores.json"
+& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' -B desktop/mcp/phase_g_pilot.py generate-participant-codes --count 8 > "<STUDY>\codes.txt"
+& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' -B desktop/mcp/phase_g_pilot.py assign --bundle "<STUDY>\bundle.json" --participant-code <code-1> ... --participant-code <code-8> --consent-at-utc 2026-10-20T09:00:00Z --seed-out "<STUDY>\seed.txt" --output "<STUDY>\assignments.json" > $null
+& 'C:\Users\Burhan\OneDrive\Desktop\ContextShrink\.venv\Scripts\python.exe' -B desktop/mcp/phase_g_pilot.py score-sheet --bundle "<STUDY>\bundle.json" --assignments "<STUDY>\assignments.json" --output "<STUDY>\score-sheet.json" > $null
 ```
 
+`assign` with real codes requires `--seed-out` (a new file, kept outside the
+report folder) and rejects `--seed`. It writes only the `seed_commitment` to
+`assignments.json`; publish that commitment, not the seed. The seed is revealed
+after collection with `verify-assignments --seed-file`. Commands echo their JSON
+to standard output as well as to `--output`.
+
 The operator uses each assignment with its matching task card and records an
-allowlisted observation after the task. `score-sheet` emits a fully shaped,
+observation after the task (schema-checked fields; `failure_code` and
+`unsupported_code` are safe identifiers, not an allowlist). `score-sheet` emits a fully shaped,
 blinded worksheet initialized to `no_score`/`unscored`; the scorer fills only
 the declared fields and replaces `scorer_code: unassigned`. The resulting
 score-sheet JSON can be passed directly to `report --scores` without manual
 conversion. `report` validates assignment, observation, blind-score and
-optional admin-window JSON and emits the report.
+optional admin-window JSON and emits the report. Pass `--seed-file` (the revealed
+seed) to recheck the allocation; without it the report says
+`deferred_until_seed_reveal`.
 The participant should review the collection purpose, fields, destination,
 retention, and withdrawal/deletion procedure before consenting. Stop collection
 if that local study-owner process has not been approved and communicated.
@@ -81,9 +103,13 @@ An assignment envelope includes `schema_version`, `study_id`, `bundle_sha256`,
 arm and includes `assignment_id`, `score_id`, `pair_id`, `participant_id`,
 `participant_kind`, `task_id`, `stratum`, `locale`, one-based `order`, derived
 `blind_arm_code`, and consent status/time/scope. Arm IDs are exactly `A`, `B`,
-`C_normal`, and `C_tuned`. Assignment imports recompute IDs, Williams order,
-and the blind alias from the study seed. The planned cohort target is a
-multiple of four.
+`C_normal`, and `C_tuned`. For synthetic cohorts (`public_synthetic`), import
+recomputes IDs, Williams order and the blind alias from the public seed. For
+real cohorts (`committed_secret`), import checks structure only until the seed
+is revealed; `verify-assignments --seed-file` (or `report --seed-file`) then
+recomputes Williams order and blind aliases and checks the commitment. The
+bundle's `target_participants` must be a multiple of four. `assign` does not
+compare the number of codes with that target; the operator must match them.
 
 Each observation contains the assignment keys, an outcome `status`,
 `start_utc`/`end_utc`, locale, `versions` (`desktop`, `extension`, `model`,
@@ -94,8 +120,9 @@ latency, retries, tool calls, retrieval bytes, estimated input/output tokens,
 and schema/instruction tokens. `provider_usage` holds task-level aggregate
 uncached input, 5-minute and 1-hour cache writes, cache reads, and billed
 output buckets when known. Every null has a bounded `metric_missing_reasons`
-or `usage_missing_reasons` entry. `failure_code` and `unsupported_code` are
-bounded allowlisted identifiers required only for the matching status.
+or `usage_missing_reasons` entry. `failure_code` is required for `failed` and
+`timed_out`; `unsupported_code` is required for `unsupported`. Both are safe
+identifiers matching `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, not an allowlist.
 
 The M6 `provider_usage` record is an aggregate for the whole assigned task,
 not a per-request or per-model ledger. Set `versions.model` only when all
@@ -105,10 +132,13 @@ requests. M13 may add a separate request-level, per-model economics sidecar
 keyed by `assignment_id` and must reconcile it to these task totals when the
 M6 usage counters are present.
 
-M7's `P-<8 uppercase hex>` participant code is accepted by this schema. An
-operator adapting M7-local collection records must explicitly map only these
-allowlisted metadata keys into M6; raw prompts, source text, local paths,
-credentials and arbitrary tool arguments are never accepted. If an upstream
+M7's `P-<8 uppercase hex>` participant code is not accepted by this schema
+(`participant_code_invalid`), and neither is a `p_` code in hex form. Real codes
+must be `p_` plus 10 characters from `a-z` and `2-7`. The M7 metadata export is
+also not an input to `report` (it is rejected with `input_array_required`). An
+operator who builds M6 observations from M7 measurements must write them by hand
+and must not carry prompts, source text, local paths, credentials or arbitrary
+tool arguments into the M6 files. If an upstream
 counter only reports combined cache-write tokens without 5-minute versus
 1-hour TTL, leave both M6 fields null with a missing reason instead of
 splitting or estimating the value.
@@ -129,7 +159,10 @@ Every mapped assignment must have a consented observed task entirely inside
 the mapped time window. Mappings must cover each participant/arm's observed
 assignment set exactly. Synthetic assignments cannot import usage windows.
 Freshness is checked against `study_plan.refresh_max_age_hours`; time-window
-data is observational and does not create a causal claim. All-null usage is
+data is observational and does not create a causal claim. The window file has no
+export digest, and the pilot never sets provenance as verified, so the pilot
+report cannot produce a savings claim. Digest-checked provenance is handled only
+by `phase_g_economics.py --admin-export` (see the runbook, section 7). All-null usage is
 unavailable; partial bucket or cost coverage remains explicitly partial.
 
 For M13, these stable record keys can be consumed without importing the M6
@@ -163,11 +196,14 @@ M13 should retain the request ledger and mark model-rate comparisons unmatched.
 
 The output retains three separate sections: `payload_estimate`,
 `modeled_economics`, and `enterprise_observed`. `payload_estimate` contains
-per-arm token estimate coverage and an A-minus-B paired comparison. A pair is
-included only when both tasks completed and model, settings, source snapshot,
-and counter version match. Mismatches and failed pairs are counted by reason;
-the signed delta is preserved, including zero or negative results. These are
-participant-supplied inner-payload estimates, not provider billing totals.
+per-arm token estimate coverage and an A-minus-B paired comparison (the
+`signed_token_delta_a_minus_b` field). The statistical comparison (the interval
+and the savings decision) uses the opposite direction: B minus A, the candidate
+minus the reference. A pair is included only when both tasks completed and
+model, settings, source snapshot, and counter version match. Mismatches and
+failed pairs are counted by reason; the signed delta is preserved, including
+zero or negative results. These are participant-supplied inner-payload
+estimates, not provider billing totals.
 An outcome marked `completed` means only that the assigned task produced a
 recorded completion; it does not establish answer quality. Reports keep
 `quality_pass_count` null until the owner predeclares a pass criterion and
@@ -177,7 +213,9 @@ qualified independent blind scores establish it.
 rate card or service-cost assumption. `enterprise_observed` requires consented
 real participant assignments, fresh administrator windows, exact task
 mapping, high/medium mapping confidence, documented exclusions and observed
-usage. Missing costs, null usage buckets, or stale windows cannot become zero.
+usage. The pilot's status check does not read `unrelated_activity`; the economics
+harness does (`unknown` or `present_unmapped` withholds arm costs there). Missing
+costs, null usage buckets, or stale windows cannot become zero.
 Observed time-window totals remain separate from token estimates and state
 `causal_claim: false`. The fixture report always states
 `evidence_class: synthetic`, `enterprise_usage_observed: false`, and

@@ -364,8 +364,10 @@ The M6 and M13 report CLIs each produced JSON semantically equal to their
 committed golden report. The checked-in reports use CRLF while CLI output uses
 LF, so byte-for-byte comparison differs only by line endings.
 
-Offline cross-stage checks verified that an M7-generated `P-XXXXXXXX` code is
-accepted by M6 assignment, consent and blinded worksheet flows, and that M6
+Offline cross-stage checks verified that an M7-generated participant code is
+accepted by M6 assignment, consent and blinded worksheet flows (since the
+evidence hardening, both use the generated `p_[a-z2-7]{10}` format; the old
+`P-XXXXXXXX` codes are rejected), and that M6
 builds a pending report with no observed Enterprise usage or savings claim.
 The canonical M6 synthetic envelope also passes M6's strict validators and is
 accepted by M13. M13 correctly rejects a synthetic-evidence envelope containing
