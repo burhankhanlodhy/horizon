@@ -1,12 +1,30 @@
-"""Versioned, metadata-only contract for the Phase G Enterprise pilot harness."""
+"""Versioned, metadata-only contract for the Phase G Enterprise pilot harness.
+
+Allocation has two modes:
+
+- ``committed_secret`` (real cohorts): the operator generates a 32-byte seed
+  (64 hex characters), keeps it in a separate seed file, and the assignment
+  file stores only ``seed_commitment``, the SHA-256 of the seed's hex text.
+  Participant order is a permutation drawn from ``random.Random(int(seed_hex, 16))``
+  over the sorted participant codes. Williams rows and blind aliases derive from
+  the seed. Before the seed is revealed, import checks structure only; after
+  reveal, ``validate_assignment_set(..., seed_hex=...)`` recomputes everything
+  and checks the commitment.
+- ``public_synthetic`` (fixtures only): an integer seed that is public. Synthetic
+  seeds are not secret; anyone can recompute their allocation.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import random
 import re
+import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
+from fractions import Fraction
+from itertools import combinations
 from typing import Any
 
 SCHEMA_VERSION = "phase_g_study/v1"
@@ -21,9 +39,16 @@ OUTCOME_STATUSES = (
     "not_run",
 )
 SCORE_STATUSES = ("scored", "no_score")
+ALLOCATION_METHOD = "williams_seeded_permutation_v2"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-PSEUDONYM = re.compile(r"^(?:p_[a-f0-9]{12,32}|P-[A-F0-9]{8})$")
+TASK_ID = re.compile(r"^t_[a-z0-9_]{1,40}$")
+PSEUDONYM = re.compile(r"^p_[a-z2-7]{10}$")
 SYNTHETIC_ID = re.compile(r"^syn-p-[a-z0-9]{4,24}$")
+SCORER_CODE = re.compile(r"^s_[a-z2-7]{10}$")
+SEED_HEX = re.compile(r"^[0-9a-f]{64}$")
+CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+UNASSIGNED_SCORER = "unassigned"
+MAX_SCORE_ROWS_PER_ASSIGNMENT = 8
 SAFE_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,63}$")
 DECIMAL = re.compile(r"^-?(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,8})?$")
 CURRENCY = re.compile(r"^[A-Z]{3}$")
@@ -50,6 +75,24 @@ MISSING_REASONS = {
     "not_run",
     "counter_unavailable",
 }
+AGREEMENT_FIELDS = (
+    "correctness_pass",
+    "completeness_pass",
+    "citations_pass",
+    "no_unsupported_claim_pass",
+)
+PASS_CRITERIA: dict[str, tuple[str, ...]] = {
+    "correct_only": ("correctness_pass",),
+    "correct_complete_cited_no_unsupported": AGREEMENT_FIELDS,
+}
+PLAN_KEYS = {
+    "target_participants",
+    "minimum_completed_per_arm",
+    "stopping_rule",
+    "stratum_weights",
+    "refresh_max_age_hours",
+}
+OPTIONAL_PLAN_KEYS = {"quality_pass_criterion"}
 
 
 class PilotStudyError(ValueError):
@@ -120,6 +163,19 @@ def _missing_values(values: Any, reasons: Any, keys: tuple[str, ...]) -> dict[st
     return result
 
 
+def _typed_check_value(kind: Any, value: Any) -> None:
+    if kind == "integer_equal":
+        _int(value)
+    elif kind == "boolean_equal":
+        if type(value) is not bool:
+            raise PilotStudyError("synthetic_check_invalid")
+    elif kind == "literal_equal":
+        if not isinstance(value, str) or len(value) > 120:
+            raise PilotStudyError("synthetic_check_invalid")
+    else:
+        raise PilotStudyError("synthetic_check_kind_invalid")
+
+
 def validate_bundle(bundle: Any) -> dict[str, Any]:
     root = _keys(
         bundle,
@@ -131,17 +187,18 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
     if root["bundle_kind"] != "synthetic_task_bundle":
         raise PilotStudyError("bundle_kind_unsupported")
     _id(root["study_id"])
-    plan = _keys(
-        root["study_plan"],
-        {
-            "target_participants",
-            "minimum_completed_per_arm",
-            "stopping_rule",
-            "stratum_weights",
-            "refresh_max_age_hours",
-        },
-        "study_plan_invalid",
-    )
+    plan = root["study_plan"]
+    if (
+        not isinstance(plan, dict)
+        or not PLAN_KEYS <= set(plan)
+        or set(plan) - PLAN_KEYS - OPTIONAL_PLAN_KEYS
+    ):
+        raise PilotStudyError("study_plan_invalid")
+    if "quality_pass_criterion" in plan and (
+        not isinstance(plan["quality_pass_criterion"], str)
+        or plan["quality_pass_criterion"] not in PASS_CRITERIA
+    ):
+        raise PilotStudyError("quality_pass_criterion_invalid")
     target = _int(plan["target_participants"], 4, 10000)
     if target % 4:
         raise PilotStudyError("target_must_complete_counterbalance_block")
@@ -174,10 +231,12 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
                 "operator_instruction",
                 "synthetic_sources",
                 "synthetic_check",
+                "synthetic_observed",
             },
             "task_invalid",
         )
-        task_id, stratum = _id(item["task_id"]), _id(item["stratum"])
+        task_id = _id(item["task_id"], TASK_ID)
+        stratum = _id(item["stratum"])
         _id(item["locale"])
         if (
             not isinstance(item["operator_instruction"], str)
@@ -209,16 +268,8 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
             raise PilotStudyError("task_id_duplicate_or_stratum_unknown")
         seen.add(task_id)
         check = _keys(item["synthetic_check"], {"kind", "expected"}, "synthetic_check_invalid")
-        if check["kind"] == "integer_equal":
-            _int(check["expected"])
-        elif check["kind"] == "boolean_equal":
-            if type(check["expected"]) is not bool:
-                raise PilotStudyError("synthetic_check_invalid")
-        elif check["kind"] == "literal_equal":
-            if not isinstance(check["expected"], str) or len(check["expected"]) > 120:
-                raise PilotStudyError("synthetic_check_invalid")
-        else:
-            raise PilotStudyError("synthetic_check_kind_invalid")
+        _typed_check_value(check["kind"], check["expected"])
+        _typed_check_value(check["kind"], item["synthetic_observed"])
     return root
 
 
@@ -233,6 +284,51 @@ def _participant_kind(code: Any) -> str:
 def participant_code_kind(code: Any) -> str:
     """Return the bounded participant-code class for CLI consent handling."""
     return _participant_kind(code)
+
+
+def _random_code(prefix: str) -> str:
+    return prefix + "".join(secrets.choice(CODE_ALPHABET) for _ in range(10))
+
+
+def _count_argument(count: Any) -> int:
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
+        raise PilotStudyError("code_count_invalid")
+    return count
+
+
+def generate_participant_codes(count: int) -> list[str]:
+    """Return unique random participant codes matching ``^p_[a-z2-7]{10}$``."""
+    target = _count_argument(count)
+    codes: list[str] = []
+    seen: set[str] = set()
+    while len(codes) < target:
+        code = _random_code("p_")
+        if code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
+def generate_scorer_codes(count: int) -> list[str]:
+    """Return unique random scorer codes matching ``^s_[a-z2-7]{10}$``."""
+    target = _count_argument(count)
+    codes: list[str] = []
+    seen: set[str] = set()
+    while len(codes) < target:
+        code = _random_code("s_")
+        if code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
+def seed_commitment(seed_hex: str) -> str:
+    """SHA-256 of the 64-character lowercase hex seed text."""
+    return hashlib.sha256(seed_hex.encode("ascii")).hexdigest()
+
+
+def _synthetic_seed_hex(seed: int) -> str:
+    return format(seed, "064x")
 
 
 def _hash_id(prefix: str, value: str, length: int) -> str:
@@ -251,6 +347,20 @@ def _williams_arms(offset: int) -> tuple[str, ...]:
     return sequences[offset % 4]
 
 
+def allocation_offsets(seed_hex: str, participant_ids: list[str]) -> dict[str, int]:
+    """Position of each participant in a seeded permutation of the sorted cohort."""
+    if not isinstance(seed_hex, str) or not SEED_HEX.fullmatch(seed_hex):
+        raise PilotStudyError("seed_hex_invalid")
+    permuted = sorted(set(participant_ids))
+    random.Random(int(seed_hex, 16)).shuffle(permuted)
+    return {participant: index for index, participant in enumerate(permuted)}
+
+
+def _blind_code(study_id: str, participant: str, task_id: str, seed_hex: str, arm: str) -> str:
+    material = f"{SCHEMA_VERSION}|{study_id}|{participant}|{task_id}|{seed_hex}|blind|{arm}"
+    return "blind_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
 def _assignment_id(study: str, participant: str, task: str, arm: str) -> str:
     return _hash_id("asg_", f"{SCHEMA_VERSION}|{study}|{participant}|{task}|{arm}", 24)
 
@@ -259,26 +369,53 @@ def build_assignments(
     bundle: Any,
     participant_ids: list[str],
     *,
-    seed: int,
+    seed: int | None = None,
     consented_at_utc: dict[str, str] | None = None,
+    seed_hex: str | None = None,
 ) -> dict[str, Any]:
+    """Build an assignment set.
+
+    Synthetic codes take an integer ``seed`` (public). Real codes take a
+    ``seed_hex`` (see ``build_committed_assignments`` to generate one); the
+    returned file contains only ``seed_commitment``.
+    """
     manifest = validate_bundle(bundle)
-    seed = _int(seed, high=2**32 - 1)
     if not isinstance(participant_ids, list) or not participant_ids or len(participant_ids) > 1000:
         raise PilotStudyError("participants_invalid")
     if not all(isinstance(value, str) for value in participant_ids):
         raise PilotStudyError("participant_code_invalid")
     if len(set(participant_ids)) != len(participant_ids):
         raise PilotStudyError("participant_code_duplicate")
+    kinds = {_participant_kind(participant) for participant in participant_ids}
+    if len(kinds) != 1:
+        raise PilotStudyError("participant_kind_mixed")
+    kind = kinds.pop()
     consent_map = consented_at_utc or {}
     if not isinstance(consent_map, dict) or set(consent_map) - set(participant_ids):
         raise PilotStudyError("consent_map_invalid")
-    rows: list[dict[str, Any]] = []
-    sorted_participants = sorted(participant_ids)
-    for participant_position, participant in enumerate(sorted_participants):
-        kind = _participant_kind(participant)
+    if kind == "synthetic":
+        if seed is None:
+            raise PilotStudyError("synthetic_seed_required")
+        if seed_hex is not None:
+            raise PilotStudyError("secret_seed_not_applicable_to_synthetic")
+        if consent_map:
+            raise PilotStudyError("synthetic_consent_not_applicable")
+        public_seed = _int(seed, high=2**32 - 1)
+        allocation_seed = _synthetic_seed_hex(public_seed)
+        seed_mode, seed_field, commitment = "public_synthetic", public_seed, None
+    else:
+        if seed is not None:
+            raise PilotStudyError("seed_not_applicable_to_real_cohort")
+        if seed_hex is None:
+            raise PilotStudyError("secret_seed_required")
+        if not isinstance(seed_hex, str) or not SEED_HEX.fullmatch(seed_hex):
+            raise PilotStudyError("seed_hex_invalid")
+        allocation_seed = seed_hex
+        seed_mode, seed_field, commitment = "committed_secret", None, seed_commitment(seed_hex)
+    consents: dict[str, dict[str, str]] = {}
+    for participant in participant_ids:
         if kind == "pseudonymous":
-            consent = {
+            consents[participant] = {
                 "status": "consented",
                 "consented_at_utc": _utc(consent_map.get(participant), "consent_required")
                 .isoformat()
@@ -286,24 +423,16 @@ def build_assignments(
                 "scope": SCHEMA_VERSION,
             }
         else:
-            if participant in consent_map:
-                raise PilotStudyError("synthetic_consent_not_applicable")
-            consent = {"status": "synthetic_not_applicable"}
-        for task in manifest["tasks"]:
+            consents[participant] = {"status": "synthetic_not_applicable"}
+    offsets = allocation_offsets(allocation_seed, participant_ids)
+    rows: list[dict[str, Any]] = []
+    for participant in sorted(participant_ids):
+        for task_position, task in enumerate(manifest["tasks"]):
             task_id = task["task_id"]
             pair_id = _hash_id("pair_", f"{manifest['study_id']}|{participant}|{task_id}", 20)
-            task_position = next(
-                i
-                for i, candidate in enumerate(manifest["tasks"])
-                if candidate["task_id"] == task_id
-            )
-            order_key = f"{manifest['study_id']}|{participant}|{task_id}|{seed}"
-            ordered = _williams_arms(participant_position + task_position + seed)
+            ordered = _williams_arms(offsets[participant] + task_position)
             for position, arm in enumerate(ordered, 1):
                 assignment_id = _assignment_id(manifest["study_id"], participant, task_id, arm)
-                blind_code = (
-                    "blind_" + hashlib.sha256(f"{order_key}|blind|{arm}".encode()).hexdigest()[:8]
-                )
                 rows.append(
                     {
                         "assignment_id": assignment_id,
@@ -316,8 +445,10 @@ def build_assignments(
                         "locale": task["locale"],
                         "arm": arm,
                         "order": position,
-                        "blind_arm_code": blind_code,
-                        "consent": consent,
+                        "blind_arm_code": _blind_code(
+                            manifest["study_id"], participant, task_id, allocation_seed, arm
+                        ),
+                        "consent": dict(consents[participant]),
                     }
                 )
     rows.sort(key=lambda x: (x["participant_id"], x["task_id"], x["order"]))
@@ -325,24 +456,89 @@ def build_assignments(
         "schema_version": SCHEMA_VERSION,
         "study_id": manifest["study_id"],
         "bundle_sha256": digest_json(manifest),
-        "seed": seed,
+        "seed_mode": seed_mode,
+        "seed": seed_field,
+        "seed_commitment": commitment,
         "arms": list(ARM_IDS),
         "assignments": rows,
     }
 
 
-def validate_assignment_set(bundle: Any, value: Any) -> dict[str, Any]:
+def build_committed_assignments(
+    bundle: Any,
+    participant_ids: list[str],
+    *,
+    consented_at_utc: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Generate a 32-byte secret seed and build a real-cohort assignment set.
+
+    Returns ``(assignment_set, seed_hex)``. The caller must store ``seed_hex``
+    outside the assignment file; the assignment set holds only the commitment.
+    """
+    seed_hex = secrets.token_hex(32)
+    assignments = build_assignments(
+        bundle,
+        participant_ids,
+        seed_hex=seed_hex,
+        consented_at_utc=consented_at_utc,
+    )
+    return assignments, seed_hex
+
+
+def _verification_seed(root: dict[str, Any], seed_hex: str | None) -> str | None:
+    mode = root["seed_mode"]
+    if mode == "public_synthetic":
+        if root["seed_commitment"] is not None or root["seed"] is None:
+            raise PilotStudyError("seed_fields_invalid")
+        derived = _synthetic_seed_hex(_int(root["seed"], high=2**32 - 1))
+        if seed_hex is not None and seed_hex != derived:
+            raise PilotStudyError("seed_mismatch")
+        return derived
+    if mode == "committed_secret":
+        commitment = root["seed_commitment"]
+        if root["seed"] is not None:
+            raise PilotStudyError("seed_fields_invalid")
+        if not isinstance(commitment, str) or not SEED_HEX.fullmatch(commitment):
+            raise PilotStudyError("seed_commitment_invalid")
+        if seed_hex is None:
+            return None
+        if not isinstance(seed_hex, str) or not SEED_HEX.fullmatch(seed_hex):
+            raise PilotStudyError("seed_hex_invalid")
+        if seed_commitment(seed_hex) != commitment:
+            raise PilotStudyError("seed_commitment_mismatch")
+        return seed_hex
+    raise PilotStudyError("seed_mode_invalid")
+
+
+def validate_assignment_set(
+    bundle: Any, value: Any, *, seed_hex: str | None = None
+) -> dict[str, Any]:
+    """Validate an assignment set.
+
+    Without ``seed_hex`` a committed-secret set is checked structurally only;
+    Williams order and blind aliases are verified once the seed is revealed.
+    Synthetic sets always recompute from their public seed.
+    """
     manifest = validate_bundle(bundle)
     root = _keys(
         value,
-        {"schema_version", "study_id", "bundle_sha256", "seed", "arms", "assignments"},
+        {
+            "schema_version",
+            "study_id",
+            "bundle_sha256",
+            "seed_mode",
+            "seed",
+            "seed_commitment",
+            "arms",
+            "assignments",
+        },
         "assignment_set_invalid",
     )
     if root["schema_version"] != SCHEMA_VERSION or root["study_id"] != manifest["study_id"]:
         raise PilotStudyError("assignment_study_mismatch")
     if root["bundle_sha256"] != digest_json(manifest) or root["arms"] != list(ARM_IDS):
         raise PilotStudyError("assignment_bundle_or_arm_mismatch")
-    _int(root["seed"], high=2**32 - 1)
+    verify_seed = _verification_seed(root, seed_hex)
     rows = root["assignments"]
     if not isinstance(rows, list) or not rows or len(rows) > 2_000_000:
         raise PilotStudyError("assignments_invalid")
@@ -413,27 +609,23 @@ def validate_assignment_set(bundle: Any, value: Any) -> dict[str, Any]:
         raise PilotStudyError("assignment_pair_missing")
     if len({x["participant_kind"] for x in rows}) != 1:
         raise PilotStudyError("participant_kind_mixed")
-    participant_positions = {
-        participant: position
-        for position, participant in enumerate(sorted({row["participant_id"] for row in rows}))
-    }
+    participants = sorted({row["participant_id"] for row in rows})
     task_positions = {task["task_id"]: position for position, task in enumerate(manifest["tasks"])}
+    offsets = allocation_offsets(verify_seed, participants) if verify_seed is not None else None
     for (participant, task_id), group in groups.items():
         if {x["arm"] for x in group} != set(ARM_IDS) or {x["order"] for x in group} != set(
             range(1, 5)
         ):
             raise PilotStudyError("assignment_arm_or_order_missing")
-        order_key = f"{manifest['study_id']}|{participant}|{task_id}|{root['seed']}"
-        expected_order = _williams_arms(
-            participant_positions[participant] + task_positions[task_id] + root["seed"]
-        )
+        if offsets is None:
+            continue
         by_order = sorted(group, key=lambda row: row["order"])
+        expected_order = _williams_arms(offsets[participant] + task_positions[task_id])
         if tuple(row["arm"] for row in by_order) != expected_order:
             raise PilotStudyError("assignment_order_seed_mismatch")
         for row in group:
-            expected_blind = (
-                "blind_"
-                + hashlib.sha256(f"{order_key}|blind|{row['arm']}".encode()).hexdigest()[:8]
+            expected_blind = _blind_code(
+                manifest["study_id"], participant, task_id, verify_seed, row["arm"]
             )
             if row["blind_arm_code"] != expected_blind:
                 raise PilotStudyError("assignment_blind_code_seed_mismatch")
@@ -545,15 +737,27 @@ def validate_observations(bundle: Any, assignment_set: Any, value: Any) -> list[
     return output
 
 
+def _check_scorer_code(code: Any, status: str, participant_kind: str) -> None:
+    if code == UNASSIGNED_SCORER:
+        if status != "no_score":
+            raise PilotStudyError("scorer_code_unassigned")
+        return
+    if participant_kind == "synthetic":
+        _id(code)
+        return
+    if not isinstance(code, str) or not SCORER_CODE.fullmatch(code):
+        raise PilotStudyError("scorer_code_invalid")
+
+
 def validate_scores(
     bundle: Any, assignment_set: Any, observations: list[dict[str, Any]], value: Any
 ) -> list[dict[str, Any]]:
     assignments = validate_assignment_set(bundle, assignment_set)["assignments"]
     index = {row["score_id"]: row for row in assignments}
     observation_by_id = {row["assignment_id"]: row for row in observations}
-    if not isinstance(value, list) or len(value) > len(index):
+    if not isinstance(value, list) or len(value) > len(index) * MAX_SCORE_ROWS_PER_ASSIGNMENT:
         raise PilotStudyError("scores_invalid")
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     out: list[dict[str, Any]] = []
     allowed = {
         "correctness": {"correct", "partial", "incorrect", "unscored"},
@@ -584,17 +788,21 @@ def validate_scores(
         assigned = index.get(item["score_id"])
         if (
             assigned is None
-            or item["score_id"] in seen
             or item["blinded_arm_code"] != assigned["blind_arm_code"]
             or ("task_id" in item and item["task_id"] != assigned["task_id"])
         ):
             raise PilotStudyError("score_assignment_or_blind_code_invalid")
-        if assigned["participant_kind"] == "synthetic" and item.get("status") == "scored":
-            raise PilotStudyError("synthetic_participant_quality_score_forbidden")
-        seen.add(item["score_id"])
-        _id(item["scorer_code"])
         if not isinstance(item["status"], str) or item["status"] not in SCORE_STATUSES:
             raise PilotStudyError("score_status_invalid")
+        if assigned["participant_kind"] == "synthetic" and item["status"] == "scored":
+            raise PilotStudyError("synthetic_participant_quality_score_forbidden")
+        if not isinstance(item["scorer_code"], str):
+            raise PilotStudyError("scorer_code_invalid")
+        _check_scorer_code(item["scorer_code"], item["status"], assigned["participant_kind"])
+        pair = (item["score_id"], item["scorer_code"])
+        if pair in seen:
+            raise PilotStudyError("duplicate_scorer_for_assignment")
+        seen.add(pair)
         observation = observation_by_id.get(assigned["assignment_id"])
         if observation is None or observation["status"] != "completed":
             if item["status"] != "no_score":
@@ -758,6 +966,94 @@ def validate_usage_windows(
     return result
 
 
+def _binary_pass(row: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "correctness_pass": row["correctness"] == "correct",
+        "completeness_pass": row["completeness"] == "complete",
+        "citations_pass": row["citations"] in {"complete", "not_required"},
+        "no_unsupported_claim_pass": row["unsupported_claim"] == "no",
+    }
+
+
+def cohens_kappa(pairs: list[tuple[bool, bool]]) -> Fraction | None:
+    """Cohen's kappa for two raters' binary labels; None when chance agreement is 1."""
+    total = len(pairs)
+    if total == 0:
+        return None
+    both = sum(1 for first, second in pairs if first and second)
+    first_only = sum(1 for first, second in pairs if first and not second)
+    second_only = sum(1 for first, second in pairs if not first and second)
+    neither = total - both - first_only - second_only
+    observed = Fraction(both + neither, total)
+    first_yes = Fraction(both + first_only, total)
+    second_yes = Fraction(both + second_only, total)
+    expected = first_yes * second_yes + (1 - first_yes) * (1 - second_yes)
+    if expected == 1:
+        return None
+    return (observed - expected) / (1 - expected)
+
+
+def _decimal_text(value: Fraction) -> str:
+    return str((Decimal(value.numerator) / Decimal(value.denominator)).quantize(Decimal("0.0001")))
+
+
+def _agreement_summary(items: list[list[dict[str, Any]]], distinct_scorers: int) -> dict[str, Any]:
+    if not items:
+        return {
+            "status": "not_applicable",
+            "reason": "no_assignment_has_two_scorers",
+            "items_with_two_or_more_scorers": 0,
+            "distinct_scorer_count": distinct_scorers,
+            "fields": {},
+        }
+    fields: dict[str, Any] = {}
+    for field in AGREEMENT_FIELDS:
+        agreeing = 0
+        pairs = 0
+        kappa_pairs: list[tuple[bool, bool]] = []
+        for group in items:
+            ordered = sorted(group, key=lambda row: row["scorer_code"])
+            values = [_binary_pass(row)[field] for row in ordered]
+            for i, j in combinations(range(len(values)), 2):
+                pairs += 1
+                agreeing += values[i] == values[j]
+            if distinct_scorers == 2 and len(values) == 2:
+                kappa_pairs.append((values[0], values[1]))
+        entry: dict[str, Any] = {
+            "pair_count": pairs,
+            "agreeing_pair_count": agreeing,
+            "percent_agreement": _decimal_text(Fraction(agreeing, pairs)) if pairs else None,
+            "cohens_kappa": None,
+            "kappa_status": "requires_exactly_two_scorers",
+        }
+        if distinct_scorers == 2:
+            kappa = cohens_kappa(kappa_pairs)
+            if kappa is None:
+                entry["kappa_status"] = "undefined_chance_agreement_is_one"
+            else:
+                entry["cohens_kappa"] = _decimal_text(kappa)
+                entry["kappa_status"] = "computed"
+        fields[field] = entry
+    return {
+        "status": "computed",
+        "items_with_two_or_more_scorers": len(items),
+        "distinct_scorer_count": distinct_scorers,
+        "fields": fields,
+    }
+
+
+def _quality_status(has_scores: bool, criterion: str | None) -> str:
+    if not has_scores:
+        return "not_scored"
+    return "scored" if criterion else "pending_pass_criterion"
+
+
+def _allocation_verification(seed_mode: str, seed_revealed: bool) -> str:
+    if seed_mode == "public_synthetic":
+        return "public_synthetic_seed_verified"
+    return "verified_with_revealed_seed" if seed_revealed else "deferred_until_seed_reveal"
+
+
 def build_report(
     bundle: Any,
     assignment_set: Any,
@@ -766,39 +1062,66 @@ def build_report(
     *,
     as_of_utc: str,
     usage_windows: Any = None,
+    seed_hex: str | None = None,
 ) -> dict[str, Any]:
     manifest = validate_bundle(bundle)
-    assignments = validate_assignment_set(manifest, assignment_set)
+    assignments = validate_assignment_set(manifest, assignment_set, seed_hex=seed_hex)
     observed = validate_observations(manifest, assignments, observations)
     scored = validate_scores(manifest, assignments, observed, scores)
     windows = validate_usage_windows(
         manifest, assignments, observed, usage_windows, as_of_utc=as_of_utc
     )
+    criterion = manifest["study_plan"].get("quality_pass_criterion")
     by_observation = {row["assignment_id"]: row for row in observed}
-    by_score = {row["score_id"]: row for row in scored}
-    arms: dict[str, Any] = {}
+    scored_by_score: dict[str, list[dict[str, Any]]] = {}
+    for row in scored:
+        if row["status"] == "scored":
+            scored_by_score.setdefault(row["score_id"], []).append(row)
     score_dimensions = {
         "correctness": ("correct", "partial", "incorrect", "unscored"),
         "completeness": ("complete", "partial", "incomplete", "unscored"),
         "citations": ("complete", "partial", "missing", "not_required", "unscored"),
         "unsupported_claim": ("yes", "no", "unknown", "unscored"),
     }
+    per_assignment = [
+        {
+            "score_id": row["score_id"],
+            "task_id": row["task_id"],
+            "arm": row["arm"],
+            "status": "scored" if scored_by_score.get(row["score_id"]) else "no_score",
+            "scored_row_count": len(scored_by_score.get(row["score_id"], [])),
+        }
+        for row in assignments["assignments"]
+    ]
+    arms: dict[str, Any] = {}
     for arm in ARM_IDS:
         assigned = [row for row in assignments["assignments"] if row["arm"] == arm]
         outcomes = dict.fromkeys(OUTCOME_STATUSES, 0)
         score_counts = dict.fromkeys(SCORE_STATUSES, 0)
-        for assignment in assigned:
-            observation = by_observation.get(assignment["assignment_id"])
-            outcomes[observation["status"] if observation else "not_run"] += 1
-            score = by_score.get(assignment["score_id"])
-            score_counts[score["status"] if score else "no_score"] += 1
         dimension_counts = {
             key: dict.fromkeys(labels, 0) for key, labels in score_dimensions.items()
         }
+        arm_scored: list[list[dict[str, Any]]] = []
         for assignment in assigned:
-            score = by_score.get(assignment["score_id"])
-            for dimension in score_dimensions:
-                dimension_counts[dimension][score[dimension] if score else "unscored"] += 1
+            observation = by_observation.get(assignment["assignment_id"])
+            outcomes[observation["status"] if observation else "not_run"] += 1
+            rows = scored_by_score.get(assignment["score_id"], [])
+            score_counts["scored" if rows else "no_score"] += 1
+            if rows:
+                arm_scored.append(rows)
+                for row in rows:
+                    for dimension in score_dimensions:
+                        dimension_counts[dimension][row[dimension]] += 1
+            else:
+                for dimension in score_dimensions:
+                    dimension_counts[dimension]["unscored"] += 1
+        pass_count = None
+        if criterion:
+            fields = PASS_CRITERIA[criterion]
+            pass_count = sum(
+                all(all(_binary_pass(row)[field] for field in fields) for row in rows)
+                for rows in arm_scored
+            )
         arms[arm] = {
             "assigned": len(assigned),
             "observed": len(assigned) - outcomes["not_run"],
@@ -806,9 +1129,19 @@ def build_report(
             "scores": score_counts,
             "quality": dimension_counts,
             "completed": outcomes["completed"],
-            "quality_pass_count": None,
-            "quality_pass_criterion": "not_declared",
+            "quality_status": _quality_status(bool(arm_scored), criterion),
+            "quality_scored_assignments": len(arm_scored),
+            "quality_pass_count": pass_count,
+            "quality_pass_criterion": criterion or "not_declared",
         }
+
+    distribution = {"0": 0, "1": 0, "2_or_more": 0}
+    for item in per_assignment:
+        count = item["scored_row_count"]
+        distribution["0" if count == 0 else "1" if count == 1 else "2_or_more"] += 1
+    scorer_codes = {row["scorer_code"] for row in scored if row["status"] == "scored"}
+    limitations = ["single_scorer"] if distribution["1"] else []
+    agreement_items = [rows for rows in scored_by_score.values() if len(rows) >= 2]
 
     def payload_total(row: dict[str, Any]) -> int | None:
         fields = ("estimated_input_tokens", "estimated_output_tokens", "schema_instruction_tokens")
@@ -944,13 +1277,29 @@ def build_report(
         "as_of_utc": _utc(as_of_utc).isoformat().replace("+00:00", "Z"),
         "arm_ids": list(ARM_IDS),
         "study_plan": manifest["study_plan"],
+        "allocation": {
+            "method": ALLOCATION_METHOD,
+            "seed_mode": assignments["seed_mode"],
+            "seed_commitment": assignments["seed_commitment"],
+            "verification": _allocation_verification(
+                assignments["seed_mode"], seed_hex is not None
+            ),
+        },
         "assignment_count": len(assignments["assignments"]),
         "arms": arms,
         "blind_scoring": {
             "score_count": len(scored),
+            "scored_row_count": sum(row["status"] == "scored" for row in scored),
             "blind_scores_imported": bool(scored),
             "unscored_count": sum(row["status"] == "no_score" for row in scored),
             "quality_method": "independent_blind_score_import" if scored else "not_scored",
+            "quality_status": _quality_status(bool(scored_by_score), criterion),
+            "quality_pass_criterion": criterion or "not_declared",
+            "scorer_count": len(scorer_codes),
+            "scored_count_distribution": distribution,
+            "per_assignment": per_assignment,
+            "agreement": _agreement_summary(agreement_items, len(scorer_codes)),
+            "limitations": limitations,
             "synthetic_rule_checks_are_participant_quality": False,
         },
         "payload_estimate": {
@@ -1013,7 +1362,7 @@ def build_report(
 
 
 def synthetic_rule_check(kind: str, expected: Any, actual: Any) -> bool:
-    """Validate the scorer contract; this is not a model-quality measurement."""
+    """Compare a synthetic observed answer with the expected answer for one task kind."""
     if kind == "integer_equal":
         return type(actual) is int and actual == expected
     if kind == "boolean_equal":
