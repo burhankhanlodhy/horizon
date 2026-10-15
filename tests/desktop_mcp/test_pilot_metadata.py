@@ -560,3 +560,194 @@ def test_cli_record_flow_requires_consent_and_only_ingests_allowlisted_json(
     assert path.exists()
     assert main(["--store", str(path), "delete", "--confirm"]) == 0
     assert not path.exists()
+
+
+# --- Withdrawal -----------------------------------------------------------
+
+TARGET = "p_aaaaaaaaaa"
+OTHER_ONE = "p_bbbbbbbbbb"
+OTHER_TWO = "p_cccccccccc"
+
+
+def _store_with_participants(tmp_path: Path) -> PilotMetadataStore:
+    store = _enabled_store(tmp_path)
+    store.add_record(_record(participant_code=TARGET))
+    store.add_record(_record(participant_code=OTHER_ONE))
+    store.add_record(_record(participant_code=TARGET, arm="C_tuned"))
+    store.add_record(_record(participant_code=OTHER_TWO))
+    return store
+
+
+def _disk_full(*_args: object) -> None:
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
+def test_withdraw_removes_only_the_target_and_keeps_consent(tmp_path: Path) -> None:
+    store = _store_with_participants(tmp_path)
+    before_status = store.status()
+
+    result = store.withdraw(TARGET, confirm=True)
+
+    assert result == {"dry_run": False, "removed": 2, "withdrawn_count": 1}
+    codes = [row["participant_code"] for row in store.preview()["records"]]
+    assert codes == [OTHER_ONE, OTHER_TWO]
+    after_status = store.status()
+    assert after_status["enabled"] is True
+    assert after_status["consented_at"] == before_status["consented_at"]
+    assert after_status["retention_days"] == before_status["retention_days"]
+    assert after_status["expires_at"] == before_status["expires_at"]
+    raw = store.path.read_text(encoding="utf-8")
+    assert TARGET not in raw
+    assert json.loads(raw)["withdrawn_count"] == 1
+
+
+def test_withdraw_dry_run_reports_count_and_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store_with_participants(tmp_path)
+    before = store.path.read_bytes()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("dry run must not write")
+
+    monkeypatch.setattr(pilot_metadata.os, "replace", forbidden)
+    assert store.withdraw(TARGET, confirm=False) == {"dry_run": True, "would_remove": 2}
+    assert store.path.read_bytes() == before
+
+
+def test_withdraw_failure_during_write_leaves_store_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store_with_participants(tmp_path)
+    before = store.path.read_bytes()
+
+    def deny(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(pilot_metadata.os, "replace", deny)
+    with pytest.raises(PilotMetadataError, match="store_unavailable"):
+        store.withdraw(TARGET, confirm=True)
+    assert store.path.read_bytes() == before
+    assert _temp_files(store.path.parent) == []
+
+    monkeypatch.undo()
+    monkeypatch.setattr(pilot_metadata.os, "fsync", _disk_full)
+    with pytest.raises(PilotMetadataError, match="store_unavailable"):
+        store.withdraw(TARGET, confirm=True)
+    assert store.path.read_bytes() == before
+    assert _temp_files(store.path.parent) == []
+
+
+def test_export_after_withdrawal_excludes_the_participant(tmp_path: Path) -> None:
+    store = _store_with_participants(tmp_path)
+    store.withdraw(TARGET, confirm=True)
+    output = tmp_path / "review" / "export.json"
+
+    store.export(output)
+
+    raw = output.read_text(encoding="utf-8")
+    assert TARGET not in raw
+    exported = json.loads(raw)
+    assert [row["participant_code"] for row in exported["records"]] == [OTHER_ONE, OTHER_TWO]
+
+
+def test_withdrawal_count_increments_only_when_records_are_removed(tmp_path: Path) -> None:
+    store = _store_with_participants(tmp_path)
+    assert store.withdraw(TARGET, confirm=True)["withdrawn_count"] == 1
+    assert store.withdraw(OTHER_ONE, confirm=True)["withdrawn_count"] == 2
+    assert store.withdraw(OTHER_ONE, confirm=True) == {
+        "dry_run": False,
+        "removed": 0,
+        "withdrawn_count": 2,
+    }
+    assert json.loads(store.path.read_text(encoding="utf-8"))["withdrawn_count"] == 2
+
+
+def test_code_without_records_is_zero_removed_and_writes_nothing(tmp_path: Path) -> None:
+    store = _store_with_participants(tmp_path)
+    before = store.path.read_bytes()
+    assert store.withdraw("p_dddddddddd", confirm=True) == {
+        "dry_run": False,
+        "removed": 0,
+        "withdrawn_count": 0,
+    }
+    assert store.path.read_bytes() == before
+
+
+def test_withdraw_when_collection_is_off_creates_no_file(tmp_path: Path) -> None:
+    store = PilotMetadataStore(tmp_path / "pilot" / "metadata.json")
+    assert store.withdraw(TARGET, confirm=True) == {
+        "dry_run": False,
+        "removed": 0,
+        "would_remove": 0,
+    }
+    assert not store.path.exists()
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "P-0123ABCD",
+        "burhan.lodhi",
+        "BURHAN-PC",
+        "p_ABCDEFGHIJ",
+        "p_abc",
+        "p_abcdefghij1",
+        "s_abcdefghij",
+        "",
+    ],
+)
+def test_withdraw_rejects_bad_participant_code_formats(tmp_path: Path, code: str) -> None:
+    store = _store_with_participants(tmp_path)
+    before = store.path.read_bytes()
+    with pytest.raises(PilotMetadataError, match="participant_code_invalid"):
+        store.withdraw(code, confirm=True)
+    assert store.path.read_bytes() == before
+
+
+def test_withdrawn_count_must_be_a_bounded_integer(tmp_path: Path) -> None:
+    store = _store_with_participants(tmp_path)
+    data = json.loads(store.path.read_text(encoding="utf-8"))
+    data["withdrawn_count"] = True
+    store.path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(PilotMetadataError, match="store_invalid"):
+        store.status()
+
+
+def test_cli_withdraw_is_dry_run_without_confirm(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _store_with_participants(tmp_path)
+    before = store.path.read_bytes()
+
+    assert main(["--store", str(store.path), "withdraw", "--participant-code", TARGET]) == 0
+    assert json.loads(capsys.readouterr().out) == {"dry_run": True, "would_remove": 2}
+    assert store.path.read_bytes() == before
+
+    assert (
+        main(["--store", str(store.path), "withdraw", "--participant-code", TARGET, "--confirm"])
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["removed"] == 2
+    assert store.status()["records"] == 2
+
+
+def test_cli_withdraw_rejects_bad_code_with_error_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _store_with_participants(tmp_path)
+    assert (
+        main(
+            [
+                "--store",
+                str(store.path),
+                "withdraw",
+                "--participant-code",
+                "burhan.lodhi",
+                "--confirm",
+            ]
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().out) == {"error": "participant_code_invalid"}
+    assert store.status()["records"] == 4

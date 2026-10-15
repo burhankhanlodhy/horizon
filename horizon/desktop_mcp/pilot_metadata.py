@@ -28,6 +28,8 @@ _MAX_STORE_BYTES = 8 * 1024 * 1024
 _MAX_EXPORT_BYTES = 16 * 1024 * 1024
 _MAX_RECORD_INPUT_BYTES = 64 * 1024
 _STALE_TEMP_SECONDS = 3600
+_STORE_KEYS = frozenset({"schema_version", "consent", "records"})
+_STORE_OPTIONAL_KEYS = frozenset({"withdrawn_count"})
 _PARTICIPANT_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
 # Participant codes are generated here or by the study harness; never a real name.
 _PARTICIPANT_RE = re.compile(r"^p_[a-z2-7]{10}$")
@@ -415,6 +417,39 @@ class PilotMetadataStore:
             raise PilotMetadataError("delete_failed") from None
         return {"deleted": True, "enabled": False}
 
+    def withdraw(self, participant_code: str, *, confirm: bool) -> dict[str, Any]:
+        """Remove one participant's records; keep other records and consent.
+
+        Without ``confirm`` this is a dry run that writes nothing. Nothing about the
+        withdrawn participant is stored except an incremented ``withdrawn_count``,
+        and only when at least one record was actually removed.
+        """
+        if not _matches(participant_code, _PARTICIPANT_RE):
+            raise PilotMetadataError("participant_code_invalid")
+        data = self._load()
+        if data is None:
+            return {"dry_run": not confirm, "removed": 0, "would_remove": 0}
+        kept = [
+            record for record in data["records"] if record["participant_code"] != participant_code
+        ]
+        matched = len(data["records"]) - len(kept)
+        if not confirm:
+            return {"dry_run": True, "would_remove": matched}
+        if matched == 0:
+            return {
+                "dry_run": False,
+                "removed": 0,
+                "withdrawn_count": data.get("withdrawn_count", 0),
+            }
+        data["records"] = kept
+        data["withdrawn_count"] = data.get("withdrawn_count", 0) + 1
+        self._write(data)
+        return {
+            "dry_run": False,
+            "removed": matched,
+            "withdrawn_count": data["withdrawn_count"],
+        }
+
     def _cleanup_stale_temporary_files(self) -> None:
         """Remove only old regular atomic-write temporaries for this exact store."""
         try:
@@ -466,7 +501,7 @@ class PilotMetadataStore:
             raise PilotMetadataError("store_invalid") from None
         if (
             not isinstance(data, dict)
-            or set(data) != {"schema_version", "consent", "records"}
+            or not _STORE_KEYS <= set(data) <= _STORE_KEYS | _STORE_OPTIONAL_KEYS
             or data.get("schema_version") != _SCHEMA_VERSION
             or not isinstance(data.get("consent"), dict)
             or not isinstance(data.get("records"), list)
@@ -483,6 +518,13 @@ class PilotMetadataStore:
             or isinstance(consent.get("expires_epoch"), bool)
             or not isinstance(consent.get("expires_epoch"), (int, float))
             or not math.isfinite(consent.get("expires_epoch"))
+        ):
+            raise PilotMetadataError("store_invalid")
+        withdrawn = data.get("withdrawn_count", 0)
+        if (
+            isinstance(withdrawn, bool)
+            or not isinstance(withdrawn, int)
+            or not 0 <= withdrawn <= 10**9
         ):
             raise PilotMetadataError("store_invalid")
         consented = _parse_time(consent["consented_at"], "consented_at")
@@ -612,6 +654,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="confirm the displayed collection and retention terms",
     )
+    withdraw = commands.add_parser(
+        "withdraw", help="remove one participant's records; dry run unless --confirm"
+    )
+    withdraw.add_argument("--participant-code", required=True)
+    withdraw.add_argument("--confirm", action="store_true", help="confirm removal")
     commands.add_parser("preview", help="review stored metadata before export")
     export = commands.add_parser("export", help="export allowlisted metadata to a selected file")
     export.add_argument("--output", type=Path, required=True)
@@ -656,6 +703,8 @@ def main(argv: list[str] | None = None) -> int:
             result = store.add_record(_read_record_input(args.input))
         elif args.command == "export":
             result = store.export(args.output, overwrite=args.overwrite)
+        elif args.command == "withdraw":
+            result = store.withdraw(args.participant_code, confirm=args.confirm)
         elif args.command == "delete":
             if not args.confirm:
                 print("Cancelled. No records were deleted.")
