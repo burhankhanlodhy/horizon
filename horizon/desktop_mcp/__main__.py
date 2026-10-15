@@ -48,6 +48,12 @@ def _parser() -> argparse.ArgumentParser:
         help="extension: artifact folder (empty for none)",
     )
     serve.add_argument("--broker-id", default=None, help="extension: broker identity")
+    serve.add_argument(
+        "--pilot-method",
+        default=None,
+        metavar="METHOD",
+        help="extension: normal (default) or exact_only (self-test method A: no compression)",
+    )
 
     broker = commands.add_parser(
         "broker", help="serve approved local sources over the Windows named pipe"
@@ -92,7 +98,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-_EXTENSION_FLAGS = ("approved_roots", "tool_profile", "artifact_root", "broker_id")
+_EXTENSION_FLAGS = (
+    "approved_roots",
+    "tool_profile",
+    "artifact_root",
+    "broker_id",
+    "pilot_method",
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -361,7 +361,7 @@ async def test_other_broker_codes_keep_the_generic_message() -> None:
 
 
 def test_server_version_comes_from_the_version_module() -> None:
-    assert VERSION == "0.1.1"
+    assert VERSION == "0.1.2"
     assert SERVER_VERSION == VERSION
     # The MCP initialize response reports the server's version through its
     # initialization options.

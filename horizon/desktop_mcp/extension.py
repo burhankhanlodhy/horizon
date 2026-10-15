@@ -391,10 +391,28 @@ def _heartbeat_loop(
             pass
 
 
+_PILOT_METHOD_ARMS = {"normal": "optimized", "exact_only": "raw"}
+
+
+def _pilot_eval_arm(value: object) -> str:
+    """Map the Pilot method setting to the backend evaluation arm.
+
+    ``exact_only`` (self-test method A) is ``raw``: every presentation returns
+    exact text. A missing value means ``normal``. Anything else is rejected
+    without echoing the value.
+    """
+    if value is None:
+        value = "normal"
+    if not isinstance(value, str) or value not in _PILOT_METHOD_ARMS:
+        raise ConfigurationError("extension_pilot_method_invalid")
+    return _PILOT_METHOD_ARMS[value]
+
+
 def _extension_settings(args: Any) -> DesktopSettings:
     artifact_root = getattr(args, "artifact_root", None) or None
     approved_roots = list(getattr(args, "approved_roots", None) or [])
     broker_id = getattr(args, "broker_id", None) or _DEFAULT_BROKER_ID
+    eval_arm = _pilot_eval_arm(getattr(args, "pilot_method", None))
     # Stats are skipped (not an error) when the stats folder sits inside an
     # approved root, e.g. a user who approved their whole profile folder.
     stats_path = extension_stats_path(broker_id)
@@ -411,6 +429,7 @@ def _extension_settings(args: Any) -> DesktopSettings:
         "artifact_root": artifact_root,
         "usage_stats_path": usage_stats_path,
         "broker_idle_seconds": _EXTENSION_IDLE_SECONDS,
+        "eval_arm": eval_arm,
     }
     try:
         return DesktopSettings.model_validate(data)
