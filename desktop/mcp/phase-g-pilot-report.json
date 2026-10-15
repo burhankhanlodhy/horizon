@@ -650,7 +650,8 @@
         ],
         "estimate_count": 13,
         "observed_count": 13,
-        "total_estimated_tokens": 1495
+        "total_estimated_tokens": 1495,
+        "value_label": "synthetic_fixture_values, not measurements"
       },
       "B": {
         "counter_versions": [
@@ -658,7 +659,8 @@
         ],
         "estimate_count": 13,
         "observed_count": 13,
-        "total_estimated_tokens": 1175
+        "total_estimated_tokens": 1175,
+        "value_label": "synthetic_fixture_values, not measurements"
       },
       "C_normal": {
         "counter_versions": [
@@ -666,7 +668,8 @@
         ],
         "estimate_count": 13,
         "observed_count": 13,
-        "total_estimated_tokens": 1755
+        "total_estimated_tokens": 1755,
+        "value_label": "synthetic_fixture_values, not measurements"
       },
       "C_tuned": {
         "counter_versions": [
@@ -674,7 +677,8 @@
         ],
         "estimate_count": 12,
         "observed_count": 13,
-        "total_estimated_tokens": 1260
+        "total_estimated_tokens": 1260,
+        "value_label": "synthetic_fixture_values, not measurements"
       }
     },
     "counter_scope": "participant_supplied_inner_payload_estimates",
@@ -767,7 +771,38 @@
       ],
       "scope": "completed_pairs_matching_source_snapshot_model_settings_and_counter_version",
       "signed_token_delta_a_minus_b": 260,
-      "status": "available_estimate"
+      "statistical_comparison": {
+        "candidate_arm": "B",
+        "cluster": "participant",
+        "comparison": "paired_B_minus_A_candidate_minus_reference",
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "decision_scope": "pilot token estimates are not billing data; provenance_unverified blocks any savings claim",
+        "interval": {
+          "confidence": "0.95",
+          "estimate": "-23.63636363636363636363636364",
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 11,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
+        "min_clusters": 8,
+        "min_units": 5,
+        "reference_arm": "A"
+      },
+      "status": "available_estimate",
+      "value_label": "synthetic_fixture_values, not measurements"
     },
     "status": "available_estimate"
   },

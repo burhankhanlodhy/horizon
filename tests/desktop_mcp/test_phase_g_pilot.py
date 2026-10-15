@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
@@ -978,3 +979,46 @@ def test_assign_accepts_codes_pasted_with_windows_line_endings(tmp_path) -> None
     )
     assert completed.returncode == 0, completed.stderr
     assert (tmp_path / "seed.txt").exists()
+
+
+def test_fixture_comparison_decision_is_none_with_synthetic_reason() -> None:
+    report = make_fixture_report(BUNDLE)
+    comparison = report["payload_estimate"]["paired_comparison"]["statistical_comparison"]
+    assert comparison["decision"]["claim"] == "none"
+    assert "synthetic_evidence" in comparison["decision"]["reasons"]
+    assert comparison["interval"]["method"] == "insufficient_data"
+    assert report["payload_estimate"]["by_arm"]["A"]["value_label"] == (
+        "synthetic_fixture_values, not measurements"
+    )
+    assert report["claims"]["savings_claim"] == "none"
+
+
+def test_consented_cohort_with_cheaper_candidate_still_gets_no_savings_claim() -> None:
+    codes = [f"p_{letter * 10}" for letter in "abcdefgh"]
+    assignments = build_assignments(
+        BUNDLE,
+        codes,
+        seed_hex=TEST_SEED,
+        consented_at_utc=dict.fromkeys(codes, "2026-10-13T12:00:00Z"),
+    )
+    observations = [
+        _record(row, input_tokens=70 if row["arm"] == "B" else 100)
+        for row in assignments["assignments"]
+    ]
+    scores = _scores(assignments, observations)
+    report = build_report(BUNDLE, assignments, observations, scores, as_of_utc=AS_OF)
+    comparison = report["payload_estimate"]["paired_comparison"]["statistical_comparison"]
+    interval = comparison["interval"]
+    # Every matched pair is 30 tokens cheaper for B, so the interval is clearly below zero.
+    assert interval["n_clusters"] == len(codes)
+    assert interval["n_units"] == len(codes) * len(BUNDLE["tasks"])
+    assert interval["upper"] is not None and Decimal(interval["upper"]) < 0
+    decision = comparison["decision"]
+    assert decision["claim"] == "none"
+    assert "provenance_unverified" in decision["reasons"]
+    assert "synthetic_evidence" not in decision["reasons"]
+    assert report["claims"]["savings_claim"] == "none"
+    assert report["payload_estimate"]["by_arm"]["A"]["value_label"] == (
+        "participant_supplied_inner_payload_estimate, not billing data"
+    )
+    assert "savings_supported" not in json.dumps(report)
