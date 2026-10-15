@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
 import re
 from decimal import Decimal
 from fractions import Fraction
@@ -29,9 +31,12 @@ from horizon.desktop_mcp.pilot_study import (
     generate_scorer_codes,
     seed_commitment,
     synthetic_rule_check,
+    task_source_snapshot,
+    validate_answer_key,
     validate_assignment_set,
     validate_observations,
     validate_scores,
+    validate_withdrawals,
 )
 
 BUNDLE_PATH = Path(__file__).parents[2] / "desktop" / "mcp" / "phase_g_pilot_fixtures.json"
@@ -59,7 +64,13 @@ def _assignments(participant: str = "syn-p-0001", *, seed_hex: str = TEST_SEED):
     )
 
 
-def _record(assignment: dict, *, status: str = "completed", input_tokens: int = 100) -> dict:
+def _record(
+    assignment: dict,
+    *,
+    status: str = "completed",
+    input_tokens: int = 100,
+    bundle: dict | None = None,
+) -> dict:
     failed = status in {"failed", "timed_out"}
     unsupported = status == "unsupported"
     return {
@@ -80,9 +91,11 @@ def _record(assignment: dict, *, status: str = "completed", input_tokens: int = 
         },
         "counter_version": "fixture-counter-v1",
         "source_snapshot_sha256": digest_json(
-            next(t for t in BUNDLE["tasks"] if t["task_id"] == assignment["task_id"])[
-                "synthetic_sources"
-            ]
+            task_source_snapshot(
+                next(
+                    t for t in (bundle or BUNDLE)["tasks"] if t["task_id"] == assignment["task_id"]
+                )
+            )
         ),
         "metrics": {
             "latency_ms": 60000,
@@ -1022,3 +1035,432 @@ def test_consented_cohort_with_cheaper_candidate_still_gets_no_savings_claim() -
         "participant_supplied_inner_payload_estimate, not billing data"
     )
     assert "savings_supported" not in json.dumps(report)
+
+
+# ---- Round 3: real task bundles, answer keys, sources, and withdrawals ----
+
+SENTINEL = "SENTINEL-ANSWER-7731"
+REAL_CODES = [f"p_{letter * 10}" for letter in "abcdefgh"]
+
+
+def _plan(weights: dict[str, str]) -> dict:
+    return {
+        "target_participants": 8,
+        "minimum_completed_per_arm": 1,
+        "stopping_rule": "complete_predeclared_bundle_or_stop_at_target",
+        "refresh_max_age_hours": 24,
+        "stratum_weights": weights,
+    }
+
+
+def _real_bundle(root: Path) -> dict:
+    """Real bundle whose three source files are written into root."""
+    specs = [
+        ("t_lookup", "numeric", "lookup.csv", "csv", b"id,value\nK-42,42\n"),
+        ("t_policy", "document", "policy.md", "md", b"# Policy\nScope is internal.\n"),
+        ("t_status", "edge_case", "status.txt", "txt", b"Status: OK\n"),
+    ]
+    tasks = []
+    for task_id, stratum, name, fmt, data in specs:
+        (root / name).write_bytes(data)
+        tasks.append(
+            {
+                "task_id": task_id,
+                "stratum": stratum,
+                "locale": "en-US",
+                "operator_instruction": f"Answer {task_id} from the source file only.",
+                "sources": [
+                    {
+                        "source_id": f"src_{task_id}",
+                        "format": fmt,
+                        "file_name": name,
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "bytes": len(data),
+                    }
+                ],
+            }
+        )
+    return {
+        "schema_version": "phase_g_study/v1",
+        "bundle_kind": "pilot_task_bundle",
+        "study_id": "pilot-real-test-v1",
+        "study_plan": _plan({"numeric": "0.4", "document": "0.3", "edge_case": "0.3"}),
+        "tasks": tasks,
+    }
+
+
+def _bundle_with_task(task: dict) -> dict:
+    return {
+        "schema_version": "phase_g_study/v1",
+        "bundle_kind": "pilot_task_bundle",
+        "study_id": "pilot-real-test-v1",
+        "study_plan": _plan({"edge_case": "1"}),
+        "tasks": [task],
+    }
+
+
+def _answer_key(bundle: dict, *, expected: str = SENTINEL) -> dict:
+    return {
+        "schema_version": "phase_g_study/v1",
+        "study_id": bundle["study_id"],
+        "bundle_sha256": digest_json(bundle),
+        "keys": [
+            {"task_id": task["task_id"], "kind": "literal_equal", "expected": expected}
+            for task in bundle["tasks"]
+        ],
+    }
+
+
+def _source_task(file_name: str, fmt: str, **overrides) -> dict:
+    data = b"x\n"
+    source = {
+        "source_id": "src_one",
+        "format": fmt,
+        "file_name": file_name,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": len(data),
+    }
+    source.update(overrides)
+    return {
+        "task_id": "t_one",
+        "stratum": "edge_case",
+        "locale": "en-US",
+        "operator_instruction": "Use the source.",
+        "sources": [source],
+    }
+
+
+def _verify_cli(bundle: dict, sources: Path, tmp_path: Path, capsys) -> tuple[int, dict]:
+    bundle_path = tmp_path / "real-bundle.json"
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+    code = main(["verify-sources", "--bundle", str(bundle_path), "--sources-dir", str(sources)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_real_bundle_is_accepted_and_has_no_synthetic_or_answer_fields(tmp_path: Path) -> None:
+    from horizon.desktop_mcp.pilot_study import validate_bundle
+
+    bundle = _real_bundle(tmp_path)
+    assert validate_bundle(bundle)["bundle_kind"] == "pilot_task_bundle"
+    text = json.dumps(bundle)
+    assert "synthetic" not in text and "expected" not in text
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["..\\x.txt", "a/b.txt", "CON.txt", "lpt1.txt", "trailing.txt.", "..x.txt", "a\x00.txt"],
+)
+def test_real_bundle_rejects_unsafe_or_reserved_file_names(name: str) -> None:
+    from horizon.desktop_mcp.pilot_study import validate_bundle
+
+    with pytest.raises(PilotStudyError) as error:
+        validate_bundle(_bundle_with_task(_source_task(name, "txt")))
+    assert error.value.code in {
+        "source_file_name_invalid",
+        "source_file_name_reserved",
+        "source_format_mismatch",
+    }
+
+
+def test_real_bundle_rejects_format_suffix_mismatch_and_size_bounds() -> None:
+    from horizon.desktop_mcp.pilot_study import validate_bundle
+
+    with pytest.raises(PilotStudyError, match="source_format_mismatch"):
+        validate_bundle(_bundle_with_task(_source_task("notes.md", "txt")))
+    with pytest.raises(PilotStudyError, match="source_bytes_invalid"):
+        validate_bundle(_bundle_with_task(_source_task("a.txt", "txt", bytes=0)))
+    with pytest.raises(PilotStudyError, match="source_bytes_invalid"):
+        validate_bundle(_bundle_with_task(_source_task("a.txt", "txt", bytes=25 * 1024 * 1024 + 1)))
+    with pytest.raises(PilotStudyError, match="source_file_name_invalid"):
+        validate_bundle(_bundle_with_task(_source_task("a" * 117 + ".txt", "txt")))
+    # Limits themselves are accepted: a 120-character name and 25 MiB.
+    validate_bundle(
+        _bundle_with_task(_source_task("a" * 116 + ".txt", "txt", bytes=25 * 1024 * 1024))
+    )
+
+
+def test_real_bundle_rejects_embedded_content_and_synthetic_fields(tmp_path: Path) -> None:
+    from horizon.desktop_mcp.pilot_study import validate_bundle
+
+    with pytest.raises(PilotStudyError, match="source_invalid"):
+        validate_bundle(_bundle_with_task(_source_task("a.txt", "txt", content="embedded")))
+    bundle = _real_bundle(tmp_path)
+    bundle["tasks"][0]["synthetic_check"] = {"kind": "literal_equal", "expected": SENTINEL}
+    with pytest.raises(PilotStudyError, match="task_invalid"):
+        validate_bundle(bundle)
+
+
+def test_answer_key_checks_digest_coverage_and_bundle_kind(tmp_path: Path) -> None:
+
+    bundle = _real_bundle(tmp_path)
+    key = _answer_key(bundle)
+    assert len(validate_answer_key(key, bundle)["keys"]) == 3
+    tampered = copy.deepcopy(key)
+    tampered["bundle_sha256"] = "0" * 64
+    with pytest.raises(PilotStudyError, match="answer_key_bundle_digest_mismatch"):
+        validate_answer_key(tampered, bundle)
+    missing = copy.deepcopy(key)
+    missing["keys"] = missing["keys"][:-1]
+    with pytest.raises(PilotStudyError, match="answer_key_missing_task"):
+        validate_answer_key(missing, bundle)
+    extra = copy.deepcopy(key)
+    extra["keys"].append({"task_id": "t_other", "kind": "literal_equal", "expected": SENTINEL})
+    with pytest.raises(PilotStudyError, match="answer_key_extra_task"):
+        validate_answer_key(extra, bundle)
+    duplicate = copy.deepcopy(key)
+    duplicate["keys"].append(dict(duplicate["keys"][0]))
+    with pytest.raises(PilotStudyError, match="answer_key_duplicate_task"):
+        validate_answer_key(duplicate, bundle)
+    with pytest.raises(PilotStudyError, match="answer_key_requires_pilot_bundle"):
+        validate_answer_key(key, BUNDLE)
+
+
+def test_verify_sources_accepts_matching_files_and_reports_each_failure(
+    tmp_path: Path, capsys
+) -> None:
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    bundle = _real_bundle(sources)
+    code, result = _verify_cli(bundle, sources, tmp_path, capsys)
+    assert code == 0
+    assert result["status"] == "verified" and result["sources_checked"] == 3
+
+    # Same size, different bytes: only the SHA-256 check can catch it.
+    (sources / "status.txt").write_bytes(b"Status: NO\n")
+    code, result = _verify_cli(bundle, sources, tmp_path, capsys)
+    assert code == 2
+    assert result["failures"] == [{"source_id": "src_t_status", "code": "source_hash_mismatch"}]
+
+    (sources / "status.txt").write_bytes(b"short\n")
+    code, result = _verify_cli(bundle, sources, tmp_path, capsys)
+    assert result["failures"] == [{"source_id": "src_t_status", "code": "source_size_mismatch"}]
+
+    (sources / "status.txt").unlink()
+    code, result = _verify_cli(bundle, sources, tmp_path, capsys)
+    assert result["failures"] == [{"source_id": "src_t_status", "code": "source_missing"}]
+
+
+def test_verify_sources_refuses_symlinks(tmp_path: Path, capsys) -> None:
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    bundle = _real_bundle(origin)
+    for name in ("lookup.csv", "policy.md"):
+        (sources / name).write_bytes((origin / name).read_bytes())
+    try:
+        os.symlink(origin / "status.txt", sources / "status.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links cannot be created in this environment")
+    code, result = _verify_cli(bundle, sources, tmp_path, capsys)
+    assert code == 2
+    assert result["failures"] == [{"source_id": "src_t_status", "code": "source_link_refused"}]
+
+
+def test_withdrawal_file_is_validated_against_study_format_and_duplicates() -> None:
+
+    good = {
+        "schema_version": 1,
+        "study_id": "pilot-real-test-v1",
+        "withdrawals": [
+            {"participant_id": REAL_CODES[0], "withdrawn_at_utc": "2026-10-20T09:00:00Z"}
+        ],
+    }
+    assert validate_withdrawals(good, study_id="pilot-real-test-v1") == frozenset({REAL_CODES[0]})
+    with pytest.raises(PilotStudyError, match="withdrawals_study_mismatch"):
+        validate_withdrawals(good, study_id="other")
+    synthetic = copy.deepcopy(good)
+    synthetic["withdrawals"][0]["participant_id"] = "syn-p-0001"
+    with pytest.raises(PilotStudyError, match="withdrawal_participant_invalid"):
+        validate_withdrawals(synthetic, study_id="pilot-real-test-v1")
+    duplicate = copy.deepcopy(good)
+    duplicate["withdrawals"].append(dict(good["withdrawals"][0]))
+    with pytest.raises(PilotStudyError, match="withdrawal_duplicate"):
+        validate_withdrawals(duplicate, study_id="pilot-real-test-v1")
+
+
+def test_withdrawn_rows_are_removed_before_statistics(tmp_path: Path) -> None:
+
+    bundle = _real_bundle(tmp_path)
+    codes = REAL_CODES[:2]
+    assignments = build_assignments(
+        bundle,
+        codes,
+        seed_hex=TEST_SEED,
+        consented_at_utc=dict.fromkeys(codes, "2026-10-13T12:00:00Z"),
+    )
+    observations = [_record(row, bundle=bundle) for row in assignments["assignments"]]
+    # A malformed row for the withdrawn participant must be dropped before validation.
+    observations[0]["metrics"] = "malformed"
+    scores = _scores(assignments, observations)
+    withdrawn = validate_withdrawals(
+        {
+            "schema_version": 1,
+            "study_id": bundle["study_id"],
+            "withdrawals": [
+                {"participant_id": codes[0], "withdrawn_at_utc": "2026-10-20T09:00:00Z"}
+            ],
+        },
+        study_id=bundle["study_id"],
+    )
+    report = build_report(
+        bundle, assignments, observations, scores, as_of_utc=AS_OF, withdrawn=withdrawn
+    )
+    assert report["withdrawn_participants"] == 1
+    assert codes[0] not in json.dumps(report)
+    tasks = len(bundle["tasks"])
+    for arm in ARM_IDS:
+        # Denominators count the remaining participant only; withdrawn rows are reported as a count.
+        assert report["arms"][arm]["assigned"] == tasks
+        assert report["arms"][arm]["withdrawn_assignments"] == tasks
+        assert report["arms"][arm]["observed"] == tasks
+    # Only the remaining participant contributes pairs and cluster counts.
+    assert report["blind_scoring"]["score_count"] == 4 * tasks
+    comparison = report["payload_estimate"]["paired_comparison"]
+    assert comparison["comparable_pair_count"] == tasks
+    interval = comparison["statistical_comparison"]["interval"]
+    assert interval["n_clusters"] == 1 and interval["n_units"] == tasks
+    assert report["claims"]["savings_claim"] == "none"
+
+
+def test_task_book_and_score_sheet_never_contain_answer_values(tmp_path: Path) -> None:
+    from horizon.desktop_mcp.pilot_study import validate_bundle
+
+    bundle = _real_bundle(tmp_path)
+    validate_bundle(bundle)
+    key = _answer_key(bundle)
+    assert SENTINEL in json.dumps(key)
+    book = make_task_book(bundle)
+    assert book["task_book_kind"] == "pilot_operator_cards"
+    assert SENTINEL not in json.dumps(book)
+    assert "expected" not in json.dumps(book)
+    assignments = build_assignments(
+        bundle,
+        REAL_CODES[:1],
+        seed_hex=TEST_SEED,
+        consented_at_utc={REAL_CODES[0]: "2026-10-13T12:00:00Z"},
+    )
+    sheet = make_score_sheet(bundle, assignments)
+    assert SENTINEL not in json.dumps(sheet)
+    assert "expected" not in json.dumps(sheet)
+
+
+def test_real_bundle_dry_run_through_assign_score_sheet_and_report(tmp_path: Path, capsys) -> None:
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    bundle = _real_bundle(sources)
+    bundle_path = tmp_path / "real-bundle.json"
+    bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+    key_path = tmp_path / "answer-key.json"
+    key_path.write_text(json.dumps(_answer_key(bundle)), encoding="utf-8")
+    assert (
+        main(
+            [
+                "verify-sources",
+                "--bundle",
+                str(bundle_path),
+                "--sources-dir",
+                str(sources),
+                "--output",
+                str(tmp_path / "verified.json"),
+            ]
+        )
+        == 0
+    )
+    assignments_path = tmp_path / "assignments.json"
+    assert (
+        main(
+            [
+                "assign",
+                "--bundle",
+                str(bundle_path),
+                "--participant-code",
+                REAL_CODES[0],
+                "--participant-code",
+                REAL_CODES[1],
+                "--consent-at-utc",
+                "2026-10-13T12:00:00Z",
+                "--seed-out",
+                str(tmp_path / "seed.txt"),
+                "--output",
+                str(assignments_path),
+            ]
+        )
+        == 0
+    )
+    sheet_path = tmp_path / "sheet.json"
+    assert (
+        main(
+            [
+                "score-sheet",
+                "--bundle",
+                str(bundle_path),
+                "--assignments",
+                str(assignments_path),
+                "--output",
+                str(sheet_path),
+            ]
+        )
+        == 0
+    )
+    assert SENTINEL not in sheet_path.read_text(encoding="utf-8")
+    capsys.readouterr()
+    assignments = json.loads(assignments_path.read_text(encoding="utf-8"))
+    observations = [
+        _record(row, bundle=bundle, input_tokens=70 if row["arm"] == "B" else 100)
+        for row in assignments["assignments"]
+    ]
+    observations_path = tmp_path / "observations.json"
+    observations_path.write_text(json.dumps(observations), encoding="utf-8")
+    sheet = json.loads(sheet_path.read_text(encoding="utf-8"))
+    scores = [
+        {
+            **row,
+            "scorer_code": SCORER_A,
+            "status": "scored",
+            "correctness": "correct",
+            "completeness": "complete",
+            "citations": "not_required",
+            "unsupported_claim": "no",
+            "omission_codes": [],
+        }
+        for row in sheet["scores"]
+    ]
+    scores_path = tmp_path / "scores.json"
+    scores_path.write_text(json.dumps(scores), encoding="utf-8")
+    report_path = tmp_path / "report.json"
+    assert (
+        main(
+            [
+                "report",
+                "--bundle",
+                str(bundle_path),
+                "--assignments",
+                str(assignments_path),
+                "--observations",
+                str(observations_path),
+                "--scores",
+                str(scores_path),
+                "--answer-key",
+                str(key_path),
+                "--as-of-utc",
+                AS_OF,
+                "--output",
+                str(report_path),
+            ]
+        )
+        == 0
+    )
+    report_text = report_path.read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert "fixture_rule_checks" not in report
+    assert report["evidence_class"] == "participant_import"
+    assert report["claims"]["savings_claim"] == "none"
+    assert report["answer_key_check"] == {
+        "status": "verified",
+        "task_count": 3,
+        "values_recorded": False,
+    }
+    assert SENTINEL not in report_text
+    assert report["blind_scoring"]["quality_status"] == "pending_pass_criterion"
+    assert report["blind_scoring"]["scorer_count"] == 1

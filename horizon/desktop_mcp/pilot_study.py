@@ -112,6 +112,20 @@ PLAN_KEYS = {
     "refresh_max_age_hours",
 }
 OPTIONAL_PLAN_KEYS = {"quality_pass_criterion"}
+SYNTHETIC_BUNDLE_KIND = "synthetic_task_bundle"
+PILOT_BUNDLE_KIND = "pilot_task_bundle"
+PILOT_SOURCE_FORMATS = ("txt", "md", "json", "csv", "pdf", "docx")
+MAX_PILOT_SOURCE_BYTES = 25 * 1024 * 1024
+MAX_FILE_NAME_CHARS = 120
+MAX_WITHDRAWALS = 1000
+WITHDRAWAL_SCHEMA_VERSION = 1
+SHA256_HEX = re.compile(r"^[a-f0-9]{64}$")
+_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_ .-]{0,119}$")
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
 
 
 class PilotStudyError(ValueError):
@@ -203,7 +217,7 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
     )
     if root["schema_version"] != SCHEMA_VERSION:
         raise PilotStudyError("schema_version_unsupported")
-    if root["bundle_kind"] != "synthetic_task_bundle":
+    if root["bundle_kind"] not in (SYNTHETIC_BUNDLE_KIND, PILOT_BUNDLE_KIND):
         raise PilotStudyError("bundle_kind_unsupported")
     _id(root["study_id"])
     plan = root["study_plan"]
@@ -239,21 +253,19 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
     tasks = root["tasks"]
     if not isinstance(tasks, list) or not tasks or len(tasks) > 500:
         raise PilotStudyError("tasks_invalid")
+    real = root["bundle_kind"] == PILOT_BUNDLE_KIND
+    file_names: set[str] = set()
     seen: set[str] = set()
+    base_task_keys = {"task_id", "stratum", "locale", "operator_instruction"}
     for task in tasks:
-        item = _keys(
-            task,
-            {
-                "task_id",
-                "stratum",
-                "locale",
-                "operator_instruction",
-                "synthetic_sources",
-                "synthetic_check",
-                "synthetic_observed",
-            },
-            "task_invalid",
-        )
+        if real:
+            item = _keys(task, base_task_keys | {"sources"}, "task_invalid")
+        else:
+            item = _keys(
+                task,
+                base_task_keys | {"synthetic_sources", "synthetic_check", "synthetic_observed"},
+                "task_invalid",
+            )
         task_id = _id(item["task_id"], TASK_ID)
         stratum = _id(item["stratum"])
         _id(item["locale"])
@@ -263,33 +275,165 @@ def validate_bundle(bundle: Any) -> dict[str, Any]:
             or len(item["operator_instruction"]) > 1200
         ):
             raise PilotStudyError("operator_instruction_invalid")
-        sources = item["synthetic_sources"]
-        if not isinstance(sources, list) or len(sources) > 8:
-            raise PilotStudyError("synthetic_sources_invalid")
-        source_ids: set[str] = set()
-        for source in sources:
-            source_item = _keys(
-                source, {"source_id", "format", "content"}, "synthetic_source_invalid"
-            )
-            source_id = _id(source_item["source_id"])
-            if source_id in source_ids or source_item["format"] not in {
-                "txt",
-                "md",
-                "json",
-                "csv",
-                "unsupported_fixture",
-            }:
-                raise PilotStudyError("synthetic_source_invalid")
-            if not isinstance(source_item["content"], str) or len(source_item["content"]) > 64000:
-                raise PilotStudyError("synthetic_source_content_invalid")
-            source_ids.add(source_id)
+        if real:
+            _validate_pilot_sources(item["sources"], file_names)
+        else:
+            _validate_synthetic_sources(item["synthetic_sources"])
         if task_id in seen or stratum not in weights:
             raise PilotStudyError("task_id_duplicate_or_stratum_unknown")
         seen.add(task_id)
-        check = _keys(item["synthetic_check"], {"kind", "expected"}, "synthetic_check_invalid")
-        _typed_check_value(check["kind"], check["expected"])
-        _typed_check_value(check["kind"], item["synthetic_observed"])
+        if not real:
+            check = _keys(item["synthetic_check"], {"kind", "expected"}, "synthetic_check_invalid")
+            _typed_check_value(check["kind"], check["expected"])
+            _typed_check_value(check["kind"], item["synthetic_observed"])
     return root
+
+
+def _validate_synthetic_sources(sources: Any) -> None:
+    if not isinstance(sources, list) or len(sources) > 8:
+        raise PilotStudyError("synthetic_sources_invalid")
+    source_ids: set[str] = set()
+    for source in sources:
+        source_item = _keys(source, {"source_id", "format", "content"}, "synthetic_source_invalid")
+        source_id = _id(source_item["source_id"])
+        if source_id in source_ids or source_item["format"] not in {
+            "txt",
+            "md",
+            "json",
+            "csv",
+            "unsupported_fixture",
+        }:
+            raise PilotStudyError("synthetic_source_invalid")
+        if not isinstance(source_item["content"], str) or len(source_item["content"]) > 64000:
+            raise PilotStudyError("synthetic_source_content_invalid")
+        source_ids.add(source_id)
+
+
+def _validate_file_name(value: Any, fmt: str) -> str:
+    """Accept a safe base name only: no separators, no traversal, no device names."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_FILE_NAME_CHARS
+        or not _FILE_NAME.fullmatch(value)
+        or value.endswith((".", " "))
+        or ".." in value
+    ):
+        raise PilotStudyError("source_file_name_invalid")
+    if value.split(".", 1)[0].rstrip(" ").upper() in _RESERVED_DEVICE_NAMES:
+        raise PilotStudyError("source_file_name_reserved")
+    stem, dot, suffix = value.rpartition(".")
+    if not dot or not stem or suffix.lower() != fmt:
+        raise PilotStudyError("source_format_mismatch")
+    return value
+
+
+def _validate_pilot_sources(sources: Any, file_names: set[str]) -> None:
+    if not isinstance(sources, list) or len(sources) > 8:
+        raise PilotStudyError("sources_invalid")
+    source_ids: set[str] = set()
+    for source in sources:
+        item = _keys(
+            source, {"source_id", "format", "file_name", "sha256", "bytes"}, "source_invalid"
+        )
+        source_id = _id(item["source_id"])
+        if source_id in source_ids:
+            raise PilotStudyError("source_invalid")
+        source_ids.add(source_id)
+        fmt = item["format"]
+        if not isinstance(fmt, str) or fmt not in PILOT_SOURCE_FORMATS:
+            raise PilotStudyError("source_format_invalid")
+        name = _validate_file_name(item["file_name"], fmt)
+        if name.casefold() in file_names:
+            raise PilotStudyError("source_file_name_duplicate")
+        file_names.add(name.casefold())
+        digest = item["sha256"]
+        if not isinstance(digest, str) or not SHA256_HEX.fullmatch(digest):
+            raise PilotStudyError("source_sha256_invalid")
+        size = item["bytes"]
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or not 1 <= size <= MAX_PILOT_SOURCE_BYTES
+        ):
+            raise PilotStudyError("source_bytes_invalid")
+
+
+def task_source_snapshot(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """Canonical source list whose digest an observation must match."""
+    return task["synthetic_sources"] if "synthetic_sources" in task else task["sources"]
+
+
+def validate_answer_key(key: Any, bundle: Any) -> dict[str, Any]:
+    """Check a scorer-only answer key against a real bundle; the values stay private."""
+    manifest = validate_bundle(bundle)
+    if manifest["bundle_kind"] != PILOT_BUNDLE_KIND:
+        raise PilotStudyError("answer_key_requires_pilot_bundle")
+    root = _keys(
+        key,
+        {"schema_version", "study_id", "bundle_sha256", "keys"},
+        "answer_key_schema_invalid",
+    )
+    if root["schema_version"] != SCHEMA_VERSION:
+        raise PilotStudyError("answer_key_schema_version_unsupported")
+    if root["study_id"] != manifest["study_id"]:
+        raise PilotStudyError("answer_key_study_mismatch")
+    if root["bundle_sha256"] != digest_json(manifest):
+        raise PilotStudyError("answer_key_bundle_digest_mismatch")
+    rows = root["keys"]
+    if not isinstance(rows, list):
+        raise PilotStudyError("answer_key_schema_invalid")
+    expected_ids = {task["task_id"] for task in manifest["tasks"]}
+    seen: set[str] = set()
+    for row in rows:
+        item = _keys(row, {"task_id", "kind", "expected"}, "answer_key_schema_invalid")
+        task_id = _id(item["task_id"], TASK_ID)
+        if task_id in seen:
+            raise PilotStudyError("answer_key_duplicate_task")
+        if task_id not in expected_ids:
+            raise PilotStudyError("answer_key_extra_task")
+        seen.add(task_id)
+        _typed_check_value(item["kind"], item["expected"])
+    if seen != expected_ids:
+        raise PilotStudyError("answer_key_missing_task")
+    return root
+
+
+def validate_withdrawals(value: Any, *, study_id: str) -> frozenset[str]:
+    """Return the set of withdrawn real participant codes from a withdrawal file."""
+    root = _keys(
+        value,
+        {"schema_version", "study_id", "withdrawals"},
+        "withdrawals_schema_invalid",
+    )
+    if (
+        type(root["schema_version"]) is not int
+        or root["schema_version"] != WITHDRAWAL_SCHEMA_VERSION
+    ):
+        raise PilotStudyError("withdrawals_schema_version_unsupported")
+    if root["study_id"] != study_id:
+        raise PilotStudyError("withdrawals_study_mismatch")
+    rows = root["withdrawals"]
+    if not isinstance(rows, list) or len(rows) > MAX_WITHDRAWALS:
+        raise PilotStudyError("withdrawals_invalid")
+    ids: set[str] = set()
+    for row in rows:
+        item = _keys(row, {"participant_id", "withdrawn_at_utc"}, "withdrawal_invalid")
+        participant = item["participant_id"]
+        if not isinstance(participant, str) or not PSEUDONYM.fullmatch(participant):
+            raise PilotStudyError("withdrawal_participant_invalid")
+        _utc(item["withdrawn_at_utc"], "withdrawal_timestamp_invalid")
+        if participant in ids:
+            raise PilotStudyError("withdrawal_duplicate")
+        ids.add(participant)
+    return frozenset(ids)
+
+
+def _drop_withdrawn(value: Any, withdrawn: frozenset[str], key_of: Any) -> Any:
+    """Remove rows of withdrawn participants before any validation or statistics."""
+    if not withdrawn or not isinstance(value, list):
+        return value
+    return [row for row in value if not (isinstance(row, dict) and key_of(row) in withdrawn)]
 
 
 def _participant_kind(code: Any) -> str:
@@ -730,7 +874,7 @@ def validate_observations(bundle: Any, assignment_set: Any, value: Any) -> list[
             for candidate in validate_bundle(bundle)["tasks"]
             if candidate["task_id"] == item["task_id"]
         )
-        expected_snapshot = digest_json(task["synthetic_sources"])
+        expected_snapshot = digest_json(task_source_snapshot(task))
         if snapshot != expected_snapshot:
             raise PilotStudyError("source_snapshot_mismatch")
         for key in ("failure_code", "unsupported_code"):
@@ -1099,14 +1243,40 @@ def build_report(
     as_of_utc: str,
     usage_windows: Any = None,
     seed_hex: str | None = None,
+    withdrawn: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     manifest = validate_bundle(bundle)
-    assignments = validate_assignment_set(manifest, assignment_set, seed_hex=seed_hex)
-    observed = validate_observations(manifest, assignments, observations)
-    scored = validate_scores(manifest, assignments, observed, scores)
-    windows = validate_usage_windows(
-        manifest, assignments, observed, usage_windows, as_of_utc=as_of_utc
+    cohort = validate_assignment_set(manifest, assignment_set, seed_hex=seed_hex)
+    withdrawn = frozenset(withdrawn)
+    # Withdrawn participants' rows are removed before validation and statistics.
+    participant_of_score = {row["score_id"]: row["participant_id"] for row in cohort["assignments"]}
+    observed = validate_observations(
+        manifest,
+        cohort,
+        _drop_withdrawn(observations, withdrawn, lambda row: row.get("participant_id")),
     )
+    scored = validate_scores(
+        manifest,
+        cohort,
+        observed,
+        _drop_withdrawn(
+            scores, withdrawn, lambda row: participant_of_score.get(row.get("score_id"))
+        ),
+    )
+    windows = validate_usage_windows(
+        manifest,
+        cohort,
+        observed,
+        _drop_withdrawn(usage_windows, withdrawn, lambda row: row.get("participant_id")),
+        as_of_utc=as_of_utc,
+    )
+    withdrawn_in_cohort = withdrawn & {row["participant_id"] for row in cohort["assignments"]}
+    assignments = {
+        **cohort,
+        "assignments": [
+            row for row in cohort["assignments"] if row["participant_id"] not in withdrawn
+        ],
+    }
     criterion = manifest["study_plan"].get("quality_pass_criterion")
     by_observation = {row["assignment_id"]: row for row in observed}
     scored_by_score: dict[str, list[dict[str, Any]]] = {}
@@ -1169,6 +1339,11 @@ def build_report(
             "quality_scored_assignments": len(arm_scored),
             "quality_pass_count": pass_count,
             "quality_pass_criterion": criterion or "not_declared",
+            "withdrawn_assignments": sum(
+                1
+                for row in cohort["assignments"]
+                if row["arm"] == arm and row["participant_id"] in withdrawn
+            ),
         }
 
     distribution = {"0": 0, "1": 0, "2_or_more": 0}
@@ -1185,7 +1360,7 @@ def build_report(
         return sum(values) if all(value is not None for value in values) else None
 
     is_synthetic = not any(
-        row["participant_kind"] == "pseudonymous" for row in assignments["assignments"]
+        row["participant_kind"] == "pseudonymous" for row in cohort["assignments"]
     )
     value_label = SYNTHETIC_VALUE_LABEL if is_synthetic else PARTICIPANT_VALUE_LABEL
     payload_arm: dict[str, Any] = {}
@@ -1305,7 +1480,7 @@ def build_report(
     )
     real_participant_ids = {
         row["participant_id"]
-        for row in assignments["assignments"]
+        for row in cohort["assignments"]
         if row["participant_kind"] == "pseudonymous"
     }
     observed_ids = {row["assignment_id"] for row in observed if row["status"] != "not_run"}
@@ -1345,7 +1520,7 @@ def build_report(
         "schema_version": SCHEMA_VERSION,
         "study_id": manifest["study_id"],
         "bundle_sha256": digest_json(manifest),
-        "assignment_sha256": digest_json(assignments),
+        "assignment_sha256": digest_json(cohort),
         "evidence_class": "participant_import" if real_participant_ids else "synthetic",
         "as_of_utc": _utc(as_of_utc).isoformat().replace("+00:00", "Z"),
         "arm_ids": list(ARM_IDS),
@@ -1358,7 +1533,8 @@ def build_report(
                 assignments["seed_mode"], seed_hex is not None
             ),
         },
-        "assignment_count": len(assignments["assignments"]),
+        "assignment_count": len(cohort["assignments"]),
+        "withdrawn_participants": len(withdrawn_in_cohort),
         "arms": arms,
         "blind_scoring": {
             "score_count": len(scored),
