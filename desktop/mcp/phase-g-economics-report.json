@@ -1,15 +1,18 @@
 {
   "assumptions_and_limits": [
     "Modeled costs use only the explicitly supplied per-model rate cards and M13 request sidecar; no live pricing or universal fallback rate is used.",
+    "Placeholder rate cards are unit labels, not prices: every modeled amount is reported as placeholder_units and currency is null.",
     "Every request and model listed in the M13 sidecar contributes its uncached input, cache-write, cache-read, and billed-output buckets.",
     "Billed output is inclusive; visible output estimates are diagnostic and are never added to billed output a second time.",
     "Incremental service costs are added only when explicitly supplied and explicitly marked as not already included in provider cost.",
     "A missing rate, token bucket, or service charge keeps task cost and aggregate totals unavailable instead of becoming zero.",
     "Paired deltas require matching source snapshot, model, settings, and counter version; unmatched pairs remain in cost coverage and are excluded from paired attribution.",
-    "Cost per successful task includes all assigned-task costs, including failed attempts, divided by the declared completed-and-quality-passing task count.",
+    "Cost per successful task includes all assigned-task costs, including failed attempts, divided by the declared completed-and-quality-passing task count; it is a point estimate reported with its n.",
+    "Savings decisions use a cluster bootstrap over participants with a fixed reporting seed, and claim support only with verified provenance and the predeclared minimum pairs and participants.",
     "Artifact delivery is evaluated for correctness and completeness; deterministic rendering does not imply free model output or zero service cost.",
     "Sensitivity scenarios are parameterized what-if calculations, not observed Enterprise spend, forecasts, or a savings promise.",
-    "Admin usage windows are aggregated by arm and are never split across individual requests or tasks."
+    "Admin usage windows are aggregated by arm and are never split across individual requests or tasks.",
+    "Factorial effects are per participant-task block with a cluster bootstrap; the interaction term never makes a savings claim."
   ],
   "condition_profiles": {
     "A": {
@@ -128,6 +131,66 @@
       "settings": "synthetic-default",
       "source_access": "enabled",
       "tool_settings": "synthetic-native-tuned-tools-v1"
+    },
+    "F00": {
+      "artifact": "disabled",
+      "compute": "enabled",
+      "concise_instructions": "synthetic-recorded-normal-v1",
+      "condition_id": "F00",
+      "effort": "medium",
+      "input_reduction": false,
+      "model": "synthetic-model",
+      "output_contract": false,
+      "preparation": "disabled",
+      "retrieval": "disabled",
+      "settings": "synthetic-default",
+      "source_access": "enabled",
+      "tool_settings": "synthetic-tools-v1"
+    },
+    "F01": {
+      "artifact": "disabled",
+      "compute": "enabled",
+      "concise_instructions": "synthetic-concise-v1",
+      "condition_id": "F01",
+      "effort": "medium",
+      "input_reduction": false,
+      "model": "synthetic-model",
+      "output_contract": true,
+      "preparation": "disabled",
+      "retrieval": "disabled",
+      "settings": "synthetic-default",
+      "source_access": "enabled",
+      "tool_settings": "synthetic-tools-v1"
+    },
+    "F10": {
+      "artifact": "disabled",
+      "compute": "enabled",
+      "concise_instructions": "synthetic-recorded-normal-v1",
+      "condition_id": "F10",
+      "effort": "medium",
+      "input_reduction": true,
+      "model": "synthetic-model",
+      "output_contract": false,
+      "preparation": "enabled",
+      "retrieval": "enabled",
+      "settings": "synthetic-default",
+      "source_access": "enabled",
+      "tool_settings": "synthetic-tools-v1"
+    },
+    "F11": {
+      "artifact": "disabled",
+      "compute": "enabled",
+      "concise_instructions": "synthetic-concise-v1",
+      "condition_id": "F11",
+      "effort": "medium",
+      "input_reduction": true,
+      "model": "synthetic-model",
+      "output_contract": true,
+      "preparation": "enabled",
+      "retrieval": "enabled",
+      "settings": "synthetic-default",
+      "source_access": "enabled",
+      "tool_settings": "synthetic-tools-v1"
     }
   },
   "enterprise_observed": {
@@ -139,6 +202,10 @@
         "attribution_documented": false,
         "cost_per_assigned_task": null,
         "cost_per_successful_task": null,
+        "cost_per_successful_task_basis": {
+          "kind": "point_estimate",
+          "n": 0
+        },
         "cost_per_successful_unavailable_reason": "blind_scoring_incomplete",
         "currency": null,
         "freshness_complete": false,
@@ -166,6 +233,10 @@
         "attribution_documented": false,
         "cost_per_assigned_task": null,
         "cost_per_successful_task": null,
+        "cost_per_successful_task_basis": {
+          "kind": "point_estimate",
+          "n": 0
+        },
         "cost_per_successful_unavailable_reason": "blind_scoring_incomplete",
         "currency": null,
         "freshness_complete": false,
@@ -193,6 +264,10 @@
         "attribution_documented": false,
         "cost_per_assigned_task": null,
         "cost_per_successful_task": null,
+        "cost_per_successful_task_basis": {
+          "kind": "point_estimate",
+          "n": 0
+        },
         "cost_per_successful_unavailable_reason": "blind_scoring_incomplete",
         "currency": null,
         "freshness_complete": false,
@@ -220,6 +295,10 @@
         "attribution_documented": false,
         "cost_per_assigned_task": null,
         "cost_per_successful_task": null,
+        "cost_per_successful_task_basis": {
+          "kind": "point_estimate",
+          "n": 0
+        },
         "cost_per_successful_unavailable_reason": "blind_scoring_incomplete",
         "currency": null,
         "freshness_complete": false,
@@ -250,15 +329,142 @@
     "enterprise_usage_observed": false,
     "fresh_window_count": 0,
     "mapping_complete": false,
+    "provenance_verified": false,
     "reason": "synthetic_fixture_has_no_enterprise_usage",
     "savings_claim": "none",
+    "savings_decision": {
+      "claim": "none",
+      "reasons": [
+        "synthetic_evidence",
+        "provenance_unverified",
+        "below_min_units",
+        "below_min_clusters",
+        "insufficient_interval",
+        "enterprise_observed_incomplete"
+      ],
+      "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+    },
     "status": "pending",
     "window_count": 0,
     "windows": []
   },
   "evidence_class": "synthetic",
-  "input_sha256": "542e4c30c45eb01bc1cc2767e1cd329ae59c4c736b00f68ea19075943df148bb",
+  "factorial": {
+    "arms": {
+      "F00": {
+        "mean_cost": {
+          "placeholder_units": "1"
+        },
+        "n": 2,
+        "success_rate": "0"
+      },
+      "F01": {
+        "mean_cost": {
+          "placeholder_units": "0.8"
+        },
+        "n": 2,
+        "success_rate": "0"
+      },
+      "F10": {
+        "mean_cost": {
+          "placeholder_units": "0.6"
+        },
+        "n": 2,
+        "success_rate": "0"
+      },
+      "F11": {
+        "mean_cost": {
+          "placeholder_units": "0.4"
+        },
+        "n": 2,
+        "success_rate": "0"
+      }
+    },
+    "effects": {
+      "input_reduction": {
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_units",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "-0.4"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 2,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        }
+      },
+      "interaction": {
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "interaction_is_not_a_savings_claim"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0.0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 2,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        }
+      },
+      "output_contract": {
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_units",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "-0.2"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 2,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        }
+      }
+    },
+    "excluded_units": [],
+    "n_clusters": 1,
+    "n_units_analysed": 2,
+    "n_units_total": 2,
+    "status": "analysed"
+  },
+  "input_sha256": "612097b67f42ca3642271a472f503163eb9f48e00ea187bafa663369f3457c23",
   "modeled_economics": {
+    "amount_unit": "placeholder_units",
     "conditions": {
       "A": {
         "costs": {
@@ -269,10 +475,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 12,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -288,7 +504,9 @@
           "retry_count": 0,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -301,10 +519,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -321,7 +549,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -332,10 +562,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -351,7 +591,9 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -362,10 +604,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -381,7 +633,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -392,10 +646,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -411,14 +675,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -432,10 +704,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -452,7 +734,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -465,10 +749,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -485,7 +779,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -496,10 +792,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -516,7 +822,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -527,10 +835,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -546,7 +864,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -557,10 +877,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -576,14 +906,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -597,10 +935,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -617,7 +965,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -630,10 +980,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -650,7 +1010,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -661,10 +1023,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -681,7 +1053,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -692,10 +1066,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -711,7 +1095,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -722,10 +1108,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -741,14 +1137,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -762,10 +1166,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -782,7 +1196,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -795,10 +1211,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -815,7 +1241,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -826,10 +1254,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -846,7 +1284,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -857,10 +1297,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -876,7 +1326,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -887,10 +1339,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -906,14 +1368,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -927,10 +1397,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -947,7 +1427,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -960,10 +1442,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -980,7 +1472,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -991,10 +1485,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1011,7 +1515,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -1022,10 +1528,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -1041,7 +1557,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -1052,10 +1570,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1071,14 +1599,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -1092,10 +1628,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -1112,7 +1658,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -1125,10 +1673,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -1145,7 +1703,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -1156,10 +1716,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1176,7 +1746,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -1187,10 +1759,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -1206,7 +1788,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -1217,10 +1801,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1236,14 +1830,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -1257,10 +1859,20 @@
           "billed_output_tokens_total": 600,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00018462",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00018462"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 600,
@@ -1277,7 +1889,9 @@
           "retry_count": 1,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0024",
+          "total_cost": {
+            "placeholder_units": "0.0024"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -1290,10 +1904,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -1310,7 +1934,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -1321,10 +1947,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 2,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1341,7 +1977,9 @@
               "retry_count": 1,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -1352,10 +1990,20 @@
               "billed_output_tokens_total": 250,
               "completed_count": 5,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -1371,7 +2019,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.001",
+              "total_cost": {
+                "placeholder_units": "0.001"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -1382,10 +2032,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1401,14 +2061,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000175",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000175"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -1422,10 +2090,20 @@
           "billed_output_tokens_total": 550,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00016923",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00016923"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 550,
@@ -1442,7 +2120,9 @@
           "retry_count": 0,
           "retry_count_observed": 13,
           "successful_count": 0,
-          "total_cost": "0.0022",
+          "total_cost": {
+            "placeholder_units": "0.0022"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -1455,10 +2135,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -1475,7 +2165,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -1486,10 +2178,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1505,7 +2207,9 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -1516,10 +2220,20 @@
               "billed_output_tokens_total": 200,
               "completed_count": 4,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.00016",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.00016"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -1536,7 +2250,9 @@
               "retry_count": 0,
               "retry_count_observed": 5,
               "successful_count": 0,
-              "total_cost": "0.0008",
+              "total_cost": {
+                "placeholder_units": "0.0008"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -1547,10 +2263,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1566,14 +2292,22 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000165",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000165"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
@@ -1587,10 +2321,20 @@
           "billed_output_tokens_total": 550,
           "completed_count": 11,
           "cost_coverage_count": 13,
-          "cost_per_assigned_task": "0.00016923",
+          "cost_per_assigned_task": {
+            "placeholder_units": "0.00016923"
+          },
+          "cost_per_assigned_task_basis": {
+            "kind": "point_estimate",
+            "n": 13
+          },
           "cost_per_successful_task": null,
+          "cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "cost_per_successful_unavailable_reason": "no_successful_tasks",
-          "currency": "USD",
+          "currency": null,
           "followup_requests": 0,
           "generated_output_tokens_observation_count": 13,
           "generated_output_tokens_total": 550,
@@ -1607,7 +2351,9 @@
           "retry_count": null,
           "retry_count_observed": 12,
           "successful_count": 0,
-          "total_cost": "0.0022",
+          "total_cost": {
+            "placeholder_units": "0.0022"
+          },
           "unknown_cost_inputs": {}
         },
         "weighted": {
@@ -1620,10 +2366,20 @@
               "billed_output_tokens_total": 50,
               "completed_count": 1,
               "cost_coverage_count": 2,
-              "cost_per_assigned_task": "0.0001",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0001"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 2
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 2,
@@ -1640,7 +2396,9 @@
               "retry_count": 0,
               "retry_count_observed": 2,
               "successful_count": 0,
-              "total_cost": "0.0002",
+              "total_cost": {
+                "placeholder_units": "0.0002"
+              },
               "unknown_cost_inputs": {}
             },
             "document": {
@@ -1651,10 +2409,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1670,7 +2438,9 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             },
             "edge_case": {
@@ -1681,10 +2451,20 @@
               "billed_output_tokens_total": 200,
               "completed_count": 4,
               "cost_coverage_count": 5,
-              "cost_per_assigned_task": "0.00016",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.00016"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 5
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 5,
@@ -1701,7 +2481,9 @@
               "retry_count": null,
               "retry_count_observed": 4,
               "successful_count": 0,
-              "total_cost": "0.0008",
+              "total_cost": {
+                "placeholder_units": "0.0008"
+              },
               "unknown_cost_inputs": {}
             },
             "numeric": {
@@ -1712,10 +2494,20 @@
               "billed_output_tokens_total": 150,
               "completed_count": 3,
               "cost_coverage_count": 3,
-              "cost_per_assigned_task": "0.0002",
+              "cost_per_assigned_task": {
+                "placeholder_units": "0.0002"
+              },
+              "cost_per_assigned_task_basis": {
+                "kind": "point_estimate",
+                "n": 3
+              },
               "cost_per_successful_task": null,
+              "cost_per_successful_task_basis": {
+                "kind": "point_estimate",
+                "n": 0
+              },
               "cost_per_successful_unavailable_reason": "no_successful_tasks",
-              "currency": "USD",
+              "currency": null,
               "declared_weight": "0.25",
               "followup_requests": 0,
               "generated_output_tokens_observation_count": 3,
@@ -1731,20 +2523,28 @@
               "retry_count": 0,
               "retry_count_observed": 3,
               "successful_count": 0,
-              "total_cost": "0.0006",
+              "total_cost": {
+                "placeholder_units": "0.0006"
+              },
               "unknown_cost_inputs": {}
             }
           },
-          "currency": "USD",
+          "currency": null,
           "weighted_assigned_unavailable_strata": [],
-          "weighted_cost_per_assigned_task": "0.000165",
+          "weighted_cost_per_assigned_task": {
+            "placeholder_units": "0.000165"
+          },
           "weighted_cost_per_successful_task": null,
+          "weighted_cost_per_successful_task_basis": {
+            "kind": "point_estimate",
+            "n": 0
+          },
           "weighted_success_rate": "0",
           "weighted_success_unavailable_reason": "no_successful_tasks"
         }
       }
     },
-    "currency": "USD",
+    "currency": null,
     "mechanism_effects_are_not_additive": true,
     "output_contract_comparison": {
       "deterministic_artifact": {
@@ -1753,10 +2553,12 @@
         "artifact_reconstruction_successes": 8,
         "billed_output_tokens_total": 400,
         "completed_count": 8,
-        "currency": "USD",
+        "currency": null,
         "followup_requests": 0,
         "generated_output_tokens_total": 400,
-        "modeled_total_cost": "0.0016",
+        "modeled_total_cost": {
+          "placeholder_units": "0.0016"
+        },
         "note": "Artifact output does not imply free model output; all billed output tokens and incremental service costs remain in task costs.",
         "repair_requests": 0,
         "run_count": 8,
@@ -1767,14 +2569,16 @@
         "artifact_delivery_successes": 0,
         "artifact_reconstruction_successes": 0,
         "billed_output_tokens_total": 4900,
-        "completed_count": 92,
-        "currency": "USD",
+        "completed_count": 100,
+        "currency": null,
         "followup_requests": 0,
-        "generated_output_tokens_total": 4900,
-        "modeled_total_cost": "0.0196",
+        "generated_output_tokens_total": 5300,
+        "modeled_total_cost": {
+          "placeholder_units": "5.6196"
+        },
         "note": "Artifact output does not imply free model output; all billed output tokens and incremental service costs remain in task costs.",
         "repair_requests": 0,
-        "run_count": 109,
+        "run_count": 117,
         "successful_count": 0
       }
     },
@@ -1782,96 +2586,309 @@
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0.00001538"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "C_normal",
-        "signed_candidate_minus_reference_cost_mean": "0.00001538"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0.00001538"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0.00001538"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "C_tuned",
-        "signed_candidate_minus_reference_cost_mean": "0.00001538"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0.00001538"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "A",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "B_no_artifact",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "B_no_compute",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "B_no_preparation",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "B_no_retrieval",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
       },
       {
         "candidate_condition": "B_full",
         "condition_profile_unknown_fields": [],
-        "currency": "USD",
+        "currency": null,
+        "decision": {
+          "claim": "none",
+          "reasons": [
+            "synthetic_evidence",
+            "provenance_unverified",
+            "below_min_clusters",
+            "insufficient_interval"
+          ],
+          "rule": "A savings claim needs consented, de-identified evidence with verified provenance, at least the predeclared number of paired units and participants, and a confidence interval for (candidate - reference) cost entirely below zero (build plan section 13)."
+        },
+        "interval": {
+          "confidence": "0.95",
+          "estimate": {
+            "placeholder_units": "0"
+          },
+          "lower": null,
+          "method": "insufficient_data",
+          "n_clusters": 1,
+          "n_units": 13,
+          "resamples": 10000,
+          "seed": 20261014,
+          "upper": null
+        },
         "matched_pair_count": 13,
         "mismatch_or_unavailable_reasons": {},
         "pair_count": 13,
         "reference_condition": "B_no_source",
-        "signed_candidate_minus_reference_cost_mean": "0"
+        "signed_candidate_minus_reference_cost_mean": {
+          "placeholder_units": "0"
+        }
+      }
+    ],
+    "rate_cards": [
+      {
+        "as_of": "2026-10-14",
+        "currency": null,
+        "model": "synthetic-model",
+        "rate_source": "placeholder"
       }
     ],
     "rate_denominator": "per_1m_tokens",
+    "rates_are_placeholder": true,
     "sensitivity_scenarios": [
       {
         "adoption_fraction": "0.5",
         "cache_price_multiplier": "1",
-        "currency": "USD",
+        "currency": null,
         "rate_multiplier": "1",
         "scenario_id": "fixture-adoption-half",
         "scenario_only": true,
-        "signed_difference_vs_native_normal": "0.000005",
+        "signed_difference_vs_native_normal": {
+          "placeholder_units": "0.000005"
+        },
         "unavailable_strata": [],
-        "weighted_expected_cost_per_assigned_task": "0.00017"
+        "weighted_expected_cost_per_assigned_task": {
+          "placeholder_units": "0.00017"
+        }
       }
     ],
     "success_rule": "completed_and_correct_complete_cited_without_unsupported_claim"
@@ -1994,10 +3011,18 @@
       }
     }
   },
+  "provenance": {
+    "admin_exports": [],
+    "note": "Digests show that the supplied admin exports match the windows. They do not prove the exports are genuine.",
+    "provenance_verified": false,
+    "unverified_window_count": 0,
+    "verified_window_count": 0
+  },
   "report_as_of_utc": "2026-10-14T13:00:00Z",
   "sample": {
+    "allocation_verification": "public_seed_recomputed",
     "assignment_count": 52,
-    "condition_run_count": 117,
+    "condition_run_count": 125,
     "participant_kind": "synthetic",
     "stratum_weights": {
       "deliverable": "0.25",
