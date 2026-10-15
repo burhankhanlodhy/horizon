@@ -484,12 +484,18 @@ def method_setup(method: str, pack: Any) -> list[str]:
     if method == "A":
         steps += [
             "In the ContextShrink extension, set Pilot method to exact_only.",
+            "If you changed Pilot method, fully quit Claude Desktop from the tray and reopen it.",
             "Turn the connector ON.",
+            'Check it: ask Claude "show ContextShrink stats"; evaluation_arm must say raw.',
+            "Do the check in its own chat before the first reading, so it is not measured.",
         ]
     elif method == "B":
         steps += [
             "In the ContextShrink extension, set Pilot method to normal.",
+            "If you changed Pilot method, fully quit Claude Desktop from the tray and reopen it.",
             "Turn the connector ON.",
+            'Check it: ask Claude "show ContextShrink stats"; evaluation_arm must say optimized.',
+            "Do the check in its own chat before the first reading, so it is not measured.",
         ]
     else:
         steps += [
