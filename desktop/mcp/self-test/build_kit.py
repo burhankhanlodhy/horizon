@@ -1,11 +1,14 @@
-"""Build the portable single-day self-test kit for a laptop without Python.
+"""Build the portable self-test kit for a laptop without Python.
 
-    python desktop/mcp/self-test/build_kit.py [--skip-build] [--seed 20261015]
+    python desktop/mcp/self-test/build_kit.py [--skip-build] [--seed N] [--profile session|single]
 
 It builds (or reuses) the frozen extension, generates the fictional test
-documents and pack, and writes ``dist/ContextShrink-SelfTest-<version>.zip``
-holding the launcher, the bundled runtime, the ``.mcpb``, the documents, the
-pack and a short guide. Nothing is uploaded anywhere.
+documents and pack, and writes a zip holding the launcher, the bundled runtime,
+the ``.mcpb``, the documents, the pack and a short guide. Nothing is uploaded
+anywhere.
+
+The default ``session`` profile is the long-session test (two chats, about 12
+questions each). ``single`` is the earlier single-question test, kept for reference.
 """
 
 from __future__ import annotations
@@ -26,9 +29,13 @@ EXTENSION_DIR = REPO_ROOT / "desktop" / "mcp" / "extension"
 DIST_DIR = EXTENSION_DIR / "dist"
 # Fixed timestamp so the same inputs give the same zip bytes.
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
-# The laptop kit runs the two methods that matter for the main question (24 chats).
+# The single-question kit runs the two methods that matter for the main question (24 chats).
 KIT_STUDY_ID = "st_generated_v2"
 KIT_METHODS = "B,C_normal"
+# The session kit: two chats (B and C_normal), the study id the session profile uses.
+SESSION_STUDY_ID = "st_session_v1"
+PROFILES = ("session", "single")
+DEFAULT_PROFILE = "session"
 
 
 def _load(name: str, path: Path) -> ModuleType:
@@ -95,7 +102,7 @@ echo.
 pause
 """
 
-GUIDE = """ContextShrink self test - quick guide
+GUIDE_SINGLE = """ContextShrink self test - quick guide
 =====================================
 
 What this does
@@ -163,6 +170,96 @@ def _plan_numbers(pack: dict) -> dict[str, str]:
     }
 
 
+GUIDE_SESSION = """ContextShrink self test (long session) - quick guide
+=========================================================
+
+What this does
+  Measures, on your own Claude Enterprise account, whether ContextShrink makes one
+  long Claude Desktop chat cheaper without worse answers. You do two chats, each
+  with {tasks} questions about the same four documents: one chat with the
+  ContextShrink connector ON, and one with it OFF. The order of the two chats is
+  set by the study seed and the wizard tells you which is first. The whole test
+  takes about 1 to 1.5 hours, then one date check about 4 hours after your last
+  chat. Cost comes from the usage total Claude Desktop shows you. The documents in
+  the "documents" folder are invented test data.
+
+One-time setup
+  1. Unzip this whole folder somewhere permanent, for example your Desktop.
+  2. Fully quit Claude Desktop from the tray. In Settings > Extensions, remove any
+     old ContextShrink, then install contextshrink-desktop-{version}.mcpb from
+     this folder.
+  3. In the extension settings, set the approved folder to the "documents" folder
+     inside this kit. Leave Pilot method on "normal".
+  4. Approve the "documents" folder for ContextShrink when the extension asks.
+  5. Set Claude Desktop's model to {model_label} and keep it for both chats.
+
+On the test day
+  - Use no other Claude product on this account during the test: no other chats,
+    no Claude Code, no Codex. They show up in the usage total.
+  - Double-click "Start Self Test.cmd" and press 1. The wizard shows every step:
+      * Each chat starts with a setup list. Follow it in order. When it says to
+        fully quit and reopen Claude Desktop, do that before you go on.
+      * With the connector ON, ask Claude "show ContextShrink stats" in a new chat
+        before the total is read. evaluation_arm must say optimized.
+      * Before the first question, type the usage total (Settings > Usage, for
+        example 20.23).
+      * For each question: press C to copy the prompt. Question 1 goes into a NEW
+        chat; later questions go into the SAME chat. Then paste the line that
+        starts with ANSWER: into the wizard.
+      * In the chat with the connector OFF, attach all four documents with the
+        first message only. In the chat with the connector ON, attach nothing.
+      * After the last question, type the usage total once it has stopped
+        changing (it updates within about a minute).
+  - If a chat goes wrong, type V at the answer prompt. The wizard voids that chat,
+    discards its answers and starts it again in a NEW chat.
+  - You can quit any time (q) and press 1 again later. The wizard carries on with
+    the chat in progress.
+
+About 4 hours after your last chat
+  Double-click the launcher and press 1. It asks for the date's Claude Desktop
+  line from the daily usage breakdown by product. If the chats were on more than
+  one date, it asks for each date.
+
+At the end
+  Press 3. It prints the result and saves report.json in this folder. Send
+  report.json to Claude Code. It holds no document text and no answer text, only
+  costs, right/wrong counts, the reconciliation and the verdict.
+"""
+
+
+def _session_plan(pack: dict) -> dict[str, str]:
+    """The figures for the session guide: the questions in each chat."""
+    return {"tasks": str(len(pack["tasks"]))}
+
+
+def dataset_args(profile: str, seed: int | None, out: Path) -> list[str]:
+    """Arguments for make_dataset.main: the session profile, or the earlier single kit.
+
+    Without a seed each profile uses its own default (session 20261016, single
+    20261015), so the kit holds the same documents the dataset tests check.
+    """
+    seed_args = [] if seed is None else ["--seed", str(seed)]
+    if profile == "session":
+        return [
+            "--out",
+            str(out),
+            *seed_args,
+            "--study-id",
+            SESSION_STUDY_ID,
+            "--profile",
+            "session",
+        ]
+    return [
+        "--out",
+        str(out),
+        *seed_args,
+        "--study-id",
+        KIT_STUDY_ID,
+        "--methods",
+        KIT_METHODS,
+    ]
+
+
 def _zip_dir(source: Path, target: Path, root_name: str) -> None:
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(p for p in source.rglob("*") if p.is_file()):
@@ -173,7 +270,9 @@ def _zip_dir(source: Path, target: Path, root_name: str) -> None:
             archive.writestr(info, path.read_bytes())
 
 
-def build_kit(*, skip_build: bool, seed: int) -> Path:
+def build_kit(*, skip_build: bool, seed: int | None, profile: str = DEFAULT_PROFILE) -> Path:
+    if profile not in PROFILES:
+        raise SystemExit(f"unknown profile: {profile}")
     build_extension = _load("cs_build_extension", EXTENSION_DIR / "build_extension.py")
     make_dataset = _load("cs_make_dataset", HERE / "make_dataset.py")
     from horizon.desktop_mcp.version import VERSION
@@ -186,20 +285,14 @@ def build_kit(*, skip_build: bool, seed: int) -> Path:
     if not (onedir / f"{build_extension.EXE_NAME}.exe").is_file() or not mcpb.is_file():
         raise SystemExit("build output missing; run without --skip-build")
 
-    kit_name = f"ContextShrink-SelfTest-{VERSION}"
+    kit_name = (
+        f"ContextShrink-SelfTest-Session-{VERSION}"
+        if profile == "session"
+        else f"ContextShrink-SelfTest-{VERSION}"
+    )
     with tempfile.TemporaryDirectory() as scratch:
         generated = Path(scratch) / "generated"
-        dataset_args = [
-            "--out",
-            str(generated),
-            "--seed",
-            str(seed),
-            "--study-id",
-            KIT_STUDY_ID,
-            "--methods",
-            KIT_METHODS,
-        ]
-        if make_dataset.main(dataset_args) != 0:
+        if make_dataset.main(dataset_args(profile, seed, generated)) != 0:
             raise SystemExit("dataset generation failed")
         pack = json.loads((generated / "pack.json").read_text(encoding="utf-8"))
 
@@ -211,9 +304,14 @@ def build_kit(*, skip_build: bool, seed: int) -> Path:
         shutil.copy2(generated / "pack.json", kit / "pack.json")
         launcher = LAUNCHER.replace("{study_id}", pack["study_id"])
         (kit / "Start Self Test.cmd").write_bytes(launcher.replace("\n", "\r\n").encode("ascii"))
-        guide = GUIDE.format(
-            version=VERSION, model_label=pack["model_label"], **_plan_numbers(pack)
-        )
+        if profile == "session":
+            guide = GUIDE_SESSION.format(
+                version=VERSION, model_label=pack["model_label"], **_session_plan(pack)
+            )
+        else:
+            guide = GUIDE_SINGLE.format(
+                version=VERSION, model_label=pack["model_label"], **_plan_numbers(pack)
+            )
         (kit / "GUIDE.txt").write_bytes(guide.replace("\n", "\r\n").encode("utf-8"))
 
         DIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -225,9 +323,15 @@ def build_kit(*, skip_build: bool, seed: int) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--skip-build", action="store_true", help="reuse the existing build")
-    parser.add_argument("--seed", type=int, default=20261015)
+    parser.add_argument("--seed", type=int, default=None, help="default: the profile's own seed")
+    parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default=DEFAULT_PROFILE,
+        help="session (default: two long chats) or single (the earlier one-question kit)",
+    )
     args = parser.parse_args(argv)
-    target = build_kit(skip_build=args.skip_build, seed=args.seed)
+    target = build_kit(skip_build=args.skip_build, seed=args.seed, profile=args.profile)
     print(f"kit: {target}")
     print(f"size: {target.stat().st_size} bytes")
     return 0

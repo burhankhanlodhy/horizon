@@ -656,14 +656,24 @@ def answer_digest(reply_text: str) -> str:
 # ------------------------------------------------------------------------- ledger
 
 
-def _check_record_shape(record: Any) -> None:
-    """Structural check shared by the ledger and the state. Chain fields are optional."""
+def _check_record_shape(
+    record: Any,
+    fields: dict[str, frozenset[str]] | None = None,
+    check_fields: Any = None,
+) -> None:
+    """Structural check shared by the ledger and the state. Chain fields are optional.
+
+    ``fields`` and ``check_fields`` default to this study's record types; the session
+    study passes its own (see ``self_test_session``).
+    """
+    fields = _RECORD_FIELDS if fields is None else fields
+    check_fields = _check_type_fields if check_fields is None else check_fields
     if not isinstance(record, dict):
         raise _fail("record_invalid")
     record_type = record.get("type")
-    if record_type not in _RECORD_FIELDS:
+    if record_type not in fields:
         raise _fail("record_type_unknown")
-    required = _COMMON_FIELDS | _RECORD_FIELDS[record_type]
+    required = _COMMON_FIELDS | fields[record_type]
     keys = set(record)
     if not required <= keys or not keys <= required | _CHAIN_FIELDS:
         raise _fail("record_invalid")
@@ -682,7 +692,7 @@ def _check_record_shape(record: Any) -> None:
             record["prev_sha256"]
         ):
             raise _fail("record_invalid")
-    _check_type_fields(record_type, record)
+    check_fields(record_type, record)
 
 
 def _check_type_fields(record_type: str, record: dict[str, Any]) -> None:
@@ -742,16 +752,28 @@ class Ledger:
     ``SelfTestError("ledger_tampered")``.
     """
 
-    def __init__(self, path: str | os.PathLike[str], *, clock: Any = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        clock: Any = None,
+        record_fields: dict[str, frozenset[str]] | None = None,
+        check_fields: Any = None,
+    ) -> None:
         self.path = Path(path)
         self._clock = clock if clock is not None else _utc_now
+        self._fields = _RECORD_FIELDS if record_fields is None else record_fields
+        self._check_fields = check_fields
+
+    def _check(self, record: dict[str, Any]) -> None:
+        _check_record_shape(record, self._fields, self._check_fields)
 
     def build(self, record_type: str, **fields: Any) -> dict[str, Any]:
         """A record with utc, local_date and utc_offset filled from the clock.
 
         Explicit ``local_date`` or ``utc_offset`` fields override the clock values.
         """
-        if record_type not in _RECORD_FIELDS:
+        if record_type not in self._fields:
             raise _fail("record_type_unknown")
         moment = self._clock()
         if not isinstance(moment, datetime) or moment.tzinfo is None:
@@ -764,7 +786,7 @@ class Ledger:
             "utc_offset": _offset_text(local),
         }
         record.update(fields)
-        _check_record_shape(record)
+        self._check(record)
         return record
 
     def append(self, record_type: str, **fields: Any) -> dict[str, Any]:
@@ -776,7 +798,7 @@ class Ledger:
         if not isinstance(record, dict):
             raise _fail("record_invalid")
         body = {key: value for key, value in record.items() if key not in _CHAIN_FIELDS}
-        _check_record_shape(body)
+        self._check(body)
         entries = self._read()
         previous = hashlib.sha256(entries[-1][1]).hexdigest() if entries else _ZERO_HASH
         stored = {"seq": len(entries) + 1, "prev_sha256": previous, **body}
@@ -819,7 +841,7 @@ class Ledger:
                 raise _fail("ledger_tampered")
             body = {key: value for key, value in record.items() if key not in _CHAIN_FIELDS}
             try:
-                _check_record_shape(body)
+                self._check(body)
             except SelfTestError as error:
                 raise _fail("ledger_tampered") from error
             entries.append((record, line))

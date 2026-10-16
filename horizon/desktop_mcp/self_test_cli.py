@@ -45,6 +45,20 @@ from horizon.desktop_mcp.self_test import (
     study_started_fields,
     validate_pack,
 )
+from horizon.desktop_mcp.self_test_session import (
+    CHATS_TOTAL,
+    MAX_CHAT_DELTA,
+    SESSION_METHODS,
+    SESSION_PACK_KIND,
+    SessionState,
+    analyze_session,
+    session_ledger,
+    session_pack_digest,
+    session_prompt,
+    session_setup,
+    session_study_started_fields,
+    validate_session_pack,
+)
 
 LEDGER_FILE = "ledger.jsonl"
 PACK_FILE = "pack.json"
@@ -204,6 +218,8 @@ def _load_pack_copy(state_dir: Path) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise SelfTestError("pack_copy_missing") from error
+    if _is_session_pack(raw):
+        return validate_session_pack(raw)
     return validate_pack(raw)
 
 
@@ -252,7 +268,7 @@ class Session:
         return due, upcoming
 
 
-def _open_session(state_dir_arg: str | None, console: Console) -> Session | None:
+def _open_session(state_dir_arg: str | None, console: Console) -> Any:
     state_dir = _resolve_state_dir(state_dir_arg, console)
     if state_dir is None:
         return None
@@ -260,6 +276,8 @@ def _open_session(state_dir_arg: str | None, console: Console) -> Session | None
         console.say(f"No study was found in {state_dir}.")
         console.say("Run init first, with your pack file, or check the folder name.")
         return None
+    if _stored_kind(state_dir) == SESSION_PACK_KIND:
+        return SessionStudy(state_dir, console)
     return Session(state_dir, console)
 
 
@@ -689,6 +707,8 @@ def cmd_init(args: argparse.Namespace, console: Console) -> int:
         console.say("cannot be used for a study. Copy it, replace the study id, questions,")
         console.say("answers and file names with your own, then run init again.")
         return 1
+    if _is_session_pack(raw):
+        return _session_init(raw, args, console)
     pack = validate_pack(raw)
     if "<" in pack["model_label"] or ">" in pack["model_label"]:
         console.say("Set model_label to the real model and effort you will use every day,")
@@ -740,6 +760,8 @@ def cmd_run(args: argparse.Namespace, console: Console) -> int:
     session = _open_session(args.state_dir, console)
     if session is None:
         return 1
+    if isinstance(session, SessionStudy):
+        return _session_run(session, console)
     state = session.state
     console.say(
         f"Study {session.pack['study_id']}: {len(state.completed_phases)} of {state.phase_count} phases complete."
@@ -768,6 +790,10 @@ def cmd_reconcile(args: argparse.Namespace, console: Console) -> int:
     session = _open_session(args.state_dir, console)
     if session is None:
         return 1
+    if isinstance(session, SessionStudy):
+        if _session_reconcile_due(session) == 0 and not session.state.pending_reconciliations():
+            console.say("No date with chat readings is waiting to be checked.")
+        return 0
     if _reconcile_due(session) == 0 and not session.state.pending_reconciliations():
         console.say("No date with group readings is waiting to be checked.")
     return 0
@@ -777,6 +803,9 @@ def cmd_status(args: argparse.Namespace, console: Console) -> int:
     session = _open_session(args.state_dir, console)
     if session is None:
         return 1
+    if isinstance(session, SessionStudy):
+        _session_status(session, console)
+        return 0
     state = session.state
     console.say(f"Study {session.pack['study_id']}  |  {session.pack['model_label']}")
     console.say(
@@ -877,8 +906,13 @@ def cmd_report(args: argparse.Namespace, console: Console) -> int:
     session = _open_session(args.state_dir, console)
     if session is None:
         return 1
-    report = analyze(session.pack, session.state)
-    for line in _report_lines(report):
+    if isinstance(session, SessionStudy):
+        report = analyze_session(session.pack, session.state)
+        lines = _session_report_lines(report)
+    else:
+        report = analyze(session.pack, session.state)
+        lines = _report_lines(report)
+    for line in lines:
         console.say(line)
     if args.output:
         Path(args.output).write_text(
@@ -887,6 +921,462 @@ def cmd_report(args: argparse.Namespace, console: Console) -> int:
         console.say("")
         console.say(f"Full report written to {args.output}.")
     return 0
+
+
+# ----------------------------------------------------------------------- session study
+#
+# The long-session study (kind self_test_session_pack): two chats, one with the ContextShrink
+# connector on (B) and one with it off (C_normal), each with many questions. The rules are in
+# self_test_session.py; the functions below only ask questions and call those rules.
+
+CHAT_LABELS = {
+    "B": "connector ON (ContextShrink)",
+    "C_normal": "connector OFF, files attached",
+}
+
+SESSION_REASON_TEXT = {
+    "study_incomplete": "both chats are not finished yet",
+    "reconciliation_pending": "a date has not been checked against Claude Desktop yet",
+    "reconciliation_failed": "a date did not match Claude Desktop's daily line",
+    "quality_regression": "B had fewer correct answers than C_normal beyond the tolerance",
+}
+
+SESSION_VERDICT_TEXT = {
+    "savings_observed": "B cost less than C_normal in this session.",
+    "cost_increase_observed": "B cost more than C_normal in this session.",
+    "no_difference": "B and C_normal cost the same, to the cent.",
+    "none": "No verdict yet.",
+}
+
+SESSION_ERROR_TEXT = {
+    "reading_delta_too_large": (
+        f"This chat shows more than ${MAX_CHAT_DELTA} of spend, which looks like a typo. "
+        "Check the reading and type it again."
+    ),
+}
+
+
+class SessionStudy:
+    """A session study: its pack copy, ledger and replayed state. Writes go through write()."""
+
+    def __init__(self, state_dir: Path, console: Console) -> None:
+        self.state_dir = state_dir
+        self.console = console
+        self.pack = _load_pack_copy(state_dir)
+        self.ledger = session_ledger(state_dir / LEDGER_FILE, clock=console.clock)
+        self.records = self.ledger.load()
+        self.state = SessionState.from_ledger(self.pack, self.records)
+
+    def write(self, record_type: str, **fields: Any) -> dict[str, Any]:
+        record = self.ledger.build(record_type, **fields)
+        self.state = self.state.with_record(record)
+        self.ledger.append_record(record)
+        self.records.append(record)
+        return record
+
+
+def _stored_kind(state_dir: Path) -> str | None:
+    path = state_dir / PACK_FILE
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return raw.get("kind") if isinstance(raw, dict) else None
+
+
+def _is_session_pack(raw: Any) -> bool:
+    return isinstance(raw, dict) and raw.get("kind") == SESSION_PACK_KIND
+
+
+def _reconcile_queue(state: Any, now: datetime) -> tuple[list[str], list[tuple[str, datetime]]]:
+    due: list[str] = []
+    upcoming: list[tuple[str, datetime]] = []
+    for local_date in state.pending_reconciliations():
+        ready = state.reconcile_ready_at(local_date)
+        if now >= ready:
+            due.append(local_date)
+        else:
+            upcoming.append((local_date, ready))
+    return due, upcoming
+
+
+def _order_text(order: Sequence[str]) -> str:
+    return " then ".join(f"{CHAT_LABELS[method]}" for method in order)
+
+
+def _session_init(raw: Any, args: argparse.Namespace, console: Console) -> int:
+    pack = validate_session_pack(raw)
+    if "<" in pack["model_label"] or ">" in pack["model_label"]:
+        console.say("Set model_label to the real model and effort you will use every day,")
+        console.say('for example "Claude Opus at standard effort", then run init again.')
+        return 1
+    state_dir = Path(args.state_dir) if args.state_dir else default_state_dir(pack["study_id"])
+    ledger = session_ledger(state_dir / LEDGER_FILE, clock=console.clock)
+    digest = session_pack_digest(pack)
+    started = [record for record in ledger.load() if record["type"] == "study_started"]
+    if started:
+        if started[0]["pack_digest"] != digest:
+            console.say("This folder already holds a study made from a different pack.")
+            console.say("Use another --state-dir, or the original pack file. Nothing was changed.")
+            return 1
+        console.say(f"This study is already set up in {state_dir}. Nothing was changed.")
+        console.say("Chat order: " + _order_text(started[0]["order"]))
+        console.say("Next step: " + _command("run", state_dir))
+        return 0
+
+    fields = session_study_started_fields(pack, new_seed_hex())
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(state_dir / PACK_FILE, pack)
+    record = ledger.build("study_started", **fields)
+    SessionState(pack).with_record(record)
+    ledger.append_record(record)
+
+    count = len(pack["tasks"])
+    console.say(f"Study {pack['study_id']} is set up.")
+    console.say(f"Model setting for both chats: {pack['model_label']}")
+    console.say(f"Your study folder: {state_dir}")
+    console.say("It stays on this computer. Do not edit the files in it.")
+    console.say("")
+    console.say(f"The plan: 2 chats of {count} questions each, in this order (set by the seed):")
+    for number, method in enumerate(fields["order"], start=1):
+        console.say(f"  Chat {number}: {CHAT_LABELS[method]}")
+    console.say("About 1 to 1.5 hours for both chats. Each date is checked against Claude Desktop")
+    console.say("about 4 hours after its last reading.")
+    console.say("")
+    console.say("Next step:")
+    console.say("  " + _command("run", state_dir))
+    return 0
+
+
+def _ask_session_answer(console: Console) -> str | None:
+    """The ANSWER line, or None when the owner types V to void this chat."""
+    while True:
+        line = console.ask(
+            "Paste the line that starts with ANSWER: here, or type V to void this chat and redo it: "
+        )
+        if line.lower() == "v":
+            return None
+        if ANSWER_LINE.match(line):
+            return line
+        console.say("That line should start with ANSWER: followed by the answer.")
+        console.say("Copy it from the end of Claude's reply and paste it again.")
+
+
+def _session_reading(study: SessionStudy, record_type: str, prompt: str, **fields: Any) -> str:
+    """Ask for a total and record it. A reading that breaks a rule is asked again."""
+    console = study.console
+    while True:
+        state = study.state
+        if record_type == "chat_ended":
+            floor = state.open_chat()["before"]
+        else:
+            floor = state.reading_floor()
+        total = _ask_reading(console, prompt, floor=floor)
+        try:
+            study.write(record_type, total=total, **fields)
+            return total
+        except SelfTestError as error:
+            if error.code not in RETYPE_CODES:
+                raise
+            console.say(SESSION_ERROR_TEXT.get(error.code, ERROR_TEXT[error.code]))
+
+
+def _session_start_chat(study: SessionStudy, action: dict[str, Any]) -> None:
+    console = study.console
+    method, number = action["method"], action["chat_number"]
+    console.say("")
+    console.say(RULE)
+    console.say(f"CHAT {number} of {CHATS_TOTAL}  |  {CHAT_LABELS[method]}")
+    console.say(f"Model setting (keep it for both chats): {study.pack['model_label']}")
+    console.say(THIN)
+    console.say("Step 1: set Claude Desktop up like this:")
+    steps = session_setup(method, study.pack, restart=action["restart"])
+    for index, step in enumerate(steps, start=1):
+        console.say(f"  {index}. {step}")
+    console.say(RULE)
+    while True:
+        answer = console.ask("Type yes when Claude Desktop is set up and any check is done: ")
+        if answer.lower() == "yes":
+            break
+        console.say("Not started yet. Set Claude Desktop up as listed above, then type yes.")
+    console.say("Step 2: read the running total in Claude Desktop settings now.")
+    _session_reading(
+        study,
+        "chat_started",
+        "Type the total spent right now (for example 20.23): ",
+        method=method,
+        setup_confirmed=True,
+    )
+    console.say(f"Chat {number} is ready. Next: question 1, in a NEW chat.")
+
+
+def _session_ask(study: SessionStudy, action: dict[str, Any]) -> None:
+    console = study.console
+    pack = study.pack
+    method, number, task_id = action["method"], action["number"], action["task_id"]
+    count = len(pack["tasks"])
+    task = _task_by_id(pack, task_id)
+    prompt = session_prompt(pack, method, number)
+    console.say("")
+    console.say(RULE)
+    console.say(
+        f"CHAT {action['chat_number']} of {CHATS_TOTAL}  |  QUESTION {number} of {count}  |  "
+        f"{CHAT_LABELS[method]}"
+    )
+    console.say(THIN)
+    console.say(prompt)
+    console.say(RULE)
+    if number == 1:
+        if method == "C_normal":
+            console.say("Attach ALL these files with the paperclip, in this first message: ")
+            console.say("  " + ", ".join(pack["documents"]))
+        else:
+            console.say("Do not attach files for this chat.")
+        console.say("Start a NEW chat in Claude Desktop for this chat and paste the prompt.")
+    else:
+        console.say("Paste this into the SAME chat, below your last answer. Attach nothing.")
+    if console.platform == "win32":
+        choice = console.ask(
+            "Press C then Enter to copy the prompt to the clipboard, or just Enter: "
+        )
+        if choice.lower() == "c":
+            try:
+                copy_to_clipboard(prompt)
+                console.say("Copied to the clipboard.")
+            except (OSError, subprocess.CalledProcessError):
+                console.say("Could not copy. Select the prompt text above and copy it by hand.")
+    console.say("Wait for the full reply, then come back here.")
+    line = _ask_session_answer(console)
+    if line is None:
+        reason = _ask_void_reason(console)
+        study.write("chat_voided", method=method, reason=reason)
+        console.say(f"Chat {action['chat_number']} is voided and its answers are discarded.")
+        console.say("It starts again from the setup list, in a NEW chat.")
+        return
+    correct = check_answer(task, line)
+    study.write(
+        "task_answer",
+        method=method,
+        task_id=task_id,
+        correct=correct,
+        answer_sha256=answer_digest(line),
+    )
+    console.say("Correct." if correct else "Not correct.")
+
+
+def _session_read_after(study: SessionStudy, action: dict[str, Any]) -> None:
+    console = study.console
+    chat = study.state.open_chat()
+    before = chat["before"]
+    console.say("")
+    console.say(
+        f"CHAT {action['chat_number']}: all {len(study.pack['tasks'])} questions are answered."
+    )
+    total = _session_reading(
+        study,
+        "chat_ended",
+        "Read the total in Settings -> Usage, then type it once it has stopped changing "
+        "(it updates within about a minute): ",
+        method=action["method"],
+    )
+    console.say(f"This chat cost ${Decimal(total) - before:.2f}. Running total now: ${total}.")
+
+
+def _session_void_midnight(study: SessionStudy, action: dict[str, Any]) -> None:
+    console = study.console
+    study.write("chat_voided", method=action["method"], reason="spans_midnight")
+    console.say("This chat's readings fall on two local dates, so it cannot be measured.")
+    console.say("It is voided and redone from the setup list, in a NEW chat. Its spend stays")
+    console.say("in the daily totals.")
+
+
+def _session_offer_resume(study: SessionStudy) -> None:
+    """A chat left open by a quit or crash: continue it, or void it and redo it."""
+    console = study.console
+    chat = study.state.open_chat()
+    if chat is None:
+        return
+    number = len(study.state.done_chats()) + 1
+    answered = len(chat["answers"])
+    console.say(RULE)
+    console.say(
+        f"Chat {number} was in progress when the wizard last stopped "
+        f"({answered} of {len(study.pack['tasks'])} questions answered)."
+    )
+    console.say("Press Enter to continue it where you left off (usually the right choice).")
+    console.say("Or type V to void this chat and redo it. Only this chat is affected.")
+    if console.ask("Enter to continue, or V to void: ").lower() != "v":
+        return
+    study.write("chat_voided", method=chat["method"], reason=_ask_void_reason(console))
+    console.say(f"Chat {number} is voided. The wizard will run it again from the setup list.")
+
+
+def _session_reconcile_one(study: SessionStudy, local_date: str) -> None:
+    console = study.console
+    console.say("")
+    console.say(THIN)
+    console.say(f"CHECK DATE {local_date} against Claude Desktop")
+    console.say(
+        "In Settings -> Usage, open the daily breakdown by product and find the Claude Desktop line."
+    )
+    desktop = _ask_desktop_line(console, local_date)
+    result = reconcile(study.state, local_date, desktop)
+    study.write("day_reconciled", local_date=local_date, desktop_total=desktop)
+    if result["passed"]:
+        console.say(
+            f"Matches. Your readings add up to ${result['measured_total']}; Claude Desktop shows "
+            f"${result['desktop_total']}. The difference of ${result['difference']} is within the "
+            f"allowed ${result['tolerance']}."
+        )
+    else:
+        console.say(
+            f"Does not match. Your readings add up to ${result['measured_total']}; Claude Desktop shows "
+            f"${result['desktop_total']} (difference ${result['difference']}, allowed ${result['tolerance']})."
+        )
+        console.say("This date is not matched, so the report will give no verdict.")
+
+
+def _session_reconcile_due(study: SessionStudy) -> int:
+    console = study.console
+    state = study.state
+    if state.has_open_block() and state.pending_reconciliations():
+        console.say("Finish the chat in progress before checking a date.")
+        return 0
+    due, upcoming = _reconcile_queue(state, console.clock())
+    for local_date in due:
+        _session_reconcile_one(study, local_date)
+    for local_date, ready in upcoming:
+        console.say(
+            f"Date {local_date} can be checked after about {_clock_text(ready)} (local time), "
+            "4 hours after its last reading."
+        )
+    return len(due)
+
+
+def _session_show_done(study: SessionStudy) -> None:
+    console = study.console
+    state = study.state
+    console.say("")
+    console.say(f"Both chats are recorded ({CHATS_TOTAL} of {CHATS_TOTAL}).")
+    for local_date in state.pending_reconciliations():
+        ready = state.reconcile_ready_at(local_date)
+        console.say(
+            f"Check date {local_date} after about {_clock_text(ready)} (local time), "
+            "when Claude Desktop's daily line shows. Then run:"
+        )
+        console.say("  " + _command("reconcile", study.state_dir))
+    console.say("Then run the report:")
+    console.say("  " + _command("report", study.state_dir))
+
+
+def _session_run(study: SessionStudy, console: Console) -> int:
+    state = study.state
+    console.say(
+        f"Study {study.pack['study_id']}: {len(state.done_chats())} of {CHATS_TOTAL} chats complete."
+    )
+    if not state.study_complete:
+        _midnight_warning(console)
+    _session_offer_resume(study)
+    _session_reconcile_due(study)
+    while True:
+        action = study.state.next_action()
+        kind = action["action"]
+        if kind == "start_chat":
+            _session_start_chat(study, action)
+        elif kind == "ask_question":
+            _session_ask(study, action)
+        elif kind == "read_after":
+            _session_read_after(study, action)
+        elif kind == "void_midnight":
+            _session_void_midnight(study, action)
+        else:
+            _session_show_done(study)
+            return 0
+
+
+def _session_next_step(study: SessionStudy) -> str:
+    action = study.state.next_action()
+    kind = action["action"]
+    if kind == "start_study":
+        return "Run init first."
+    if kind == "start_chat":
+        return f"Run: {_command('run', study.state_dir)}  (starts chat {action['chat_number']})"
+    if kind == "done":
+        if study.state.pending_reconciliations():
+            return f"Run: {_command('reconcile', study.state_dir)}"
+        return f"Run: {_command('report', study.state_dir)}"
+    return f"Run: {_command('run', study.state_dir)}  (continues the chat in progress)"
+
+
+def _session_status(study: SessionStudy, console: Console) -> None:
+    state = study.state
+    count = len(study.pack["tasks"])
+    console.say(f"Study {study.pack['study_id']}  |  {study.pack['model_label']}")
+    console.say(f"Chat order: {_order_text(state.order)}")
+    console.say(f"Chats complete: {len(state.done_chats())} of {CHATS_TOTAL}.")
+    for index, chat in enumerate(state.chats, start=1):
+        console.say(
+            f"  Chat {index}: {CHAT_LABELS[chat['method']]} ({state.chat_status(chat)}), "
+            f"questions answered {len(chat['answers'])} of {count}"
+        )
+    voided = sum(1 for chat in state.chats if chat["voided"])
+    if voided:
+        console.say(f"Voided and redone: {voided} chat(s).")
+    now = console.clock()
+    for local_date in state.pending_reconciliations():
+        ready = state.reconcile_ready_at(local_date)
+        if now >= ready and not state.has_open_block():
+            console.say(f"Waiting for your Claude Desktop line: {local_date}")
+        else:
+            console.say(f"Not ready to check: {local_date} (after about {_clock_text(ready)}).")
+    console.say("Next step: " + _session_next_step(study))
+
+
+def _session_report_lines(report: dict[str, Any]) -> list[str]:
+    progress = report["progress"]
+    lines = [
+        f"Session report for {report['study_id']}  |  {report['model_label']}",
+        f"Chats complete: {progress['chats_complete']} of {progress['chats_total']}.  "
+        f"Questions per chat: {progress['tasks_per_chat']}.",
+        "",
+        "Per chat (only finished chats count):",
+    ]
+    for method in SESSION_METHODS:
+        row = report["methods"][method]
+        if row["spend"] is None:
+            lines.append(f"  {CHAT_LABELS[method]}: not in the results yet")
+            continue
+        per = f"${row['cost_per_correct']}" if row["cost_per_correct"] is not None else "n/a"
+        lines.append(
+            f"  {CHAT_LABELS[method]}: spend ${row['spend']}, correct {row['correct']} of "
+            f"{row['tasks']}, cost per correct answer {per}"
+        )
+    lines += [
+        "",
+        "Main question: does ContextShrink (B) cost less than the plain chat (C_normal)?",
+        "Verdict: " + SESSION_VERDICT_TEXT.get(report["verdict"], report["verdict"]),
+    ]
+    if report["B_minus_C"] is not None:
+        percent = report["B_vs_C_percent"]
+        suffix = f" ({percent}% of C_normal)" if percent is not None else ""
+        lines.append(f"  B minus C_normal: {_dollars(report['B_minus_C'])}{suffix}")
+    for reason in report["reasons"]:
+        lines.append("  Why: " + SESSION_REASON_TEXT.get(reason, REASON_TEXT.get(reason, reason)))
+    lines += ["", f"Reconciliation: {report['reconciliation']['status']}."]
+    for item in report["reconciliation"]["dates"]:
+        detail = f"measured ${item['measured_total']}"
+        if "desktop_total" in item:
+            detail += f", Claude Desktop ${item['desktop_total']}"
+        lines.append(f"  {item['local_date']}: {item['status']}, {detail}")
+    lines += ["", "Chats:"]
+    for chat in report["chats"]:
+        label = CHAT_LABELS[chat["method"]]
+        lines.append(f"  Chat {chat['number']}: {label}, {chat['status']}")
+    scope = report["scope"]
+    lines += ["", scope[0].upper() + scope[1:] + "."]
+    return lines
 
 
 _COMMANDS = {

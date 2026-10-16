@@ -330,9 +330,24 @@ class SourceReader:
         _reject_unsafe_path_text(source)
         supplied_path = Path(source)
         if not supplied_path.is_absolute():
-            if len(self._roots) != 1:
-                raise SourceAccessError("source_unapproved")
-            supplied_path = self._roots[0].path / supplied_path
+            if len(self._roots) == 1:
+                supplied_path = self._roots[0].path / supplied_path
+            else:
+                # Several roots: a bare file name resolves only when exactly one root holds
+                # a regular, non-link file of that exact name directly inside it.
+                if source != supplied_path.name or source in {".", ".."}:
+                    raise SourceAccessError("source_unapproved")
+                holders: list[Path] = []
+                for root in self._roots:
+                    try:
+                        info = os.lstat(root.path / source)
+                    except OSError:
+                        continue
+                    if stat.S_ISREG(info.st_mode) and not _is_reparse(info):
+                        holders.append(root.path / source)
+                if len(holders) != 1:
+                    raise SourceAccessError("source_unapproved")
+                supplied_path = holders[0]
         matches: list[tuple[_ApprovedRoot, Path, str]] = []
         for root in self._roots:
             try:

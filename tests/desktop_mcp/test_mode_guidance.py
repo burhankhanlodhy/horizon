@@ -122,3 +122,14 @@ def test_diagnostic_instructions_do_not_carry_mode_guidance() -> None:
     instructions = _diagnostic_instructions()
     assert "focused with a query" not in instructions
     assert "compact for JSON" not in instructions
+
+
+def test_open_description_says_bare_names_open_directly_and_find_is_reused() -> None:
+    description = _open_description()
+    assert "Open a file by its name directly" in description
+    assert "call find again instead of re-reading the whole file" in description
+
+
+def test_source_property_accepts_a_bare_file_name() -> None:
+    source = _spec("contextshrink_open")["inputSchema"]["properties"]["source"]
+    assert "only the file name" in source["description"]
