@@ -13,8 +13,10 @@ from horizon.desktop_mcp.server import create_server
 from horizon.desktop_mcp.settings import DesktopSettings
 
 # Measured before the guidance text was added (o200k estimate, same method as below).
-BASELINE_SOURCE_SPEC_TOKENS = 1131
-BASELINE_LOCAL_INSTRUCTION_TOKENS = 56
+# Re-measured on HEAD (0.1.3 contracts, o200k): the earlier 1131 figure was stale.
+# The 0.1.4 find-mode text adds about 134 tokens to the source tool listing.
+BASELINE_SOURCE_SPEC_TOKENS = 1288
+BASELINE_LOCAL_INSTRUCTION_TOKENS = 90
 ADDED_TOKEN_BUDGET = 200
 
 
@@ -65,7 +67,7 @@ def test_open_description_states_focused_requires_a_query() -> None:
 def test_open_default_mode_is_exact_and_enum_is_unchanged() -> None:
     mode = _spec("contextshrink_open")["inputSchema"]["properties"]["mode"]
     assert mode["default"] == "exact"
-    assert mode["enum"] == ["exact", "compact", "focused", "overview"]
+    assert mode["enum"] == ["exact", "compact", "focused", "overview", "find"]
     assert mode["type"] == "string"
 
 
@@ -77,6 +79,7 @@ def test_open_argument_names_are_unchanged() -> None:
         "result_token_budget",
         "query",
         "cursor",
+        "context_lines",
     }
     assert schema["required"] == ["source"]
 

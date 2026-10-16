@@ -27,8 +27,6 @@ from typing import Any
 
 from horizon.desktop_mcp.self_test import (
     MAX_BLOCK_DELTA,
-    METHODS,
-    PHASE_COUNT,
     REVIEW_DELAY,
     Ledger,
     SelfTestError,
@@ -396,7 +394,7 @@ def _start_phase(session: Session, action: dict[str, Any]) -> None:
     phase, half, method = action["phase"], action["half"], action["method"]
     console.say("")
     console.say(RULE)
-    console.say(f"Phase {phase} of {PHASE_COUNT}: method {method}")
+    console.say(f"Phase {phase} of {state.phase_count}: method {method}")
     console.say(
         f"Method: {METHOD_NAMES[method]}  ({half}, {len(state.schedule[phase - 1]['groups'])} groups)"
     )
@@ -434,7 +432,7 @@ def _read_before(session: Session, action: dict[str, Any]) -> None:
     index, count = _group_position(session.state, phase, group_id)
     console.say("")
     console.say(THIN)
-    console.say(f"PHASE {phase} of {PHASE_COUNT}  |  GROUP {index} of {count}")
+    console.say(f"PHASE {phase} of {session.state.phase_count}  |  GROUP {index} of {count}")
     console.say("Close or ignore other Claude chats.")
     console.say("Open Claude Desktop Settings -> Usage and read the total spent right now.")
     warnings_before = len(session.state.warnings)
@@ -648,7 +646,7 @@ def _show_done(session: Session) -> None:
     console = session.console
     state = session.state
     console.say("")
-    console.say(f"All {PHASE_COUNT} phases are recorded.")
+    console.say(f"All {state.phase_count} phases are recorded.")
     for local_date in state.pending_reconciliations():
         ready = state.reconcile_ready_at(local_date)
         console.say(
@@ -727,8 +725,8 @@ def cmd_init(args: argparse.Namespace, console: Console) -> int:
     console.say("It stays on this computer. Do not edit the files in it.")
     console.say("")
     console.say(
-        f"The plan: {PHASE_COUNT} phases, {chats} chats in total (every task once per method), "
-        f"{_estimate_text(chats, PHASE_COUNT)} of work."
+        f"The plan: {len(schedule)} phases, {chats} chats in total (every task once per method), "
+        f"{_estimate_text(chats, len(schedule))} of work."
     )
     console.say("Each date is checked against Claude Desktop about 4 hours after its last reading.")
     console.say("\n".join(_plan_lines(schedule)))
@@ -744,7 +742,7 @@ def cmd_run(args: argparse.Namespace, console: Console) -> int:
         return 1
     state = session.state
     console.say(
-        f"Study {session.pack['study_id']}: {len(state.completed_phases)} of {PHASE_COUNT} phases complete."
+        f"Study {session.pack['study_id']}: {len(state.completed_phases)} of {state.phase_count} phases complete."
     )
     if not state.study_complete:
         _midnight_warning(console)
@@ -782,12 +780,12 @@ def cmd_status(args: argparse.Namespace, console: Console) -> int:
     state = session.state
     console.say(f"Study {session.pack['study_id']}  |  {session.pack['model_label']}")
     console.say(
-        f"Phases done: {len(state.completed_phases)} of {PHASE_COUNT}.  "
+        f"Phases done: {len(state.completed_phases)} of {state.phase_count}.  "
         f"Groups recorded: {state.recorded_group_runs()} of {state.group_runs_total}."
     )
     for slot in state.schedule:
         console.say(
-            f"  Phase {slot['phase']} of {PHASE_COUNT}: method {slot['method']} ({slot['half']})  "
+            f"  Phase {slot['phase']} of {state.phase_count}: method {slot['method']} ({slot['half']})  "
             f"{_phase_status(state, slot['phase'])}"
         )
     if state.warnings:
@@ -817,8 +815,7 @@ def _report_lines(report: dict[str, Any]) -> list[str]:
         "",
         "Per method (groups in the results only):",
     ]
-    for method in METHODS:
-        row = report["methods"][method]
+    for method, row in report["methods"].items():
         per = f"${row['cost_per_correct']}" if row["cost_per_correct"] is not None else "n/a"
         lines.append(
             f"  {method} ({METHOD_NAMES[method]}): {row['groups']} group(s), spend "

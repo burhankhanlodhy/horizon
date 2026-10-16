@@ -471,6 +471,7 @@ class BrokerClient:
         query: str | None = None,
         result_token_budget: int | None = None,
         cursor: str | None = None,
+        context_lines: int | None = None,
     ) -> dict[str, Any]:
         args: dict[str, Any] = {
             "source": source_id,
@@ -484,12 +485,14 @@ class BrokerClient:
             or query is not None
             or result_token_budget is not None
             or cursor is not None
+            or context_lines is not None
         ):
             args["mode"] = mode
             for key, value in (
                 ("query", query),
                 ("result_token_budget", result_token_budget),
                 ("cursor", cursor),
+                ("context_lines", context_lines),
             ):
                 if value is not None:
                     args[key] = value

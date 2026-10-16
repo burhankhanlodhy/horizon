@@ -22,13 +22,15 @@ from .compression import (
     infer_compaction_kind,
 )
 from .extractors import DOCUMENT_KINDS
+from .find import block_text, build_blocks, match_lines, parse_terms
 from .retrieval import Passage, rank_passages
 from .selectors import SelectedScope, markdown_headings
 from .snapshots import SourceSnapshot
 from .text_lines import split_physical_lines
 
 POLICY_VERSION = "desktop-presentation-v1"
-PresentationMode = Literal["exact", "compact", "focused", "overview"]
+PresentationMode = Literal["exact", "compact", "focused", "overview", "find"]
+FIND_CONTEXT_LINES_MAX = 50
 
 
 class PolicyError(ValueError):
@@ -94,12 +96,12 @@ class CursorSigner:
 
 @dataclass(frozen=True)
 class ResultLimits:
-    token_budget: int = 2000
-    max_result_bytes: int = 65536
+    token_budget: int = 32000
+    max_result_bytes: int = 262144
 
     def __post_init__(self) -> None:
-        if isinstance(self.token_budget, bool) or not 128 <= self.token_budget <= 8000:
-            raise ValueError("token_budget must be between 128 and 8000")
+        if isinstance(self.token_budget, bool) or not 128 <= self.token_budget <= 64000:
+            raise ValueError("token_budget must be between 128 and 64000")
         if isinstance(self.max_result_bytes, bool) or self.max_result_bytes < 1024:
             raise ValueError("max_result_bytes must be at least 1024")
 
@@ -337,6 +339,7 @@ def _cursor_payload(
     selector: dict[str, Any],
     offset: int,
     tool: str = "open",
+    context_lines: int | None = None,
 ) -> dict[str, Any]:
     return {
         "policy": POLICY_VERSION,
@@ -349,6 +352,7 @@ def _cursor_payload(
         "budget": budget,
         "selector": selector,
         "offset": offset,
+        "context_lines": context_lines,
     }
 
 
@@ -363,11 +367,14 @@ def _check_cursor(
     budget: int,
     selector: dict[str, Any] | None,
     tool: str = "open",
+    context_lines: int | None = None,
 ) -> tuple[dict[str, Any], int]:
     payload = cursor_signer.decode(cursor)
     bound_selector = payload.get("selector")
     # open() offsets are line numbers and retrieve() offsets are unit
     # indices, so a cursor is valid only for the tool that issued it.
+    # find cursors also bind context_lines, so a cursor cannot be replayed
+    # with a different context width.
     if (
         payload.get("policy") != POLICY_VERSION
         or payload.get("tool") != tool
@@ -377,6 +384,7 @@ def _check_cursor(
         or payload.get("requested_mode") != (requested_mode or mode)
         or payload.get("query_digest") != query_digest(query)
         or payload.get("budget") != budget
+        or payload.get("context_lines") != context_lines
         or not isinstance(bound_selector, dict)
     ):
         raise PolicyError("cursor_mismatch")
@@ -643,8 +651,8 @@ def present_snapshot(
     *,
     mode: PresentationMode = "exact",
     query: str | None = None,
-    result_token_budget: int = 2000,
-    max_result_bytes: int = 65536,
+    result_token_budget: int = 32000,
+    max_result_bytes: int = 262144,
     estimator: Any | None = None,
     cursor: str | None = None,
     start_line: int | None = None,
@@ -654,6 +662,7 @@ def present_snapshot(
     eval_arm: str = "optimized",
     min_compaction_gain_tokens: int = 64,
     min_compaction_gain_percent: int = 5,
+    context_lines: int | None = None,
 ) -> dict[str, Any]:
     """Present one authorized immutable snapshot under an explicit policy."""
     try:
@@ -676,13 +685,26 @@ def present_snapshot(
     ):
         raise PolicyError("selector_out_of_range")
 
-    if mode not in {"exact", "compact", "focused", "overview"}:
+    if mode not in {"exact", "compact", "focused", "overview", "find"}:
         raise PolicyError("unsupported_mode")
     requested_mode = requested_mode or mode
     if mode != "exact" and scope is not None:
         raise PolicyError("selector_invalid")
     if mode == "focused" and (not isinstance(query, str) or not query.strip()):
         raise PolicyError("query_required")
+    if mode == "find":
+        if not isinstance(query, str) or not parse_terms(query):
+            raise PolicyError("query_required")
+        if context_lines is None:
+            context_lines = 0
+        if (
+            isinstance(context_lines, bool)
+            or not isinstance(context_lines, int)
+            or not 0 <= context_lines <= FIND_CONTEXT_LINES_MAX
+        ):
+            raise PolicyError("invalid_arguments")
+    elif context_lines is not None:
+        raise PolicyError("invalid_arguments")
 
     if cursor is not None:
         requested_selector = (
@@ -697,6 +719,7 @@ def present_snapshot(
             query=query,
             budget=limits.token_budget,
             selector=requested_selector,
+            context_lines=context_lines,
         )
         if mode in {"exact", "compact"}:
             if resolved_selector.get("type") == "whole":
@@ -984,6 +1007,115 @@ def present_snapshot(
                     "next_cursor": "x" * 49 if next_index < len(all_passages) else None,
                 }
             )
+        raise PolicyError(
+            "result_too_large",
+            {
+                "source_id": snapshot.source_id,
+                "version": snapshot.version,
+                "line_count": len(lines),
+            },
+        )
+
+    if mode == "find":
+        terms = parse_terms(query or "")
+        matched = match_lines(snapshot.text, terms)
+        blocks = build_blocks(lines, matched, context_lines or 0)
+        block_texts = [block_text(lines, block) for block in blocks]
+        find_coverage = _document_coverage(
+            snapshot, "partial (matching lines with context; full document not represented)"
+        )
+        block_offset = offset if cursor is not None else 0
+        if block_offset > len(blocks):
+            raise PolicyError("cursor_mismatch")
+        placeholder_cursor = "x" * 49
+
+        def find_payload(
+            first: int, stop: int, omitted: list[dict[str, Any]], next_cursor: str | None
+        ) -> dict[str, Any]:
+            chosen = range(first, stop)
+            text = "".join(
+                f"[[lines {blocks[index].start_line}-{blocks[index].end_line}]]\n"
+                f"{block_texts[index]}"
+                for index in chosen
+            )
+            payload = _base_payload(snapshot, "find", text)
+            payload.update(
+                {
+                    "requested_mode": "find",
+                    "context_lines": context_lines,
+                    "coverage": find_coverage,
+                    "selected_lines": None,
+                    "fidelity": "partial_exact_excerpt",
+                    "match_count": len(matched),
+                    "match_count_complete": True,
+                    "matches": [blocks[index].reference() for index in chosen],
+                    "omitted_ranges": list(omitted),
+                    "more_available": stop < len(blocks),
+                    "next_cursor": next_cursor if stop < len(blocks) else None,
+                }
+            )
+            return payload
+
+        def largest_fitting_stop(first: int, omitted: list[dict[str, Any]]) -> int | None:
+            # Fit is monotonic in the number of blocks, so a binary search finds
+            # the largest page that starts at `first` and fits the budget.
+            low, high, best = first + 1, len(blocks), None
+            while low <= high:
+                middle = (low + high) // 2
+                candidate = find_payload(first, middle, omitted, placeholder_cursor)
+                if _fit_reserved(candidate, limits, estimator):
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            return best
+
+        # A block larger than the budget is listed by its range and skipped;
+        # its content is never clipped.
+        omitted: list[dict[str, Any]] = []
+        first = block_offset
+        stop: int | None = None
+        while first < len(blocks):
+            stop = largest_fitting_stop(first, omitted)
+            if stop is not None:
+                break
+            block = blocks[first]
+            omitted.append(
+                {
+                    "start_line": block.start_line,
+                    "end_line": block.end_line,
+                    "reason": "passage_exceeds_result_budget",
+                }
+            )
+            first += 1
+        if stop is None:
+            stop = first
+        for _attempt in range(8):
+            next_cursor = None
+            if stop < len(blocks):
+                next_cursor = signer.encode(
+                    _cursor_payload(
+                        snapshot,
+                        mode="find",
+                        requested_mode=requested_mode,
+                        query=query,
+                        budget=limits.token_budget,
+                        selector={"type": "whole"},
+                        offset=stop,
+                        context_lines=context_lines,
+                    )
+                )
+            result = _finalize_full(
+                find_payload(first, stop, omitted, next_cursor),
+                snapshot,
+                estimator=estimator,
+                raw_scope=raw_scope,
+            )
+            if _accounted_fits(result, limits, estimator):
+                return result
+            if stop <= first + 1:
+                break
+            stop -= 1
         raise PolicyError(
             "result_too_large",
             {

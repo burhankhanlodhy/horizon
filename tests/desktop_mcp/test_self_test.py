@@ -28,6 +28,7 @@ from horizon.desktop_mcp.self_test import (
     pilot_changed,
     reconcile,
     render_prompt,
+    study_methods,
     study_started_fields,
     validate_pack,
 )
@@ -1039,3 +1040,145 @@ def test_analyze_rejects_a_different_pack() -> None:
     with pytest.raises(SelfTestError) as caught:
         analyze(other, state)
     assert caught.value.code == "pack_mismatch"
+
+
+# ------------------------------------------------------------ method subsets
+
+
+def _subset_pack(methods: Any) -> dict[str, Any]:
+    pack = make_pack()
+    pack["methods"] = methods
+    return pack
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def test_default_schedule_and_pack_digest_are_unchanged() -> None:
+    # Pinned from the pre-subset code: a pack without "methods" must behave exactly as before.
+    assert _digest(build_schedule(make_pack(), SEED)) == (
+        "0cbc6b3f6d45829a11a027025768fc3925d050d656c138f6e47b36b9771afda8"
+    )
+    assert _digest(build_schedule(make_pack(), OTHER_SEED)) == (
+        "5390ac07e6d3b420ff62efe2c57ea57c0fd60565ba033e95105ca3883518af95"
+    )
+    assert pack_digest(make_pack()) == (
+        "b27b20068d65f905380aef053331d1fb93fbdd51ccfe1d97e1ac06901b2fc6df"
+    )
+    assert "methods" not in validate_pack(make_pack())
+    assert study_methods(make_pack()) == METHODS
+
+
+@pytest.mark.parametrize(
+    ("methods", "code"),
+    [
+        (["B"], "methods_missing_core"),
+        (["C_normal"], "methods_missing_core"),
+        (["A", "C_normal"], "methods_missing_core"),
+        (["B", "C_normal", "X"], "method_unknown"),
+        (["B", "C_normal", "b"], "method_unknown"),
+        (["B", "C_normal", "B"], "method_duplicate"),
+        ([], "methods_invalid"),
+        ("B,C_normal", "methods_invalid"),
+        (["B", "C_normal", 3], "methods_invalid"),
+        (["A", "B", "C_normal", "C_tuned", "B"], "methods_invalid"),
+    ],
+)
+def test_bad_method_subsets_are_refused_with_a_code(methods: Any, code: str) -> None:
+    with pytest.raises(SelfTestError) as caught:
+        validate_pack(_subset_pack(methods))
+    assert caught.value.code == code
+
+
+def test_method_subset_is_normalised_to_method_order() -> None:
+    normalised = validate_pack(_subset_pack(["C_normal", "B"]))
+    assert normalised["methods"] == ["B", "C_normal"]
+    assert study_methods(_subset_pack(["C_normal", "B"])) == ("B", "C_normal")
+    assert pack_digest(_subset_pack(["C_normal", "B"])) == pack_digest(
+        _subset_pack(["B", "C_normal"])
+    )
+
+
+def test_subset_schedule_has_four_phases_and_twenty_four_chats() -> None:
+    pack = _subset_pack(["B", "C_normal"])
+    schedule = build_schedule(pack, SEED)
+    assert [slot["phase"] for slot in schedule] == [1, 2, 3, 4]
+    assert [slot["half"] for slot in schedule] == ["H1", "H1", "H2", "H2"]
+    assert {slot["method"] for slot in schedule} == {"B", "C_normal"}
+    chats = sum(len(group["tasks"]) for slot in schedule for group in slot["groups"])
+    assert chats == 24
+    for method in ("B", "C_normal"):
+        tasks = [
+            task
+            for slot in schedule
+            if slot["method"] == method
+            for group in slot["groups"]
+            for task in group["tasks"]
+        ]
+        assert sorted(tasks) == sorted(task["task_id"] for task in pack["tasks"])
+
+
+def _half_order(schedule: list[dict[str, Any]]) -> tuple[str, ...]:
+    """The methods of the H1 phases: the first half of a two-method schedule."""
+    return tuple(slot["method"] for slot in schedule[: len(schedule) // 2])
+
+
+def test_subset_halves_are_mirrored_and_cover_the_groups() -> None:
+    pack = _subset_pack(["B", "C_normal"])
+    for seed in (SEED, OTHER_SEED, "01" * 32, "fe" * 32, "3c" * 32):
+        schedule = build_schedule(pack, seed)
+        h1_methods = _half_order(schedule)
+        assert _order(schedule[2:]) == h1_methods[::-1]
+        assert h1_methods in {("B", "C_normal"), ("C_normal", "B")}
+        h1 = {group["group_id"] for group in schedule[0]["groups"]}
+        h2 = {group["group_id"] for group in schedule[2]["groups"]}
+        assert h1 & h2 == set() and h1 | h2 == {group["group_id"] for group in pack["groups"]}
+
+
+def test_subset_with_a_and_b_keeps_them_adjacent() -> None:
+    pack = _subset_pack(["A", "B", "C_normal"])
+    orders = set()
+    for n in range(20):
+        order = _half_order(build_schedule(pack, f"{n:02x}" * 32))
+        assert sorted(order) == ["A", "B", "C_normal"]
+        assert abs(order.index("A") - order.index("B")) == 1
+        orders.add(order)
+    assert len(orders) > 1
+
+
+def test_full_subset_study_reports_only_b_against_c_normal() -> None:
+    pack = _subset_pack(["B", "C_normal"])
+    state, records = run_study(pack)
+    assert state.phase_count == 4
+    report = analyze(pack, state)
+    assert report["progress"]["phases_total"] == 4
+    assert report["progress"]["phases_complete"] == 4
+    assert report["progress"]["chats_total"] == 24
+    assert report["progress"]["study_complete"] is True
+    assert list(report["methods"]) == ["B", "C_normal"]
+    assert report["methods"]["B"]["groups"] == 12
+    assert list(report["quality"]["correct"]) == ["B", "C_normal"]
+    assert all(list(row) == ["B", "C_normal"] for row in report["per_task"].values())
+    assert [item["key"] for item in report["comparisons"]] == ["B_vs_C_normal"]
+    primary = report["comparisons"][0]
+    assert primary["primary"] is True
+    assert primary["decision"]["claim"] == "savings_supported"
+    assert primary["interval"]["units"] == 12
+    # After a restart the method set comes from the stored pack, not from the code.
+    replayed = StudyState.from_ledger(pack, records)
+    assert analyze(pack, replayed) == report
+
+
+def test_default_report_still_lists_all_four_methods() -> None:
+    pack = make_pack()
+    state, _ = run_study(pack)
+    report = analyze(pack, state)
+    assert report["progress"]["phases_total"] == 8
+    assert list(report["methods"]) == list(METHODS)
+    assert [item["key"] for item in report["comparisons"]] == [
+        "B_vs_C_normal",
+        "B_vs_A",
+        "B_vs_C_tuned",
+        "C_tuned_vs_C_normal",
+    ]

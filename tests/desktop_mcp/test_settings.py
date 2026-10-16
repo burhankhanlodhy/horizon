@@ -10,7 +10,8 @@ def test_settings_defaults_and_frozen_model() -> None:
     settings = load_settings()
     assert settings.profile == "diagnostic"
     assert settings.approved_roots == ()
-    assert settings.result_token_budget == 2000
+    assert settings.result_token_budget == 32000
+    assert settings.max_result_bytes == 262144
     assert settings.eval_arm == "optimized"
     assert settings.min_compaction_gain_tokens == 64
     assert settings.min_compaction_gain_percent == 5.0
@@ -23,7 +24,7 @@ def test_settings_defaults_and_frozen_model() -> None:
     [
         ("profile", "production"),
         ("result_token_budget", 127),
-        ("result_token_budget", 8001),
+        ("result_token_budget", 64001),
         ("result_token_budget", True),
         ("eval_arm", "other"),
         ("min_compaction_gain_tokens", -1),
@@ -42,6 +43,14 @@ def test_settings_defaults_and_frozen_model() -> None:
 def test_settings_reject_invalid_values(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         DesktopSettings.model_validate({field: value})
+
+
+def test_result_token_budget_accepts_64000_and_rejects_64001() -> None:
+    assert DesktopSettings.model_validate({"result_token_budget": 64000}).result_token_budget == (
+        64000
+    )
+    with pytest.raises(ValidationError):
+        DesktopSettings.model_validate({"result_token_budget": 64001})
 
 
 def test_approved_roots_accept_absolute_paths_without_authorizing_reads(tmp_path: Path) -> None:

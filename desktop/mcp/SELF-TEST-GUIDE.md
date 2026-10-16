@@ -7,7 +7,10 @@ shows you.
 
 Plan for one day: about 3 to 4 hours of work, then one check about 4 hours
 after your last reading. You will run 48 chats in total, with 12 tasks, each
-done once with each of the four methods.
+done once with each of the four methods. A pack may list a subset with
+`"methods": [...]` (it must include `B` and `C_normal`); then the phases,
+chats and report cover only those methods. The laptop kit uses `B,C_normal`:
+12 tasks, 24 chats, 4 phases.
 
 On a laptop without Python, use the portable kit instead of the commands below.
 Build it with `python desktop/mcp/self-test/build_kit.py`. It writes

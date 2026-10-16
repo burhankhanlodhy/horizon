@@ -612,12 +612,13 @@ def test_snapshot_quota_rejects_oversized_version_with_sanitized_code() -> None:
     assert caught.value.code == "snapshot_too_large"
 
 
-def test_selector_row_span_is_capped_at_2000_records() -> None:
+def test_selector_row_span_is_capped_at_200000_records() -> None:
     text = "a\n" * 2002
-    selected = select_exact(text, {"type": "rows", "start": 1, "end": 2001}, kind="csv")
-    assert len(selected.units) == 2001
+    selected = select_exact(text, {"type": "rows", "start": 1, "end": 2002}, kind="csv")
+    assert len(selected.units) == 2002
+    # The span check runs before parsing, so a short text is enough to reach it.
     with pytest.raises(SelectorError, match="selector_out_of_range"):
-        select_exact(text, {"type": "rows", "start": 1, "end": 2002}, kind="csv")
+        select_exact(text, {"type": "rows", "start": 1, "end": 200002}, kind="csv")
 
 
 def test_json_nesting_depth_is_capped() -> None:

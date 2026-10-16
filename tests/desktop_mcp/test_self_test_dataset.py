@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from horizon.desktop_mcp.self_test import check_answer, validate_pack
+from horizon.desktop_mcp.self_test import check_answer, study_methods, validate_pack
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = REPO_ROOT / "desktop" / "mcp" / "self-test" / "make_dataset.py"
@@ -358,3 +358,69 @@ def test_stack_trace_block_repeats_at_least_three_times(dataset: Path) -> None:
         assert 6 <= len(run) <= 10
         assert run[0].startswith("java.lang.")
         assert all(line.startswith("\tat ") for line in run[1:])
+
+
+def test_subset_methods_and_study_id_are_written_to_the_pack(tmp_path: Path) -> None:
+    out = tmp_path / "subset"
+    pack = make_dataset.generate(out, SEED, "st_generated_v2", ["B", "C_normal"])
+    stored = json.loads((out / "pack.json").read_text(encoding="utf-8"))
+    assert stored == pack
+    assert stored["study_id"] == "st_generated_v2"
+    assert stored["methods"] == ["B", "C_normal"]
+    assert study_methods(stored) == ("B", "C_normal")
+    assert len(stored["tasks"]) == 12
+
+
+def test_subset_keeps_the_same_documents_as_the_default(tmp_path: Path) -> None:
+    default = _generate(tmp_path / "default", SEED)
+    subset = tmp_path / "subset"
+    make_dataset.generate(subset, SEED, "st_generated_v2", ["B", "C_normal"])
+    for name in TARGETS:
+        assert (default / "documents" / name).read_bytes() == (
+            subset / "documents" / name
+        ).read_bytes()
+
+
+def test_default_pack_has_no_methods_key(dataset: Path) -> None:
+    assert "methods" not in json.loads((dataset / "pack.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--methods", "B"],
+        ["--methods", "B,C_normal,X"],
+        ["--methods", "B,C_normal,B"],
+        ["--methods", "A,C_normal"],
+        ["--study-id", "st-bad"],
+    ],
+)
+def test_bad_dataset_options_are_refused(tmp_path: Path, args: list[str]) -> None:
+    out = tmp_path / "refused"
+    assert make_dataset.main(["--out", str(out), *args]) == 2
+    assert not out.exists()
+
+
+def test_kit_plan_numbers_come_from_the_pack() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "build_kit", REPO_ROOT / "desktop" / "mcp" / "self-test" / "build_kit.py"
+    )
+    assert spec is not None and spec.loader is not None
+    build_kit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build_kit)
+    subset = {"tasks": [{}] * 12, "methods": ["B", "C_normal"]}
+    full = {"tasks": [{}] * 12}
+    assert build_kit._plan_numbers(subset) == {
+        "tasks": "12",
+        "methods": "2",
+        "phases": "4",
+        "chats": "24",
+        "hours": "1.5",
+    }
+    assert build_kit._plan_numbers(full) == {
+        "tasks": "12",
+        "methods": "4",
+        "phases": "8",
+        "chats": "48",
+        "hours": "3",
+    }

@@ -91,7 +91,7 @@ class Owner:
         self.desktop = ""
 
     def _phase(self) -> int:
-        matches = re.findall(r"Phase (\d) of 8: method", self.harness.text)
+        matches = re.findall(r"Phase (\d+) of \d+: method", self.harness.text)
         return int(matches[-1])
 
     def _group(self) -> str:
@@ -493,3 +493,29 @@ def test_development_wrapper_runs_the_same_cli(tmp_path: Path) -> None:
     )
     assert init.returncode == 0, init.stdout + init.stderr
     assert "The plan: 8 phases" in init.stdout
+
+
+def test_subset_study_runs_four_phases_and_reports_only_b_and_c_normal(tmp_path: Path) -> None:
+    pack = make_pack()
+    pack["methods"] = ["B", "C_normal"]
+    state = init_study(Harness(), tmp_path / "st", pack)
+    h = Harness()
+    assert h.run(["run", "--state-dir", str(state)], responder=Owner()) == 0
+    records = ledger_records(state)
+    counts = {t: sum(1 for r in records if r["type"] == t) for t in {r["type"] for r in records}}
+    # Two methods on two halves of six groups each: 24 group runs, one chat per task each.
+    assert counts["phase_started"] == 4
+    assert counts["block_before"] == 24 and counts["block_after"] == 24
+    assert counts["task_answer"] == 24
+    assert "All 4 phases are recorded." in h.text
+
+    report = Harness()
+    assert report.run(["report", "--state-dir", str(state)]) == 0
+    assert "Phases complete: 4 of 4." in report.text
+    assert "Groups in the results: 0 of 24." in report.text
+    assert "B (ContextShrink, normal): 0 group(s)" in report.text
+    assert "C_normal (connector off, files attached): 0 group(s)" in report.text
+    assert "(ContextShrink, compression off)" not in report.text
+    assert "C_tuned" not in report.text
+    assert "B vs A" not in report.text
+    assert "Main question: does B (ContextShrink normal) cost less than C_normal?" in report.text

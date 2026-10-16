@@ -40,7 +40,7 @@ _ALLOWED_TOOLS = frozenset(
     }
 )
 _ALLOWED_MODES = frozenset(
-    {"exact", "compact", "focused", "overview", "computed", "artifact", "batch", "unknown"}
+    {"exact", "compact", "focused", "overview", "find", "computed", "artifact", "batch", "unknown"}
 )
 _ALLOWED_STATUS = frozenset({"success", "error", "fallback", "unknown"})
 _SAFE_CODE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")

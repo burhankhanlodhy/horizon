@@ -45,7 +45,9 @@ REPORT_KIND = "self_test_report"
 
 METHODS: tuple[str, ...] = ("A", "B", "C_normal", "C_tuned")
 HALVES: tuple[str, ...] = ("H1", "H2")
-PHASE_COUNT = 2 * len(METHODS)  # each half runs every method once
+PHASE_COUNT = 2 * len(METHODS)  # upper bound for any study: each half runs every method once
+# A pack may name a subset of METHODS; these two are always needed (B is the primary arm).
+REQUIRED_METHODS: tuple[str, ...] = ("B", "C_normal")
 PILOT_METHODS: dict[str, str] = {"A": "exact_only", "B": "normal"}
 REVIEW_DELAY = timedelta(hours=4)
 
@@ -141,6 +143,7 @@ _PACK_KEYS = frozenset(
         "tasks",
     }
 )
+_OPTIONAL_PACK_KEYS = frozenset({"methods"})
 _ZERO_HASH = "0" * 64
 _CHAIN_FIELDS = frozenset({"seq", "prev_sha256"})
 _COMMON_FIELDS = frozenset({"type", "utc", "local_date", "utc_offset"})
@@ -344,12 +347,36 @@ def _group(value: Any) -> dict[str, Any]:
 # ------------------------------------------------------------------------------- pack
 
 
+def _methods(value: Any) -> list[str]:
+    """Distinct method names, a subset of METHODS that includes REQUIRED_METHODS.
+
+    Returned in METHODS order, so the same set always gives the same digest.
+    """
+    items = _list(value, 1, len(METHODS), "methods_invalid")
+    if not all(isinstance(item, str) for item in items):
+        raise _fail("methods_invalid")
+    if any(item not in METHODS for item in items):
+        raise _fail("method_unknown")
+    if len(set(items)) != len(items):
+        raise _fail("method_duplicate")
+    if not set(REQUIRED_METHODS) <= set(items):
+        raise _fail("methods_missing_core")
+    return [method for method in METHODS if method in items]
+
+
 def validate_pack(value: Any) -> dict[str, Any]:
     """Check a self-test pack and return a normalised copy.
 
     Raises ``SelfTestError`` with a code such as ``group_coverage_invalid``.
+    A pack without ``methods`` runs every method in METHODS; the normalised copy then
+    has no ``methods`` key, so existing packs keep their digest.
     """
-    raw = _exact_keys(value, _PACK_KEYS, "pack_invalid")
+    if (
+        not isinstance(value, dict)
+        or not _PACK_KEYS <= set(value) <= _PACK_KEYS | _OPTIONAL_PACK_KEYS
+    ):
+        raise _fail("pack_invalid")
+    raw = value
     _int(raw["schema_version"], SCHEMA_VERSION, SCHEMA_VERSION, "pack_schema_invalid")
     if raw["kind"] != PACK_KIND:
         raise _fail("pack_schema_invalid")
@@ -378,7 +405,7 @@ def validate_pack(value: Any) -> dict[str, Any]:
     if min_groups > len(groups) or paired_units > len(groups):
         raise _fail("minimums_unreachable")
 
-    return {
+    normalised: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": PACK_KIND,
         "study_id": _text(raw["study_id"], _STUDY_ID, "study_id_invalid"),
@@ -388,6 +415,14 @@ def validate_pack(value: Any) -> dict[str, Any]:
         "groups": groups,
         "tasks": tasks,
     }
+    if "methods" in raw:
+        normalised["methods"] = _methods(raw["methods"])
+    return normalised
+
+
+def study_methods(pack: Any) -> tuple[str, ...]:
+    """The methods this study runs: the pack's ``methods``, or all of METHODS."""
+    return tuple(validate_pack(pack).get("methods", METHODS))
 
 
 def pack_digest(pack: Any) -> str:
@@ -413,22 +448,25 @@ def study_started_fields(pack: Any, seed_hex: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- schedule
 
 
-def _method_orders() -> list[tuple[str, ...]]:
-    """Every method order in which A and B are adjacent (12 of the 24 permutations)."""
-    return [
-        order
-        for order in itertools.permutations(METHODS)
-        if abs(order.index("A") - order.index("B")) == 1
-    ]
+def _method_orders(methods: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """Every order of the study's methods; with A and B both present, they must be adjacent.
+
+    For all four methods this is the 12 of the 24 permutations with A and B adjacent.
+    """
+    orders = list(itertools.permutations(methods))
+    if "A" in methods and "B" in methods:
+        orders = [order for order in orders if abs(order.index("A") - order.index("B")) == 1]
+    return orders
 
 
 def build_schedule(pack: Any, seed_hex: str) -> list[dict[str, Any]]:
-    """Eight phases: H1 runs the method order O, H2 runs reverse(O).
+    """Phases: H1 runs the method order O, H2 runs reverse(O).
 
-    The groups are shuffled by seed and split into H1 (the first ``ceil(n/2)``) and
-    H2. Each phase is ``{"phase", "half", "method", "groups": [{"group_id", "tasks"}]}``
-    and covers every group of its half, in its own seeded order. Phases 1 to 4 are
-    H1 and phases 5 to 8 are H2.
+    With all four methods there are eight phases. The groups are shuffled by seed and
+    split into H1 (the first ``ceil(n/2)``) and H2. Each phase is
+    ``{"phase", "half", "method", "groups": [{"group_id", "tasks"}]}`` and covers every
+    group of its half, in its own seeded order. The first half of the phases is H1 and
+    the rest is H2.
     """
     checked = validate_pack(pack)
     _seed(seed_hex)
@@ -437,7 +475,7 @@ def build_schedule(pack: Any, seed_hex: str) -> list[dict[str, Any]]:
     rng.shuffle(groups)
     split = math.ceil(len(groups) / 2)
     halves = {"H1": groups[:split], "H2": groups[split:]}
-    order = rng.choice(_method_orders())
+    order = rng.choice(_method_orders(study_methods(checked)))
     methods = {"H1": order, "H2": tuple(reversed(order))}
 
     phases: list[dict[str, Any]] = []
@@ -826,6 +864,8 @@ class StudyState:
     def __init__(self, pack: dict[str, Any]) -> None:
         self.pack = pack
         self.pack_sha256 = pack_digest(pack)
+        self.methods = study_methods(pack)
+        self.phase_count = 2 * len(self.methods)
         self.started = False
         self.seed_hex: str | None = None
         self.schedule: list[dict[str, Any]] = []
@@ -860,7 +900,7 @@ class StudyState:
             return None
         if self.phases and not self._phase_complete(self.phases[-1]):
             return self.phases[-1]["phase"]
-        if len(self.phases) < PHASE_COUNT:
+        if len(self.phases) < self.phase_count:
             return len(self.phases) + 1
         return None
 
@@ -870,7 +910,7 @@ class StudyState:
 
     @property
     def study_complete(self) -> bool:
-        return len(self.completed_phases) == PHASE_COUNT
+        return len(self.completed_phases) == self.phase_count
 
     @property
     def group_runs_total(self) -> int:
@@ -995,7 +1035,7 @@ class StudyState:
             group_id = self._next_group(phase)
             if group_id is not None:
                 return {"action": "read_before", "phase": phase["phase"], "group_id": group_id}
-        if len(self.phases) < PHASE_COUNT:
+        if len(self.phases) < self.phase_count:
             slot = self.schedule[len(self.phases)]
             return {
                 "action": "start_phase",
@@ -1042,7 +1082,7 @@ class StudyState:
     def _phase_started(self, record: dict[str, Any]) -> None:
         if self.has_open_block():
             raise _fail("block_open")
-        if len(self.phases) >= PHASE_COUNT:
+        if len(self.phases) >= self.phase_count:
             raise _fail("study_complete")
         if self.phases and not self._phase_complete(self.phases[-1]):
             raise _fail("phase_incomplete")
@@ -1310,6 +1350,7 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
         raise _fail("pack_mismatch")
     if not state.started:
         raise _fail("study_not_started")
+    methods = study_methods(checked)
 
     group_ids = [group["group_id"] for group in checked["groups"]]
     tasks = [task["task_id"] for task in checked["tasks"]]
@@ -1338,9 +1379,9 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
     attempted: dict[str, int] = {}
     group_counts: dict[str, int] = {}
     per_task: dict[str, dict[str, list[int]]] = {
-        task: {method: [0, 0] for method in METHODS} for task in tasks
+        task: {method: [0, 0] for method in methods} for task in tasks
     }
-    for method in METHODS:
+    for method in methods:
         blocks = [included[(method, g)] for g in group_ids if (method, g) in included]
         answers = [answer for block in blocks for answer in block["answers"]]
         group_counts[method] = len(blocks)
@@ -1354,7 +1395,7 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
                 counts[0] += 1
 
     methods_out = {}
-    for method in METHODS:
+    for method in methods:
         per_correct = None
         if correct[method]:
             per_correct = _money(spend[method] / Decimal(correct[method]))
@@ -1377,6 +1418,8 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
 
     comparisons = []
     for key, candidate, reference, primary in COMPARISONS:
+        if candidate not in methods or reference not in methods:
+            continue
         units: list[PairedUnit] = []
         for group_id in group_ids:
             cand = included.get((candidate, group_id))
@@ -1468,7 +1511,7 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
         for w in state.warnings
     ]
 
-    quality_correct = {method: correct[method] for method in METHODS}
+    quality_correct = {method: correct[method] for method in methods}
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
@@ -1478,7 +1521,7 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
         "seed_commitment": hashlib.sha256((state.seed_hex or "").encode("ascii")).hexdigest(),
         "scope": dict(SCOPE),
         "progress": {
-            "phases_total": PHASE_COUNT,
+            "phases_total": state.phase_count,
             "phases_started": len(state.phases),
             "phases_complete": len(state.completed_phases),
             "current_phase": state.current_phase,
@@ -1495,7 +1538,7 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
                     "correct": per_task[task][method][0],
                     "attempted": per_task[task][method][1],
                 }
-                for method in METHODS
+                for method in methods
             }
             for task in tasks
         },
@@ -1539,6 +1582,7 @@ __all__ = [
     "pilot_changed",
     "reconcile",
     "render_prompt",
+    "study_methods",
     "study_started_fields",
     "validate_pack",
 ]

@@ -42,6 +42,7 @@ def test_open_rejects_wrong_mode_budget_and_overlong_source() -> None:
         "result_token_budget": None,
         "query": None,
         "cursor": None,
+        "context_lines": None,
     }
     for args in (
         {"source": "doc", "mode": "raw"},
@@ -102,7 +103,7 @@ def test_retrieve_selector_union_is_strict_and_bounded() -> None:
         {"type": "markdown_section", "heading": "x", "occurrence": 101},
         {"type": "json_pointer", "pointer": "items/0"},
         {"type": "json_pointer", "pointer": "/bad~2escape"},
-        {"type": "rows", "start": 1, "end": 2002},
+        {"type": "rows", "start": 1, "end": 200002},
         {"type": "rows", "start": 1, "end": 2, "delimiter": "tsv"},
     ):
         with pytest.raises(ToolInputError):
@@ -131,3 +132,14 @@ def test_unknown_argument_key_is_not_reflected_in_error_fields() -> None:
 
 def test_json_text_is_compact_and_deterministic() -> None:
     assert json_text({"z": 1, "a": "é"}) == '{"a":"é","z":1}'
+
+
+def test_open_result_token_budget_accepts_64000_and_rejects_64001() -> None:
+    accepted = validate_tool_arguments(
+        "contextshrink_open", {"source": "C:/approved/a.txt", "result_token_budget": 64000}
+    )
+    assert accepted["result_token_budget"] == 64000
+    with pytest.raises(ToolInputError):
+        validate_tool_arguments(
+            "contextshrink_open", {"source": "C:/approved/a.txt", "result_token_budget": 64001}
+        )

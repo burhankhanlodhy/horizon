@@ -6,6 +6,7 @@ import pytest
 
 from horizon.desktop_mcp.local_backend import LocalBackend, LocalBackendError
 from horizon.desktop_mcp.measurement import measure_payload
+from horizon.desktop_mcp.selectors import select_exact
 from horizon.desktop_mcp.source_access import OpenedSource, SourceAccessError
 
 
@@ -313,7 +314,7 @@ def test_stats_report_counter_provenance_and_only_observed_compact_responses() -
     provenance = backend.estimator.provenance()
     assert before["compression_enabled"] is True
     assert before["compression_applied"] is False
-    assert before["supported_modes"] == ["exact", "compact", "focused", "overview"]
+    assert before["supported_modes"] == ["exact", "compact", "focused", "overview", "find"]
     assert before["token_count_status"] == provenance["count_status"]
     assert before["tokenizer_name"] == provenance["tokenizer_name"]
     assert before["counter_version"] == provenance["counter_version"]
@@ -341,3 +342,39 @@ def test_policy_errors_are_counted_without_recording_query_or_path() -> None:
     usage = backend.stats()["usage"]
     assert usage["error_count"] == 1
     assert usage["by_mode"] == {"focused": 1}
+
+
+def test_json_pointer_array_pages_with_cursor_and_pages_concatenate_exactly() -> None:
+    import json
+
+    source = "C:/approved/orders.json"
+    text = json.dumps({"orders": [{"id": n, "note": "x" * 60} for n in range(300)]}, indent=2)
+    backend, _reader = _backend(_Record(source, text))
+    backend = LocalBackend(_reader, result_token_budget=512, max_result_bytes=2048)
+    opened = backend.open(source)
+    assert opened is not None
+    selector = {"type": "json_pointer", "pointer": "/orders"}
+
+    page = backend.retrieve(opened["source_id"], selector)
+    pieces = [page["text"]]
+    while page["more_available"]:
+        page = backend.retrieve(opened["source_id"], selector, cursor=page["next_cursor"])
+        pieces.append(page["text"])
+
+    assert len(pieces) > 1
+    assert "".join(pieces) == select_exact(text, selector, kind="json").text
+
+
+def test_json_pointer_single_oversized_element_is_still_result_too_large() -> None:
+    source = "C:/approved/big.json"
+    # One element of about 3 KB spread over lines, so open pages but the element cannot fit.
+    members = ",\n".join(f'"p{index}": "' + ("y" * 500) + '"' for index in range(6))
+    text = '{"items": [{\n' + members + "\n}]}"
+
+    backend, _reader = _backend(_Record(source, text))
+    backend = LocalBackend(_reader, result_token_budget=512, max_result_bytes=2048)
+    opened = backend.open(source)
+    assert opened is not None
+    with pytest.raises(LocalBackendError) as caught:
+        backend.retrieve(opened["source_id"], {"type": "json_pointer", "pointer": "/items"})
+    assert caught.value.code == "result_too_large"
