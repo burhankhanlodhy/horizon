@@ -115,6 +115,15 @@ Run on 2026-10-14 on Windows 11 with PyInstaller 6.22.3, Python 3.12.14, mcp
   extraction directory) with `search` only: no error, the same 3 hits, and no
   broker left after the session.
 
+- 0.1.4 (2026-10-16), frozen build from the self-test kit, MCP stdio session on
+  the generated self-test documents. Find `NW-13664` with `context_lines` 30
+  returned 1 match that held the answer, in one call. Find `queue-relay RESTART`
+  returned `match_count` 3. A compact open of `orders_export.json` applied
+  compression in one result with nothing left to page. Retrieving `/orders`
+  paged with a cursor instead of failing. Results now default to 32,000
+  estimated tokens, and the extension estimates UTF-8 bytes ÷ 3. Pack sha256:
+  `782999e56440f24bae3cb70ac5021f378fae3bfa5a0e75d96c415992b8b9636d`.
+
 The smoke harness is kept outside the repository. It uses the same MCP SDK
 stdio client pattern as `tests/desktop_mcp/test_extension_runtime.py`.
 
