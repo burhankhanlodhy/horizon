@@ -78,8 +78,12 @@ class MemoryDecision:
         memory_handler: Any | None,
         memory_user_id: str | None,
         mode_name: str,
+        passthrough: bool = False,
     ) -> MemoryDecision:
         """Compute the canonical memory-injection decision.
+
+        ``passthrough`` (``ProxyConfig.passthrough``) refuses injection and
+        tools outright, reason ``"passthrough_mode"``.
 
         Parameters
         ----------
@@ -105,6 +109,15 @@ class MemoryDecision:
             memory_user_id_present=bool(memory_user_id),
             mode_name=mode_name,
         )
+        if passthrough:
+            return cls(
+                inject=False,
+                skip_reason="passthrough_mode",
+                bypass_header_set=decision.bypass_header_set,
+                memory_handler_present=decision.memory_handler_present,
+                memory_user_id_present=decision.memory_user_id_present,
+                mode_name=decision.mode_name,
+            )
 
         return cls(
             inject=decision.inject,

@@ -68,6 +68,7 @@ from horizon.proxy.model_router import estimate_input_tokens
 from horizon.proxy.nonstream_sse_policy import should_recover_sse_reply
 from horizon.proxy.outcome import RequestOutcome
 from horizon.proxy.output_shaper import shaper_enabled_for, steering_allowed_for
+from horizon.proxy.passthrough_mode import is_passthrough
 from horizon.proxy.semantic_cache_key_policy import compute_request_cache_partition
 from horizon.proxy.tenant_key import resolve_tenant_key, set_request_tenant_key
 from horizon.proxy.thinking_tokens import ThinkingTokens, extract_thinking_tokens
@@ -1110,6 +1111,9 @@ class AnthropicHandlerMixin:
         start_time = time.time()
         request_id = await self._next_request_id()
         trace_session_id = uuid.uuid4().hex
+        # Pass-through (horizon proxy --passthrough, Desktop 3P gateway): relay the
+        # client's bytes and headers. Each transform below checks this flag.
+        passthrough = is_passthrough(self.config)
 
         # Phase F PR-F1: classify auth mode at request entry. The result
         # is stored on `request.state` so downstream handlers (cache
@@ -1287,7 +1291,8 @@ class AnthropicHandlerMixin:
             body_model = body.get("model")
             if isinstance(body_model, str) and model != body_model:
                 body["model"] = model
-                body_mutation_tracker.mark_mutated("sanitize_model_id")
+                # The one body change pass-through allows (see passthrough_mode).
+                body_mutation_tracker.mark_mutated("model_id_sanitized")
             messages = body.get("messages", [])
             # Strip streaming-only "index" keys from request content blocks BEFORE any
             # prefix-cache tracking or compression. The proxy's streaming reconstruction
@@ -1298,7 +1303,8 @@ class AnthropicHandlerMixin:
             # aborting multi-turn sessions. Canonicalizing here (in place, so body,
             # original, forwarded, and the recorded/replayed prefix are all identical)
             # keeps it cache-safe: overlay_cached_prefix replays the same stripped bytes.
-            _strip_streaming_only_content_fields(messages)
+            if not passthrough:
+                _strip_streaming_only_content_fields(messages)
             pipeline_provider = provider_name
             pipeline_path = request.url.path if upstream_base_url else "/v1/messages"
             pipeline_stream = bool(body.get("stream", False) or force_stream)
@@ -1314,11 +1320,12 @@ class AnthropicHandlerMixin:
                 tools=body.get("tools"),
                 metadata={"path": pipeline_path, "stream": pipeline_stream},
             )
-            if input_event.messages is not None:
+            # Extensions observe in pass-through; their rewrites are not applied.
+            if input_event.messages is not None and not passthrough:
                 messages = input_event.messages
                 with stage_timer.measure("deep_copy"):
                     original_client_messages = copy.deepcopy(messages)
-            if input_event.tools is not None:
+            if input_event.tools is not None and not passthrough:
                 body["tools"] = input_event.tools
             # tokens_saved repeats every earlier turn's removals (the frozen
             # prefix is replayed compressed); under this key the outcome funnel
@@ -1376,7 +1383,7 @@ class AnthropicHandlerMixin:
                 request.headers.get("x-horizon-bypass", "").lower() == "true"
                 or request.headers.get("x-horizon-mode", "").lower() == "passthrough"
             )
-            preserve_tool_order = _bypass or not self.config.optimize
+            preserve_tool_order = _bypass or not self.config.optimize or passthrough
             if _bypass:
                 logger.info(f"[{request_id}] Bypass: skipping compression (header)")
 
@@ -1388,7 +1395,7 @@ class AnthropicHandlerMixin:
             # forwarding so the account ledger can price what each one saved
             # (horizon.proxy.policy_savings).
             _policy_tags: list[str] = []
-            if model_override is None:
+            if model_override is None and not passthrough:
                 _requested_model = model
                 model = self._maybe_modernize_model(
                     model, body, body_mutation_tracker, _bypass, request_id
@@ -1404,7 +1411,7 @@ class AnthropicHandlerMixin:
             # Fast-mode governor (opt-in, HORIZON_FAST_MODE_POLICY): drop the
             # 2x fast-mode premium where nobody is waiting. The decision is
             # fixed per client launch, so it never flips speed mid-session.
-            if not _bypass:
+            if not _bypass and not passthrough:
                 from horizon.proxy.fast_mode_policy import govern as _govern_fast_mode
 
                 _fast_reason = _govern_fast_mode(body, request.headers)
@@ -1456,12 +1463,21 @@ class AnthropicHandlerMixin:
             # `upstream_base_url` is the per-request `x-horizon-base-url`
             # override when the client sent one. These headers are secrets, so
             # they only travel to a host the operator designated.
-            headers = merge_extra_headers(
-                headers,
-                self.config.anthropic_extra_headers,
-                upstream_url=upstream_base_url,
-                config=self.config,
-            )
+            if passthrough:
+                # Pass-through forwards the client's headers as they arrived; the
+                # operator's extra headers would add to them.
+                if self.config.anthropic_extra_headers:
+                    logger.warning(
+                        "[%s] anthropic_extra_headers ignored in passthrough mode",
+                        request_id,
+                    )
+            else:
+                headers = merge_extra_headers(
+                    headers,
+                    self.config.anthropic_extra_headers,
+                    upstream_url=upstream_base_url,
+                    config=self.config,
+                )
             log_outbound_headers(
                 forwarder="anthropic_messages",
                 stripped_count=_pre_strip_count
@@ -1471,8 +1487,10 @@ class AnthropicHandlerMixin:
 
             # Subscription tracker: notify on OAuth requests (not API-key requests)
             _auth_header = headers.get("authorization", "")
-            if _auth_header.startswith("Bearer ") and not _auth_header.startswith(
-                "Bearer sk-ant-api"
+            if (
+                not passthrough
+                and _auth_header.startswith("Bearer ")
+                and not _auth_header.startswith("Bearer sk-ant-api")
             ):
                 from horizon.subscription.tracker import (
                     get_subscription_tracker as _get_sub_tracker,
@@ -1483,7 +1501,7 @@ class AnthropicHandlerMixin:
                     _sub_tracker.notify_active(_auth_header)
 
             # Rate limiting
-            if self.rate_limiter:
+            if self.rate_limiter and not passthrough:
                 api_key = headers.get("x-api-key", "")
                 if not api_key:
                     auth = headers.get("authorization", "")
@@ -1529,7 +1547,7 @@ class AnthropicHandlerMixin:
             # stripped of `x-horizon-*` above for the upstream-bound copy (PR-A5).
             memory_user_id: str | None = None
             memory_request_ctx = None
-            if self.memory_handler:
+            if self.memory_handler and not passthrough:
                 memory_user_id = resolve_memory_identity(request)
                 # Per-project memory routing (GH #462). Build the context
                 # once here so save / search / inject all resolve against
@@ -1565,6 +1583,7 @@ class AnthropicHandlerMixin:
                 memory_handler=self.memory_handler,
                 memory_user_id=memory_user_id,
                 mode_name=get_memory_injection_mode(),
+                passthrough=passthrough,
             )
             memory_decision.apply_to_tags(tags)
 
@@ -1610,11 +1629,13 @@ class AnthropicHandlerMixin:
             # Only resolved when the cache can be used, so streaming and
             # cache-disabled requests never pay for identity resolution.
             cache_partition = (
-                compute_request_cache_partition(request) if self.cache and not stream else None
+                compute_request_cache_partition(request)
+                if self.cache and not stream and not passthrough
+                else None
             )
             # Check cache (non-streaming only)
             cache_hit = False
-            if self.cache and not stream and cache_partition is not None:
+            if self.cache and not stream and not passthrough and cache_partition is not None:
                 cached = await self.cache.get(
                     messages, model, partition=cache_partition, **cache_key_fields
                 )
@@ -1695,7 +1716,7 @@ class AnthropicHandlerMixin:
             # conversation is CPU-bound — on-loop it froze the server (#1701).
             tokenizer, original_tokens = await self._count_tokens_offloaded(model, messages)
 
-            if self.rate_limiter:
+            if self.rate_limiter and not passthrough:
                 allowed, wait_seconds = await self.rate_limiter.check_tokens(
                     rate_key, original_tokens
                 )
@@ -1710,7 +1731,8 @@ class AnthropicHandlerMixin:
 
             # Enterprise Security: scan request before compression
             _security_ctx = None
-            if self.security:
+            # Enterprise scanning rewrites request and response text, so pass-through skips it.
+            if self.security and not passthrough:
                 try:
                     messages, _security_ctx = self.security.scan_request(
                         messages,
@@ -1739,7 +1761,7 @@ class AnthropicHandlerMixin:
 
             # Hook: pre_compress — let hooks modify messages before compression
 
-            if self.config.hooks and not is_cache_mode(self.config.mode):
+            if self.config.hooks and not is_cache_mode(self.config.mode) and not passthrough:
                 from horizon.hooks import CompressContext
 
                 _hook_ctx = CompressContext(
@@ -1896,8 +1918,9 @@ class AnthropicHandlerMixin:
                 if _client_beta_value
                 else 0
             )
-            if safeguard_capable_request:
-                # Claude Code's classifier capability is negotiated by the
+            if safeguard_capable_request or passthrough:
+                # Pass-through never merges: the client's beta header goes out as
+                # sent. Claude Code's classifier capability is negotiated by the
                 # client-owned header.  Do not let prior turns' sticky beta
                 # state rewrite this turn.
                 _sticky_beta_value = _client_beta_value or ""
@@ -2021,7 +2044,7 @@ class AnthropicHandlerMixin:
                         effective_context_limit,
                     )
 
-                    if context_guard_enabled():
+                    if context_guard_enabled() and not passthrough:
                         context_limit = effective_context_limit(
                             model,
                             context_limit,
@@ -2545,13 +2568,15 @@ class AnthropicHandlerMixin:
             # marker breaks that chain on tool-heavy turns (silent full re-write)
             # and can leave the tail billing uncached. Applied last so the
             # forwarded AND recorded (next_forwarded) messages stay bounded.
-            _norm = normalize_message_cache_control(
-                optimized_messages,
-                previous_forwarded_messages,
-                client_messages=original_client_messages,
-            )
-            if _norm is not optimized_messages:
-                optimized_messages = _norm
+            # Pass-through skips the normalizer: it rewrites the client's markers.
+            if not passthrough:
+                _norm = normalize_message_cache_control(
+                    optimized_messages,
+                    previous_forwarded_messages,
+                    client_messages=original_client_messages,
+                )
+                if _norm is not optimized_messages:
+                    optimized_messages = _norm
 
             # Guard: if "optimization" inflated tokens, revert to originals.
             # Skip in cache mode where prefix-stability may legitimately shift counts.
@@ -2634,7 +2659,7 @@ class AnthropicHandlerMixin:
             # `tokens_saved` assignment is overwritten by that recount, so the
             # adjustment belongs there and nowhere else.
             _maturation_mgr = None
-            if self.config.read_maturation and not _bypass:
+            if self.config.read_maturation and not _bypass and not passthrough:
                 try:
                     from horizon.config import ReadMaturationConfig
                     from horizon.transforms.read_maturation import ReadMaturationManager
@@ -2681,7 +2706,7 @@ class AnthropicHandlerMixin:
                     logger.warning(f"[{request_id}] read maturation failed: {e}")
 
             # Hook: post_compress — let hooks observe compression results
-            if self.config.hooks and tokens_saved > 0:
+            if self.config.hooks and tokens_saved > 0 and not passthrough:
                 from horizon.hooks import CompressEvent
 
                 try:
@@ -2756,7 +2781,7 @@ class AnthropicHandlerMixin:
             ccr_workspace_key, ccr_workspace_label = None, None
             if (
                 self.config.ccr_inject_tool or self.config.ccr_inject_system_instructions
-            ) and not _bypass:
+            ) and not _bypass and not passthrough:
                 inject_system_instructions = self.config.ccr_inject_system_instructions
                 if inject_system_instructions and frozen_message_count > 0:
                     logger.info(
@@ -2898,6 +2923,7 @@ class AnthropicHandlerMixin:
                 self.ccr_context_tracker
                 and self.config.ccr_proactive_expansion
                 and ccr_workspace_key
+                and not passthrough
             ):
                 # Extract user query from messages
                 user_query = ""
@@ -2948,7 +2974,7 @@ class AnthropicHandlerMixin:
                                 )
 
             # Traffic Learner: Extract patterns from inbound tool results
-            if self.traffic_learner:
+            if self.traffic_learner and not passthrough:
                 try:
                     # Wire backend on first use (lazy init after memory handler is ready)
                     if (
@@ -3184,10 +3210,11 @@ class AnthropicHandlerMixin:
             # this catches both the client-echoed and the cache-replayed forms. Applied
             # deterministically to the exact bytes forwarded (and thus recorded as the
             # next prefix), so Anthropic always caches/matches the same stripped prefix.
-            _strip_streaming_only_content_fields(optimized_messages)
+            if not passthrough:
+                _strip_streaming_only_content_fields(optimized_messages)
             # Update body
             body["messages"] = optimized_messages
-            if tools or _original_tools is not None:
+            if (tools or _original_tools is not None) and not passthrough:
                 forwarded_tools = self._tools_for_forwarding(
                     tools,
                     preserve_order=preserve_tool_order,
@@ -3224,7 +3251,7 @@ class AnthropicHandlerMixin:
                 _pre_compaction_tools = body.get("tools")
                 _tools_modified = False
                 # Auxiliary passes honor the same disable/bypass decision as messages.
-                if _decision.should_compress:
+                if _decision.should_compress and not passthrough:
                     body, _tools_modified, _tools_before_bytes, _tools_after_bytes = compact_tools(
                         body
                     )
@@ -3258,7 +3285,7 @@ class AnthropicHandlerMixin:
                 )
 
                 _desc_max = tool_desc_max_chars()
-                if _decision.should_compress and _desc_max > 0:
+                if _decision.should_compress and not passthrough and _desc_max > 0:
                     _pre_desc_tools = body.get("tools")
                     body, _desc_modified, _desc_before, _desc_after = compact_tool_descriptions(
                         body, _desc_max
@@ -3296,7 +3323,7 @@ class AnthropicHandlerMixin:
                 )
                 from horizon.transforms.compression_units import find_content_router
 
-                if _decision.should_compress and system_compact_enabled():
+                if _decision.should_compress and not passthrough and system_compact_enabled():
                     _sys_router = find_content_router(self.anthropic_pipeline)
                     if _sys_router is not None:
                         body, _sys_modified, _sys_before, _sys_after = compact_system_prompt(
@@ -3332,10 +3359,10 @@ class AnthropicHandlerMixin:
                 metadata={"path": pipeline_path, "stream": stream},
             )
             previous_presend_messages = optimized_messages
-            if presend_event.messages is not None:
+            if presend_event.messages is not None and not passthrough:
                 optimized_messages = presend_event.messages
                 body["messages"] = optimized_messages
-            if presend_event.tools is not None:
+            if presend_event.tools is not None and not passthrough:
                 tools = self._tools_for_forwarding(
                     presend_event.tools,
                     preserve_order=preserve_tool_order,
@@ -3343,7 +3370,7 @@ class AnthropicHandlerMixin:
                 if tools or body.get("tools") is not None:
                     if tools != body.get("tools"):
                         body["tools"] = tools
-            if presend_event.headers is not None:
+            if presend_event.headers is not None and not passthrough:
                 headers = presend_event.headers
             if presend_event.messages is not previous_presend_messages:
                 optimized_tokens = tokenizer.count_messages(body["messages"])
@@ -3358,7 +3385,7 @@ class AnthropicHandlerMixin:
             _third_party_anthropic_upstream = provider_name == "anthropic" and (
                 not anthropic_first_party_tool_search_supported(_anthropic_target_base_url)
             )
-            if _third_party_anthropic_upstream:
+            if _third_party_anthropic_upstream and not passthrough:
                 _tools_before_strip = body.get("tools")
                 _tools_after_strip = strip_first_party_tool_search_tools_for_third_party_upstream(
                     _tools_before_strip,
@@ -3393,6 +3420,7 @@ class AnthropicHandlerMixin:
             # Horizon's own injector here.
             if (
                 provider_name == "anthropic"
+                and not passthrough
                 and anthropic_first_party_tool_search_supported(_anthropic_target_base_url)
                 and getattr(self, "anthropic_backend", None) is None
                 and os.environ.get("HORIZON_TOOL_SEARCH", "1").strip().lower()
@@ -3468,7 +3496,7 @@ class AnthropicHandlerMixin:
 
             _pre_hook_tokens: int | None = None
             _req_ctx: TurnContext | None = None
-            if registered_turn_hooks():
+            if registered_turn_hooks() and not passthrough:
                 _req_ctx = TurnContext(
                     provider="anthropic",
                     model=str(model),
@@ -3543,8 +3571,10 @@ class AnthropicHandlerMixin:
             # Nothing past this point mutates `body["tools"]` on the outbound path.
             from horizon.proxy.helpers import strip_unsupported_tool_search_blocks
 
-            _ts_repaired, _ts_stripped = strip_unsupported_tool_search_blocks(
-                body.get("messages"), body.get("tools")
+            _ts_repaired, _ts_stripped = (
+                (body.get("messages"), 0)
+                if passthrough
+                else strip_unsupported_tool_search_blocks(body.get("messages"), body.get("tools"))
             )
             if _ts_stripped:
                 body["messages"] = _ts_repaired
@@ -3566,8 +3596,10 @@ class AnthropicHandlerMixin:
             # tool_use/tool_result references that Anthropic would reject.
             from horizon.proxy.helpers import strip_unsupported_ccr_retrieve_blocks
 
-            _ccr_repaired, _ccr_neutralized = strip_unsupported_ccr_retrieve_blocks(
-                body.get("messages"), body.get("tools")
+            _ccr_repaired, _ccr_neutralized = (
+                (body.get("messages"), 0)
+                if passthrough
+                else strip_unsupported_ccr_retrieve_blocks(body.get("messages"), body.get("tools"))
             )
             if _ccr_neutralized:
                 body["messages"] = _ccr_repaired
@@ -3640,7 +3672,7 @@ class AnthropicHandlerMixin:
             # mechanical tool_result continuations. Runs after every other
             # body mutation so the turn classifier sees the final messages,
             # and respects the same bypass header as compression.
-            if not _bypass:
+            if not _bypass and not passthrough:
                 from horizon.proxy.output_savings import (
                     assign_arm,
                     conversation_key_from_body,
@@ -3736,7 +3768,7 @@ class AnthropicHandlerMixin:
             # placement) so the turn-scoped message is last and unmarked.
             transforms_applied.extend(_policy_tags)
             _flash_beta_needed = False
-            if not _bypass and not upstream_base_url:
+            if not _bypass and not upstream_base_url and not passthrough:
                 _flash_beta_needed, _flash_view = self._maybe_flash_observations(
                     body,
                     model,
@@ -4116,7 +4148,9 @@ class AnthropicHandlerMixin:
             try:
                 ccr_handler_config = getattr(self.ccr_response_handler, "config", None)
                 ccr_response_handler_enabled = bool(
-                    self.ccr_response_handler and getattr(ccr_handler_config, "enabled", True)
+                    self.ccr_response_handler
+                    and getattr(ccr_handler_config, "enabled", True)
+                    and not passthrough
                 )
                 # A body carrying signed thinking blocks leaves as the client's
                 # original bytes (see ``select_outbound_body``), which throws
@@ -4213,7 +4247,12 @@ class AnthropicHandlerMixin:
                 # ordinary pause no longer rewrites the whole context. Told to the
                 # guard below as a 1h request, which it now is.
 
-                if not client_uses_1h and body.get("tools") and ttl_upgrade_enabled():
+                if (
+                    not passthrough
+                    and not client_uses_1h
+                    and body.get("tools")
+                    and ttl_upgrade_enabled()
+                ):
                     _ttl_upgraded = upgrade_cache_ttl_to_1h(body)
                     if _ttl_upgraded:
                         client_uses_1h = True
@@ -4221,17 +4260,27 @@ class AnthropicHandlerMixin:
                         body_mutation_tracker.mark_mutated("cache_ttl_upgrade")
                         tags["cache_ttl_upgrade"] = str(_ttl_upgraded)
 
+                # Pass-through skips the TTL-order guard: it reorders markers.
                 (
                     _ttl_system,
                     _ttl_messages,
                     _ttl_tools,
                     _ttl_stats,
-                ) = enforce_cache_control_ttl_order(
-                    body.get("system"),
-                    body.get("messages"),
-                    body.get("tools"),
-                    client_uses_1h=client_uses_1h,
-                    request_id=request_id,
+                ) = (
+                    (
+                        body.get("system"),
+                        body.get("messages"),
+                        body.get("tools"),
+                        {"violation": False},
+                    )
+                    if passthrough
+                    else enforce_cache_control_ttl_order(
+                        body.get("system"),
+                        body.get("messages"),
+                        body.get("tools"),
+                        client_uses_1h=client_uses_1h,
+                        request_id=request_id,
+                    )
                 )
                 if _ttl_stats["violation"]:
                     if body.get("system") is not None:
@@ -4310,7 +4359,7 @@ class AnthropicHandlerMixin:
 
                 # The exact request about to be sent: what the cache keeper
                 # re-sends as a pre-warm if this session then goes idle.
-                if getattr(self, "cache_keeper", None) is not None:
+                if getattr(self, "cache_keeper", None) is not None and not passthrough:
                     from horizon.proxy.account_analytics import _account
                     from horizon.proxy.cache_keeper import LIVENESS_HEADER
                     from horizon.proxy.project_context import get_current_project
@@ -4406,7 +4455,7 @@ class AnthropicHandlerMixin:
                     # Mutated in place: ``headers`` is captured by the
                     # closures defined below, and rebinding it here would
                     # leave them holding the old mapping.
-                    if body.get("stream", False) is False:
+                    if body.get("stream", False) is False and not passthrough:
                         for _accept_key in [k for k in headers if k.lower() == "accept"]:
                             headers.pop(_accept_key, None)
                         headers["accept"] = "application/json"
@@ -4699,6 +4748,7 @@ class AnthropicHandlerMixin:
                         # CCR Response Handling: Handle horizon_retrieve tool calls automatically
                         if (
                             self.ccr_response_handler
+                            and not passthrough
                             and resp_json
                             and response.status_code == 200
                             and self.ccr_response_handler.has_ccr_tool_calls(resp_json, "anthropic")
@@ -4751,6 +4801,7 @@ class AnthropicHandlerMixin:
                                         body=continuation_body,
                                         original_body_bytes=None,
                                         body_mutated=True,
+                                        passthrough=passthrough,
                                     )
                                 )
                                 # A continuation is a non-streaming call, so it
@@ -5102,6 +5153,7 @@ class AnthropicHandlerMixin:
                         if (
                             self.cache
                             and not stream
+                            and not passthrough
                             and cache_partition is not None
                             and response.status_code == 200
                             and resp_json is not None
@@ -5120,8 +5172,10 @@ class AnthropicHandlerMixin:
                         # counters. Provider-specific OAuth/subscription
                         # accounting — stays outside the funnel (different
                         # concern, only fires for Bearer-not-sk-ant tokens).
-                        if _auth_header.startswith("Bearer ") and not _auth_header.startswith(
-                            "Bearer sk-ant-api"
+                        if (
+                            not passthrough
+                            and _auth_header.startswith("Bearer ")
+                            and not _auth_header.startswith("Bearer sk-ant-api")
                         ):
                             from horizon.subscription.tracker import (
                                 get_subscription_tracker as _get_sub_tracker,
@@ -5247,6 +5301,7 @@ class AnthropicHandlerMixin:
                         # the resolved text, not the marker.
                         if (
                             getattr(self.config, "ccr_resolve_markers_inline", False)
+                            and not passthrough
                             and resp_json
                             and response.status_code == 200
                         ):
@@ -5266,6 +5321,7 @@ class AnthropicHandlerMixin:
                         # an error looked like success.
                         if (
                             self.security
+                            and not passthrough
                             and _security_ctx
                             and resp_json
                             and response.status_code == 200
@@ -5637,7 +5693,7 @@ class AnthropicHandlerMixin:
                 nudge_response_usage,
             )
 
-            if not context_guard_enabled():
+            if is_passthrough(self.config) or not context_guard_enabled():
                 return False
             if not isinstance(payload, dict) or payload.get("type") != "message":
                 return False

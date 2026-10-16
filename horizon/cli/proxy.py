@@ -347,6 +347,16 @@ def dashboard(port: int, no_open: bool) -> None:
 @click.option("--no-cache", is_flag=True, help="Disable semantic caching")
 @click.option("--no-rate-limit", is_flag=True, help="Disable rate limiting")
 @click.option(
+    "--passthrough",
+    is_flag=True,
+    envvar="HORIZON_PASSTHROUGH",
+    help=(
+        "Relay requests and responses byte-for-byte (Claude Desktop 3P gateway): the "
+        "body, headers and usage are forwarded unchanged; compression, CCR, memory, "
+        "cache, rate limiting and keep-alive are off. Env: HORIZON_PASSTHROUGH=1."
+    ),
+)
+@click.option(
     "--protect-tool-results",
     default=None,
     envvar="HORIZON_PROTECT_TOOL_RESULTS",
@@ -1050,6 +1060,7 @@ def proxy(
     no_optimize: bool,
     no_cache: bool,
     no_rate_limit: bool,
+    passthrough: bool,
     protect_tool_results: str | None,
     rpm: int | None,
     tpm: int | None,
@@ -1342,6 +1353,7 @@ def proxy(
         optimize=not no_optimize,
         cache_enabled=not no_cache,
         rate_limit_enabled=not no_rate_limit,
+        passthrough=passthrough,
         rate_limit_requests_per_minute=rpm if rpm is not None else 60,
         rate_limit_tokens_per_minute=tpm,
         compress_user_messages=_get_env_bool("HORIZON_COMPRESS_USER_MESSAGES", False),
@@ -1504,6 +1516,11 @@ def proxy(
             else 2.0
         ),
     )
+
+    if config.passthrough:
+        from horizon.proxy.passthrough_mode import PASSTHROUGH_STARTUP_LINE
+
+        click.echo(PASSTHROUGH_STARTUP_LINE)
 
     memory_status = "DISABLED"
     if config.memory_enabled:

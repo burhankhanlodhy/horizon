@@ -74,4 +74,4 @@ def test_anthropic_messages_strips_local_1m_model_suffix_before_forwarding() -> 
     assert response.status_code == 200, response.text
     assert captured["body"]["model"] == "glm-5.2"
     assert captured["body_mutated"] is True
-    assert captured["mutation_reasons"] == ["sanitize_model_id"]
+    assert captured["mutation_reasons"] == ["model_id_sanitized"]

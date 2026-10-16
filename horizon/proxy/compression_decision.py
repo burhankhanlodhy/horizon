@@ -33,6 +33,7 @@ from typing import Any
 
 from horizon.proxy.account_analytics import compression_paused
 from horizon.proxy.helpers import _horizon_bypass_header
+from horizon.proxy.passthrough_mode import is_passthrough
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,8 @@ class CompressionDecision:
     # When ``should_compress`` is False, this is the canonical reason
     # surfaced in logs and (later) in the RequestOutcome tags so the
     # dashboard can slice passthrough traffic by cause. One of:
+    #   * ``"passthrough_mode"``   — ProxyConfig.passthrough (horizon proxy
+    #                                --passthrough): the request is relayed as is
     #   * ``"bypass_header"``      — user set x-horizon-bypass or
     #                                x-horizon-mode=passthrough
     #   * ``"compression_disabled"`` — operator set config.optimize=False
@@ -128,9 +131,12 @@ class CompressionDecision:
         license_ok = usage_reporter.should_compress if usage_reporter is not None else True
         has_msgs = bool(messages)
 
-        # Precedence: bypass > config > plan cap > no_messages > license
-        if bypass:
-            reason: str | None = "bypass_header"
+        # Precedence: passthrough > bypass > config > plan cap > no_messages > license
+        if is_passthrough(config):
+            reason: str | None = "passthrough_mode"
+            should = False
+        elif bypass:
+            reason = "bypass_header"
             should = False
         elif not config_ok:
             reason = "compression_disabled"

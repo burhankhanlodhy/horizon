@@ -11603,8 +11603,11 @@ class OpenAIHandlerMixin:
         # Hermes owns its scoped coding-agent protocols; keep that adapter out of
         # the generic OpenAI passthrough handler.
         from horizon.providers.hermes import compress_scoped_passthrough_body
+        from horizon.proxy.passthrough_mode import is_passthrough
 
+        _pt_relay = is_passthrough(getattr(self, "config", None))
         optimize_enabled = bool(getattr(getattr(self, "config", None), "optimize", False))
+        optimize_enabled = optimize_enabled and not _pt_relay
         original_body = body
         body = compress_scoped_passthrough_body(
             path,
@@ -11624,6 +11627,7 @@ class OpenAIHandlerMixin:
         if (
             getattr(_pt_config, "compress_passthrough", False)
             and getattr(_pt_config, "optimize", False)
+            and not _pt_relay
             and request.method == "POST"
             and path.rstrip("/").endswith("/responses")
             and body

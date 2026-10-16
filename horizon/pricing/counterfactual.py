@@ -586,6 +586,32 @@ def resolve_rates(
     )
 
 
+def output_rate_per_token(model: str, *, long_context: bool = False) -> float | None:
+    """Output (completion) price of ``model`` in USD per token, or ``None``.
+
+    The catalog companion of :func:`resolve_rates`, which prices the input side
+    only. Uses the same model resolution and long-context tier. ``None`` when the
+    catalog does not know the model; a genuinely free model returns ``0.0``.
+    """
+    litellm = _litellm()
+    if litellm is None:
+        return None
+    try:
+        from horizon.pricing.litellm_pricing import resolve_litellm_model
+
+        info = litellm.model_cost.get(resolve_litellm_model(model), {}) or {}
+    except Exception:
+        return None
+    if info.get("input_cost_per_token") is None:
+        return None
+    if long_context:
+        high = info.get(f"output_cost_per_token{long_context_suffix(model)}")
+        if high is not None:
+            return float(high)
+    value = info.get("output_cost_per_token")
+    return None if value is None else float(value)
+
+
 @dataclass(frozen=True)
 class PricedSavings:
     """What a set of counterfactual tokens was worth, and how sure we are.

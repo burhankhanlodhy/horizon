@@ -59,6 +59,7 @@ def _register_commands() -> None:
         doctor,  # noqa: F401
         evals,  # noqa: F401
         forward,  # noqa: F401
+        gateway,  # noqa: F401
         init,  # noqa: F401
         inspect,  # noqa: F401
         install,  # noqa: F401

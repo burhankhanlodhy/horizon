@@ -35,6 +35,7 @@ from horizon.proxy.image_compression_policy import (
     apply_image_skip_reason,
     decide_image_compression,
 )
+from horizon.proxy.passthrough_mode import is_passthrough
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,16 @@ class ImageCompressionDecision:
             image_optimize_enabled=bool(getattr(config, "image_optimize", False)),
             has_messages=bool(messages),
         )
+        # Pass-through (ProxyConfig.passthrough) relays images untouched, whatever
+        # image_optimize says.
+        if is_passthrough(config):
+            return cls(
+                should_compress=False,
+                passthrough_reason="passthrough_mode",
+                bypass_header_set=decision.bypass_header_set,
+                image_optimize_enabled=decision.image_optimize_enabled,
+                has_messages=decision.has_messages,
+            )
 
         return cls(
             should_compress=decision.should_compress,

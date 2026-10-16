@@ -168,6 +168,7 @@ from horizon.proxy.modes import (
     is_token_mode,
     normalize_proxy_mode,
 )
+from horizon.proxy.passthrough_mode import is_passthrough
 from horizon.proxy.probe_recorder import probe_recorder_from_env
 from horizon.proxy.project_context import (
     classify_project,
@@ -1095,12 +1096,14 @@ class HorizonProxy(
             )
 
         # Initialize components
+        # Pass-through relays every response, so it never serves a cached one
+        # and never throttles (horizon/proxy/passthrough_mode.py).
         self.cache = (
             SemanticCache(
                 max_entries=config.cache_max_entries,
                 ttl_seconds=config.cache_ttl_seconds,
             )
-            if config.cache_enabled
+            if config.cache_enabled and not is_passthrough(config)
             else None
         )
 
@@ -1109,7 +1112,7 @@ class HorizonProxy(
                 requests_per_minute=config.rate_limit_requests_per_minute,
                 tokens_per_minute=config.rate_limit_tokens_per_minute,
             )
-            if config.rate_limit_enabled
+            if config.rate_limit_enabled and not is_passthrough(config)
             else None
         )
 
@@ -2015,6 +2018,9 @@ class HorizonProxy(
 
     def _build_cache_keeper(self) -> Any:
         """Keep idle sessions' prompt caches warm (HORIZON_CACHE_KEEPALIVE=1). Off by default."""
+        if is_passthrough(self.config):
+            # Pings are requests Horizon makes on its own, not the client's bytes.
+            return None
         if os.environ.get("HORIZON_CACHE_KEEPALIVE", "").strip().lower() not in ("1", "true", "yes", "on"):
             return None
         from horizon.proxy.account_analytics import record_keepalive_ping
@@ -2538,11 +2544,13 @@ class HorizonProxy(
 
         last_error = None
         reasons = list(mutation_reasons or [])
+        passthrough = is_passthrough(self.config)
         outbound = select_outbound_body(
             body=body,
             original_body_bytes=original_body_bytes,
             body_mutated=body_mutated,
             mutation_reasons=reasons,
+            passthrough=passthrough,
         )
         outbound_bytes, source = outbound.content, outbound.source
         outbound_headers = {**headers, "content-type": "application/json"}
@@ -2581,7 +2589,9 @@ class HorizonProxy(
 
                     # A Flex tier Horizon added ran out of capacity: retry once,
                     # immediately, at the standard tier (flex_policy).
-                    flex_retry = fallback_body(body, response.status_code)
+                    flex_retry = (
+                        None if passthrough else fallback_body(body, response.status_code)
+                    )
                     if flex_retry is not None:
                         body = flex_retry
                         post_kwargs["content"] = serialize_body_canonical(body)
@@ -2593,7 +2603,9 @@ class HorizonProxy(
                     # The upstream rejected a request Horizon flashed: send it
                     # once unflashed; a success switches flash off for that
                     # host and model (flash_guard).
-                    flash_retry = flash_fallback_body(body, response.status_code)
+                    flash_retry = (
+                        None if passthrough else flash_fallback_body(body, response.status_code)
+                    )
                     if flash_retry is not None:
                         body = flash_retry
                         post_kwargs["content"] = serialize_body_canonical(body)
@@ -6025,6 +6037,14 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         policy_allowed=_compact_policy_allowed,
     )
     app.add_middleware(AccountMiddleware, service=account_analytics)
+    # Outermost, so a request rejected by any gate above is still metered.
+    # Only POST .../v1/messages is affected (horizon/gateway_usage.py).
+    from horizon.gateway_usage import GatewayUsageMiddleware
+
+    app.add_middleware(
+        GatewayUsageMiddleware,
+        passthrough=lambda: bool(getattr(config, "passthrough", False)),
+    )
     return app
 
 
@@ -6079,6 +6099,7 @@ def _proxy_config_from_env() -> ProxyConfig:
         rollout=rollout,
         host=_get_env_str("HORIZON_HOST", "127.0.0.1"),
         port=_get_env_int("HORIZON_PORT", 8787),
+        passthrough=_get_env_bool("HORIZON_PASSTHROUGH", False),
         openai_api_url=os.environ.get("OPENAI_TARGET_API_URL"),
         anthropic_api_url=os.environ.get("ANTHROPIC_TARGET_API_URL"),
         anthropic_buffered_request_timeout_seconds=_get_env_int(
@@ -6841,6 +6862,7 @@ if __name__ == "__main__":
         rollout=rollout,
         host=_get_env_str("HORIZON_HOST", args.host),
         port=_get_env_int("HORIZON_PORT", args.port),
+        passthrough=_get_env_bool("HORIZON_PASSTHROUGH", False),
         openai_api_url=_get_env_str("OPENAI_TARGET_API_URL", args.openai_api_url),
         anthropic_api_url=_get_env_str("ANTHROPIC_TARGET_API_URL", args.anthropic_api_url),
         anthropic_buffered_request_timeout_seconds=_get_env_int(

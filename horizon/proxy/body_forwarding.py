@@ -12,11 +12,15 @@ which bytes leave Horizon:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from horizon.proxy import python_forwarder_mode_policy
+from horizon.proxy.passthrough_mode import passthrough_violations
+
+logger = logging.getLogger(__name__)
 
 _PYTHON_FORWARDER_MODE_ENV = python_forwarder_mode_policy.PYTHON_FORWARDER_MODE_ENV
 
@@ -305,6 +309,44 @@ class BodyMutationTracker:
         return list(self._reasons)
 
 
+def _select_passthrough_body(
+    *,
+    body: dict[str, Any],
+    original_body_bytes: bytes | None,
+    body_mutated: bool,
+    mutation_reasons: list[str] | None,
+) -> OutboundBody:
+    """Pass-through selection: the client's bytes, or the documented sanitize.
+
+    A body that no transform touched goes out byte-for-byte. A body whose only
+    mutation is ``model_id_sanitized`` goes out canonical, since that is the
+    documented exception. Any other mutation is a violation: the client's
+    original bytes go out instead, and the violation is logged. The guarantee is
+    never a silent rewrite.
+    """
+    if original_body_bytes is None:
+        # Nothing of the client's to forward: a body Horizon synthesized.
+        return OutboundBody(content=serialize_body_canonical(body), source="canonical")
+    if not body_mutated:
+        return OutboundBody(content=original_body_bytes, source="passthrough")
+
+    reasons = list(mutation_reasons or [])
+    violations = passthrough_violations(reasons)
+    if not reasons:
+        violations = ["unattributed_mutation"]
+    if not violations:
+        # Only the documented sanitize changed the body.
+        return OutboundBody(content=serialize_body_canonical(body), source="canonical")
+
+    logger.warning("passthrough_violation=%s", ",".join(violations))
+    return OutboundBody(
+        content=original_body_bytes,
+        source="passthrough",
+        dropped_mutations=True,
+        dropped_mutation_reasons=tuple(reasons) or ("unattributed_mutation",),
+    )
+
+
 def select_outbound_body(
     *,
     body: dict[str, Any],
@@ -312,6 +354,7 @@ def select_outbound_body(
     body_mutated: bool,
     forwarder_mode: PythonForwarderMode | None = None,
     mutation_reasons: list[str] | None = None,
+    passthrough: bool = False,
 ) -> OutboundBody:
     """Select the exact bytes to forward upstream.
 
@@ -319,7 +362,18 @@ def select_outbound_body(
     signed-thinking passthrough overrides a mutated body, the discarded reasons
     are echoed back on the result so the call site can log what never made it
     upstream instead of silently claiming the edit landed.
+
+    ``passthrough`` (``ProxyConfig.passthrough``) switches to the pass-through
+    rule in :func:`_select_passthrough_body`, which ignores the forwarder mode
+    and the thinking-preserving relaxation.
     """
+    if passthrough:
+        return _select_passthrough_body(
+            body=body,
+            original_body_bytes=original_body_bytes,
+            body_mutated=body_mutated,
+            mutation_reasons=mutation_reasons,
+        )
     mode = forwarder_mode if forwarder_mode is not None else get_python_forwarder_mode()
     # Parse the client body at most once for the whole decision (bodies here
     # reach 9.3 MB in real traffic; this used to cost two full parses).
@@ -369,6 +423,7 @@ def prepare_outbound_body_bytes(
     body_mutated: bool,
     forwarder_mode: PythonForwarderMode | None = None,
     mutation_reasons: list[str] | None = None,
+    passthrough: bool = False,
 ) -> tuple[bytes, OutboundBodySource]:
     """Compatibility tuple wrapper around :func:`select_outbound_body`.
 
@@ -382,6 +437,7 @@ def prepare_outbound_body_bytes(
         body_mutated=body_mutated,
         forwarder_mode=forwarder_mode,
         mutation_reasons=mutation_reasons,
+        passthrough=passthrough,
     )
     return outbound.content, outbound.source
 

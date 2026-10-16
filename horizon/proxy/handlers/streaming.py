@@ -22,6 +22,7 @@ from horizon.proxy.helpers import (
     overload_retry_is_futile,
     retry_after_ms,
 )
+from horizon.proxy.passthrough_mode import is_passthrough
 from horizon.proxy.provider_usage import billed_input_for_provider
 from horizon.proxy.token_counting import gemini_output_tokens
 
@@ -1085,7 +1086,7 @@ class StreamingMixin:
         # prompt-too-long 400s. Metrics below parse the original upstream
         # bytes and are unaffected.
         context_guard = None
-        if provider == "anthropic":
+        if provider == "anthropic" and not is_passthrough(self.config):
             from horizon.proxy.context_guard import (
                 StreamUsageGuard,
                 believed_context_limit,
@@ -1149,6 +1150,7 @@ class StreamingMixin:
             original_body_bytes=original_body_bytes,
             body_mutated=body_mutated,
             mutation_reasons=list(mutation_reasons or []),
+            passthrough=is_passthrough(self.config),
         )
         outbound_bytes, outbound_source = outbound.content, outbound.source
         # Billed tokens per byte, for the account ledger (forwarded_size).

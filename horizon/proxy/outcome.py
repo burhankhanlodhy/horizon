@@ -529,6 +529,13 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
 
         outcome = dataclasses.replace(outcome, provider="copilot")
 
+    # Gateway usage sink (horizon/gateway_usage.py). Runs before the 4xx/5xx
+    # short-circuit below so a rejected request is still metered. It is a no-op
+    # unless this request is a /v1/messages POST, and it never raises.
+    from horizon.gateway_usage import emit_outcome as _emit_gateway_usage
+
+    await _emit_gateway_usage(outcome)
+
     # 0. Anonymous session beacon. Opt-in and a no-op unless HORIZON_TELEMETRY
     #    is explicitly on, in which case it folds this outcome into an in-memory
     #    per-session aggregate and POSTs one content-free event when the session

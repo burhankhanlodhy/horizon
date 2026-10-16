@@ -562,7 +562,35 @@ class ProxyConfig:
     # the worker receiving the admin request would observe the update.
     worker_processes: int = 1
 
+    # Pass-through mode: the proxy relays requests and responses byte-faithfully
+    # (Claude Desktop 3P gateway). The single switch; see
+    # horizon/proxy/passthrough_mode.py. CLI: --passthrough; env: HORIZON_PASSTHROUGH=1.
+    passthrough: bool = False
+
     def __post_init__(self, smart_routing: bool | None = None) -> None:
+        if self.passthrough:
+            # Every row of the pass-through table is off. The explicit
+            # ``is_passthrough`` checks at each call site stay in place, so this
+            # is a config-level default, not the only guard.
+            self.optimize = False
+            self.image_optimize = False
+            self.cache_enabled = False
+            self.rate_limit_enabled = False
+            self.read_lifecycle = False
+            self.read_maturation = False
+            self.code_aware_enabled = False
+            self.ccr_inject_tool = False
+            self.ccr_inject_marker = False
+            self.ccr_inject_system_instructions = False
+            self.ccr_handle_responses = False
+            self.ccr_resolve_markers_inline = False
+            self.ccr_proactive_expansion = False
+            self.ccr_context_tracking = False
+            self.compress_passthrough = False
+            self.model_router = None
+            self.memory_enabled = False
+            self.traffic_learning_enabled = False
+            self.subscription_tracking_enabled = False
         if self.rollout is None:
             self.rollout = resolve_rollout()
         # ``read_maturation`` remains a concrete, already-resolved runtime

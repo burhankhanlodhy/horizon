@@ -698,6 +698,17 @@ SETTINGS: tuple[SettingField, ...] = (
         help="Minimum times a pattern must be observed before it is persisted to memory. Default: 5.",
         tier="advanced",
     ),
+    # --- Gateway (Claude Desktop 3P relay) ---
+    SettingField(
+        "HORIZON_PASSTHROUGH",
+        "proxy_passthrough",
+        "Pass-through",
+        "Gateway",
+        "bool",
+        default=False,
+        help="Relay requests and responses byte-for-byte (horizon proxy --passthrough), for the Claude Desktop 3P gateway.",
+        tier="advanced",
+    ),
     # --- Endpoints (custom Anthropic/OpenAI upstream) ---
     SettingField(
         "ANTHROPIC_TARGET_API_URL",
