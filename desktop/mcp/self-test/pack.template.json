@@ -3,17 +3,21 @@
   "kind": "self_test_pack",
   "study_id": "st_example_replace",
   "model_label": "Claude <model> at <effort>",
-  "minimums": {"paired_units": 12, "groups": 6},
+  "minimums": {"paired_units": 10, "groups": 8},
   "quality_tolerance": 1,
   "groups": [
-    {"group_id": "g1", "tasks": ["t_example_01", "t_example_02"]},
-    {"group_id": "g2", "tasks": ["t_example_03", "t_example_04"]},
-    {"group_id": "g3", "tasks": ["t_example_05", "t_example_06"]},
-    {"group_id": "g4", "tasks": ["t_example_07", "t_example_08"]},
-    {"group_id": "g5", "tasks": ["t_example_09", "t_example_10"]},
-    {"group_id": "g6", "tasks": ["t_example_11", "t_example_12"]},
-    {"group_id": "g7", "tasks": ["t_example_13", "t_example_14"]},
-    {"group_id": "g8", "tasks": ["t_example_15", "t_example_16"]}
+    {"group_id": "g01", "tasks": ["t_example_01"]},
+    {"group_id": "g02", "tasks": ["t_example_02"]},
+    {"group_id": "g03", "tasks": ["t_example_03"]},
+    {"group_id": "g04", "tasks": ["t_example_04"]},
+    {"group_id": "g05", "tasks": ["t_example_05"]},
+    {"group_id": "g06", "tasks": ["t_example_06"]},
+    {"group_id": "g07", "tasks": ["t_example_07"]},
+    {"group_id": "g08", "tasks": ["t_example_08"]},
+    {"group_id": "g09", "tasks": ["t_example_09"]},
+    {"group_id": "g10", "tasks": ["t_example_10"]},
+    {"group_id": "g11", "tasks": ["t_example_11"]},
+    {"group_id": "g12", "tasks": ["t_example_12"]}
   ],
   "tasks": [
     {
@@ -87,30 +91,6 @@
       "source_files": ["example_rates_12.json"],
       "question": "EXAMPLE, replace before use: What is the rate as a decimal?",
       "answer": {"kind": "number", "expected": "0.15", "tolerance": "0.005"}
-    },
-    {
-      "task_id": "t_example_13",
-      "source_files": ["example_letter_13.txt"],
-      "question": "EXAMPLE, replace before use: What date is on the letter?",
-      "answer": {"kind": "date", "expected": "2026-01-15"}
-    },
-    {
-      "task_id": "t_example_14",
-      "source_files": ["example_matrix_14.csv"],
-      "question": "EXAMPLE, replace before use: Which option is marked as selected?",
-      "answer": {"kind": "choice", "expected": ["Option A", "Option B"]}
-    },
-    {
-      "task_id": "t_example_15",
-      "source_files": ["example_budget_15.docx"],
-      "question": "EXAMPLE, replace before use: What is the approved budget?",
-      "answer": {"kind": "number", "expected": "1500", "tolerance": "10"}
-    },
-    {
-      "task_id": "t_example_16",
-      "source_files": ["example_readme_16.md"],
-      "question": "EXAMPLE, replace before use: Which version is described?",
-      "answer": {"kind": "text_contains", "expected": "version 2"}
     }
   ]
 }

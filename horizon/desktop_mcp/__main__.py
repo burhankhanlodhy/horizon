@@ -113,6 +113,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .preparation_cli import main as prepare_main
 
         return prepare_main(values[1:])
+    if values and values[0] == "self-test":
+        # Single-account self test; its arguments belong to self_test_cli.main.
+        from .self_test_cli import main as self_test_main
+
+        return self_test_main(values[1:])
     if values and values[0] == "worker":
         # Passed verbatim: the frozen broker re-enters the worker through this
         # subcommand, and its arguments belong to backend_worker.main.

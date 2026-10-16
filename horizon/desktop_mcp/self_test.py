@@ -1,41 +1,31 @@
 """Single-account self test: pack, schedule, prompts, answer checks, ledger, state, analysis.
 
 This module holds the logic only. It never prompts, never reads Claude Desktop,
-and never stores answer text, file contents or paths. The terminal wizard calls
-the functions below; the typical flow is::
+and never stores answer text, file contents or paths. The terminal wizard
+(``self_test_cli``) calls the functions below.
 
-    pack = validate_pack(json.load(f))
-    seed = new_seed_hex()
-    ledger = Ledger(default_state_dir(pack["study_id"]) / "ledger.jsonl")
-    state = StudyState.from_ledger(pack, ledger.load())
-    record = ledger.build("study_started", **study_started_fields(pack, seed))
-    state = state.with_record(record)        # raises SelfTestError if the rule breaks
-    ledger.append_record(record)            # fsync'd, hash-chained
+The study runs as eight phases. Each phase is one method over one half of the
+groups, so every task runs once under every method (48 chats for the 12-group
+template). Each group ("block") has a reading before and after it. Each phase
+starts with its own reading, taken before the setup check, so every setup chat
+falls between two readings.
 
 Every write follows the same pattern: build a record, check it with
-``state.with_record(record)``, then ``ledger.append_record(record)``. Readings are
-strings with exactly two decimals. Answers are represented by a sha256 digest.
-
-Public API (see the docstrings for details):
-
-- ``SelfTestError(code)``; ``code`` is always a stable, sanitised identifier.
-- ``validate_pack``, ``pack_digest``, ``new_seed_hex``, ``build_schedule``.
-- ``render_prompt``, ``method_setup``, ``check_answer``, ``answer_digest``.
-- ``Ledger``, ``default_state_dir``, ``study_started_fields``.
-- ``StudyState``: ``from_ledger``, ``with_record``, ``next_action`` and status properties.
-- ``reconcile`` (dry-run result for one day), ``analyze`` (the report dict).
+``state.with_record(record)``, then ``ledger.append_record(record)``.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import json
+import math
 import os
 import random
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -54,13 +44,10 @@ PACK_KIND = "self_test_pack"
 REPORT_KIND = "self_test_report"
 
 METHODS: tuple[str, ...] = ("A", "B", "C_normal", "C_tuned")
-ROUNDS = 2
-DAY_COUNT = ROUNDS * len(METHODS)
-
-# Williams-style balanced 4x4 Latin square over indexes into METHODS. Each row is a
-# permutation, each column is a permutation, and every ordered pair of methods is
-# adjacent exactly once across the four rows.
-ROWS: tuple[tuple[int, ...], ...] = ((0, 1, 3, 2), (1, 2, 0, 3), (2, 3, 1, 0), (3, 0, 2, 1))
+HALVES: tuple[str, ...] = ("H1", "H2")
+PHASE_COUNT = 2 * len(METHODS)  # each half runs every method once
+PILOT_METHODS: dict[str, str] = {"A": "exact_only", "B": "normal"}
+REVIEW_DELAY = timedelta(hours=4)
 
 # Fixed seed for the bootstrap so that a given ledger always yields the same report.
 REPORT_SEED = 20261015
@@ -72,12 +59,19 @@ SOURCE_FORMATS: tuple[str, ...] = ("txt", "md", "json", "csv", "pdf", "docx")
 ANSWER_KINDS: tuple[str, ...] = ("number", "text_contains", "date", "choice")
 VOID_REASONS: tuple[str, ...] = ("interrupted", "chat_not_fresh", "setup_wrong", "other")
 
+# Warnings keep the group in the results. Only voids and date checks exclude groups.
 FLAG_SPEND_BETWEEN = "spend_between_blocks"
-FLAG_BACKWARDS = "meter_went_backwards"
-FLAG_BLOCK_VOIDED = "block_voided"
-FLAG_OTHER_DATE = "finished_on_other_date"
 REASON_QUALITY = "quality_regression"
 REASON_PROVENANCE = "provenance_unverified"
+REASON_INCOMPLETE = "study_incomplete"
+
+# Why a group run is not in the results.
+OUT_INCLUDED = "included"
+OUT_VOIDED = "voided"
+OUT_IN_PROGRESS = "in_progress"
+OUT_SPANS_MIDNIGHT = "spans_midnight"
+OUT_DATE_PENDING = "date_pending"
+OUT_DATE_FAILED = "date_failed"
 
 SCOPE = {
     "label": "single_account_self_test",
@@ -152,12 +146,11 @@ _CHAIN_FIELDS = frozenset({"seq", "prev_sha256"})
 _COMMON_FIELDS = frozenset({"type", "utc", "local_date", "utc_offset"})
 _RECORD_FIELDS: dict[str, frozenset[str]] = {
     "study_started": frozenset({"pack_digest", "seed_hex", "schedule"}),
-    "day_started": frozenset({"day", "round", "method", "setup_confirmed"}),
+    "phase_started": frozenset({"phase", "half", "method", "setup_confirmed", "total"}),
     "block_before": frozenset({"group_id", "total"}),
-    "block_after": frozenset({"group_id", "total"}),
     "task_answer": frozenset({"task_id", "correct", "answer_sha256"}),
+    "block_after": frozenset({"group_id", "total"}),
     "block_voided": frozenset({"group_id", "reason"}),
-    "day_finished": frozenset({"status"}),
     "day_reconciled": frozenset({"desktop_total"}),
 }
 LEDGER_TYPES: tuple[str, ...] = tuple(_RECORD_FIELDS)
@@ -254,6 +247,11 @@ def _money(value: Decimal, rounding: str = ROUND_HALF_UP) -> str:
     return str(quantized)
 
 
+def parse_utc(text: str) -> datetime:
+    """Parse a ledger timestamp (``YYYY-MM-DDTHH:MM:SSZ``) into an aware datetime."""
+    return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
 def _seed(seed_hex: Any) -> int:
     return int(_text(seed_hex, _HEX64, "seed_invalid"), 16)
 
@@ -347,7 +345,7 @@ def _group(value: Any) -> dict[str, Any]:
 
 
 def validate_pack(value: Any) -> dict[str, Any]:
-    """Check a self-test pack and return a normalised copy (defaults filled in).
+    """Check a self-test pack and return a normalised copy.
 
     Raises ``SelfTestError`` with a code such as ``group_coverage_invalid``.
     """
@@ -376,7 +374,8 @@ def validate_pack(value: Any) -> dict[str, Any]:
     assigned = [task_id for group in groups for task_id in group["tasks"]]
     if len(assigned) != len(set(assigned)) or set(assigned) != set(task_ids):
         raise _fail("group_coverage_invalid")
-    if min_groups > len(groups) or paired_units > ROUNDS * len(groups):
+    # Each group is one unit in the analysis, so the unit minimum cannot exceed the groups.
+    if min_groups > len(groups) or paired_units > len(groups):
         raise _fail("minimums_unreachable")
 
     return {
@@ -414,34 +413,61 @@ def study_started_fields(pack: Any, seed_hex: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- schedule
 
 
-def build_schedule(pack: Any, seed_hex: str) -> list[dict[str, Any]]:
-    """Eight measurement days: two rounds of the four methods in a seeded balanced order.
+def _method_orders() -> list[tuple[str, ...]]:
+    """Every method order in which A and B are adjacent (12 of the 24 permutations)."""
+    return [
+        order
+        for order in itertools.permutations(METHODS)
+        if abs(order.index("A") - order.index("B")) == 1
+    ]
 
-    Each day is ``{"round", "method", "groups": [{"group_id", "tasks": [...]}]}``.
-    Round 1 uses a seeded Latin-square row and round 2 a different row. Day ``index``
-    (0 to 7) shuffles groups and tasks with ``random.Random(seed + index)``.
+
+def build_schedule(pack: Any, seed_hex: str) -> list[dict[str, Any]]:
+    """Eight phases: H1 runs the method order O, H2 runs reverse(O).
+
+    The groups are shuffled by seed and split into H1 (the first ``ceil(n/2)``) and
+    H2. Each phase is ``{"phase", "half", "method", "groups": [{"group_id", "tasks"}]}``
+    and covers every group of its half, in its own seeded order. Phases 1 to 4 are
+    H1 and phases 5 to 8 are H2.
     """
     checked = validate_pack(pack)
-    seed = _seed(seed_hex)
-    chooser = random.Random(f"self-test-rows:{seed_hex}")
-    first = chooser.randrange(len(ROWS))
-    second = chooser.choice([index for index in range(len(ROWS)) if index != first])
-    rows = {1: ROWS[first], 2: ROWS[second]}
+    _seed(seed_hex)
+    rng = random.Random(f"self-test-schedule:{seed_hex}")
+    groups = list(checked["groups"])
+    rng.shuffle(groups)
+    split = math.ceil(len(groups) / 2)
+    halves = {"H1": groups[:split], "H2": groups[split:]}
+    order = rng.choice(_method_orders())
+    methods = {"H1": order, "H2": tuple(reversed(order))}
 
-    days: list[dict[str, Any]] = []
-    for index in range(DAY_COUNT):
-        round_no = index // len(METHODS) + 1
-        method = METHODS[rows[round_no][index % len(METHODS)]]
-        rng = random.Random(seed + index)
-        order = list(checked["groups"])
-        rng.shuffle(order)
-        groups = []
-        for group in order:
-            tasks = list(group["tasks"])
-            rng.shuffle(tasks)
-            groups.append({"group_id": group["group_id"], "tasks": tasks})
-        days.append({"round": round_no, "method": method, "groups": groups})
-    return days
+    phases: list[dict[str, Any]] = []
+    for half in HALVES:
+        for method in methods[half]:
+            number = len(phases) + 1
+            phase_rng = random.Random(f"self-test-phase:{seed_hex}:{number}")
+            members = list(halves[half])
+            phase_rng.shuffle(members)
+            phase_groups = []
+            for group in members:
+                tasks = list(group["tasks"])
+                phase_rng.shuffle(tasks)
+                phase_groups.append({"group_id": group["group_id"], "tasks": tasks})
+            phases.append({"phase": number, "half": half, "method": method, "groups": phase_groups})
+    return phases
+
+
+def pilot_changed(schedule: list[dict[str, Any]], phase: int) -> bool:
+    """Whether the Pilot method must change before this phase, so Claude Desktop restarts.
+
+    Only A and B use the Pilot method. The first such phase always needs the setting.
+    """
+    method = schedule[phase - 1]["method"]
+    if method not in PILOT_METHODS:
+        return False
+    for slot in reversed(schedule[: phase - 1]):
+        if slot["method"] in PILOT_METHODS:
+            return slot["method"] != method
+    return True
 
 
 # ---------------------------------------------------------------------------- prompts
@@ -471,37 +497,37 @@ def render_prompt(pack: Any, task_id: str, method: str) -> str:
     return body + _ENDING
 
 
-def method_setup(method: str, pack: Any) -> list[str]:
-    """Plain-language setup steps to confirm before a method's day starts."""
+def method_setup(method: str, pack: Any, *, pilot_changed: bool = True) -> list[str]:
+    """Plain-language setup steps for a phase. Restarts are named only when needed."""
     checked = validate_pack(pack)
     if method not in METHODS:
         raise _fail("method_invalid")
     steps = [
-        f"Set the model to {checked['model_label']}. Keep this model setting for all eight days.",
+        f"Set the model to {checked['model_label']}. Keep this setting for every phase.",
         "Start a fresh chat for every task.",
-        "Read the running total in Claude Desktop settings before and after each group, and enter both readings.",
+        "Use no other Claude product while the test runs: no other Claude Desktop chats, Claude Code or Codex.",
     ]
-    if method == "A":
-        steps += [
-            "In the ContextShrink extension, set Pilot method to exact_only.",
-            "If you changed Pilot method, fully quit Claude Desktop from the tray and reopen it.",
-            "Turn the connector ON.",
-            'Check it: ask Claude "show ContextShrink stats"; evaluation_arm must say raw.',
-            "Do the check in its own chat before the first reading, so it is not measured.",
-        ]
-    elif method == "B":
-        steps += [
-            "In the ContextShrink extension, set Pilot method to normal.",
-            "If you changed Pilot method, fully quit Claude Desktop from the tray and reopen it.",
-            "Turn the connector ON.",
-            'Check it: ask Claude "show ContextShrink stats"; evaluation_arm must say optimized.',
-            "Do the check in its own chat before the first reading, so it is not measured.",
-        ]
+    if method in PILOT_METHODS:
+        value = PILOT_METHODS[method]
+        if pilot_changed:
+            steps.append(
+                f"In the ContextShrink extension, set Pilot method to {value}. "
+                "Then fully quit Claude Desktop from the tray and reopen it."
+            )
+        else:
+            steps.append(
+                f"Pilot method is still {value} from the last phase: no change and no restart."
+            )
+        steps.append("Turn the connector ON.")
+        expected = "raw" if method == "A" else "optimized"
+        steps.append(
+            f'Check it in a new chat: ask Claude "show ContextShrink stats"; evaluation_arm must say {expected}.'
+        )
     else:
-        steps += [
-            "Turn the ContextShrink connector OFF.",
-            "For each task, attach only that task's source files with the paperclip. The wizard shows their names.",
-        ]
+        steps.append("Turn the ContextShrink connector OFF.")
+        steps.append(
+            "For each task, attach only that task's source files with the paperclip. The wizard shows their names."
+        )
         if method == "C_tuned":
             steps.append(
                 "Send each prompt unchanged. It begins with the ContextShrink answer rules."
@@ -555,8 +581,8 @@ def check_answer(task: Any, reply_text: str) -> bool:
 
     The answer is the last line starting with ``ANSWER:`` (case-insensitive), or the
     whole reply when there is no such line. Numbers ignore ``$``, ``,``, ``%`` and
-    spaces. Text matching is case-folded and whitespace-normalised. Dates accept ISO
-    or English month-name forms only.
+    spaces. Text matching is case-folded and whitespace-normalised, and whole-word.
+    Dates accept ISO or English month-name forms only.
     """
     if not isinstance(reply_text, str):
         raise _fail("reply_invalid")
@@ -574,7 +600,6 @@ def check_answer(task: Any, reply_text: str) -> bool:
     if kind == "text_contains":
         found = _normal_words(candidate)
         expected = _normal_words(spec["expected"])
-        # Whole-word match: "90 days" must not be found inside "190 days".
         pattern = r"(?<!\w)" + re.escape(expected) + r"(?!\w)"
         return bool(found) and re.search(pattern, found) is not None
     if kind == "date":
@@ -629,10 +654,11 @@ def _check_type_fields(record_type: str, record: dict[str, Any]) -> None:
             _text(record["seed_hex"], _HEX64, "record_invalid")
             if not isinstance(record["schedule"], list):
                 raise _fail("record_invalid")
-        elif record_type == "day_started":
-            _int(record["day"], 1, DAY_COUNT, "record_invalid")
-            _int(record["round"], 1, ROUNDS, "record_invalid")
-            if record["method"] not in METHODS or record["setup_confirmed"] is not True:
+        elif record_type == "phase_started":
+            _int(record["phase"], 1, PHASE_COUNT, "record_invalid")
+            if record["half"] not in HALVES or record["method"] not in METHODS:
+                raise _fail("record_invalid")
+            if record["setup_confirmed"] is not True or not isinstance(record["total"], str):
                 raise _fail("record_invalid")
         elif record_type in ("block_before", "block_after"):
             _text(record["group_id"], _GROUP_ID, "record_invalid")
@@ -646,9 +672,6 @@ def _check_type_fields(record_type: str, record: dict[str, Any]) -> None:
         elif record_type == "block_voided":
             _text(record["group_id"], _GROUP_ID, "record_invalid")
             if record["reason"] not in VOID_REASONS:
-                raise _fail("record_invalid")
-        elif record_type == "day_finished":
-            if record["status"] not in ("complete", "abandoned"):
                 raise _fail("record_invalid")
         elif record_type == "day_reconciled":
             if not isinstance(record["desktop_total"], str):
@@ -689,7 +712,6 @@ class Ledger:
         """A record with utc, local_date and utc_offset filled from the clock.
 
         Explicit ``local_date`` or ``utc_offset`` fields override the clock values.
-        ``day_reconciled`` uses ``local_date`` for the measured day.
         """
         if record_type not in _RECORD_FIELDS:
             raise _fail("record_type_unknown")
@@ -777,28 +799,28 @@ def default_state_dir(study_id: str, *, env: Any = None) -> Path:
     return root / "ContextShrink" / "self-test" / study
 
 
-# --------------------------------------------------------------------------- state
+# ----------------------------------------------------------------------------- state
 
 
 class StudyState:
     """The study replayed from its ledger records.
 
     Changes go through ``with_record``, which returns a new state or raises
-    ``SelfTestError``. Use ``next_action()`` to decide what the wizard asks next.
+    ``SelfTestError``. ``next_action()`` says what the wizard asks next.
 
     Rules enforced:
 
-    - days run in schedule order, one per local date, each finished on its start date;
-    - blocks run in schedule order; each block's tasks are answered in order before
-      the block closes; readings are two-decimal and non-negative; ``after >= before``
-      and a delta of at most $20.00;
-    - a block's ``before`` must equal the previous reading. A higher value flags
-      ``spend_between_blocks`` and a lower one flags ``meter_went_backwards``. After a
-      voided block, the redo's ``before`` only has to be at least the voided block's
-      last reading.
-
-    Any flag makes the day unclean: it is excluded from claims and must be redone on
-    another local date.
+    - phases run in schedule order; a phase starts only after the previous one is
+      complete, with a reading taken before its setup check;
+    - groups run in schedule order inside a phase; a group's tasks are answered in
+      order before its "after" reading; readings are two-decimal, never fall below the
+      previous anchor, and a group adds at most $20.00;
+    - spend between two groups of the same phase is a warning, not an exclusion. A
+      phase boundary is expected to carry spend (the setup check);
+    - a voided group is excluded and redone at once; nothing else is excluded;
+    - each local date is checked against Claude Desktop's daily line once it is at
+      least 4 hours past its last reading. A date that fails excludes its groups, and
+      a date stays final once checked (no readings may be added to it afterwards).
     """
 
     def __init__(self, pack: dict[str, Any]) -> None:
@@ -807,8 +829,10 @@ class StudyState:
         self.started = False
         self.seed_hex: str | None = None
         self.schedule: list[dict[str, Any]] = []
-        self.attempts: list[dict[str, Any]] = []
-        self.desktop_totals: dict[str, Decimal] = {}
+        self.phases: list[dict[str, Any]] = []
+        self.readings: list[dict[str, Any]] = []
+        self.reconciled: dict[str, dict[str, Any]] = {}
+        self.warnings: list[dict[str, Any]] = []
 
     @classmethod
     def from_ledger(cls, pack: Any, records: list[dict[str, Any]]) -> StudyState:
@@ -831,145 +855,155 @@ class StudyState:
     # ---- status
 
     @property
-    def current_day(self) -> int | None:
-        """The day to run (1 to 8), or None when every day is complete."""
+    def current_phase(self) -> int | None:
         if not self.started:
             return None
-        open_attempt = self._open_attempt()
-        if open_attempt is not None:
-            return open_attempt["day"]
-        for day in range(1, DAY_COUNT + 1):
-            if self.clean_attempt(day) is None:
-                return day
+        if self.phases and not self._phase_complete(self.phases[-1]):
+            return self.phases[-1]["phase"]
+        if len(self.phases) < PHASE_COUNT:
+            return len(self.phases) + 1
         return None
 
     @property
+    def completed_phases(self) -> list[int]:
+        return [phase["phase"] for phase in self.phases if self._phase_complete(phase)]
+
+    @property
+    def study_complete(self) -> bool:
+        return len(self.completed_phases) == PHASE_COUNT
+
+    @property
+    def group_runs_total(self) -> int:
+        return sum(len(slot["groups"]) for slot in self.schedule)
+
+    @property
+    def chats_total(self) -> int:
+        return sum(len(group["tasks"]) for slot in self.schedule for group in slot["groups"])
+
+    def recorded_group_runs(self) -> int:
+        return sum(
+            1
+            for phase in self.phases
+            for block in phase["blocks"]
+            if not block["voided"] and block["after"] is not None
+        )
+
+    @property
     def current_block(self) -> str | None:
-        """Group id of the block in progress, if any."""
-        attempt = self._open_attempt()
-        block = self._open_block(attempt) if attempt is not None else None
+        block = self._open_block(self.phases[-1]) if self.phases else None
         return block["group_id"] if block is not None else None
 
     @property
     def next_task(self) -> str | None:
-        """The next task to ask inside the block in progress."""
-        attempt = self._open_attempt()
-        block = self._open_block(attempt) if attempt is not None else None
+        if not self.phases:
+            return None
+        phase = self.phases[-1]
+        block = self._open_block(phase)
         if block is None:
             return None
-        pending = self._pending_tasks(attempt, block)
+        pending = self._pending_tasks(phase, block)
         return pending[0] if pending else None
-
-    @property
-    def completed_days(self) -> list[int]:
-        """Days with a clean, finished attempt (no flags)."""
-        return [day for day in range(1, DAY_COUNT + 1) if self.clean_attempt(day) is not None]
-
-    @property
-    def study_complete(self) -> bool:
-        return len(self.completed_days) == DAY_COUNT
 
     @property
     def voided_blocks(self) -> list[dict[str, Any]]:
         return [
-            {"day": attempt["day"], "group_id": block["group_id"], "reason": block["void_reason"]}
-            for attempt in self.attempts
-            for block in attempt["blocks"]
+            {"phase": phase["phase"], "group_id": block["group_id"], "reason": block["void_reason"]}
+            for phase in self.phases
+            for block in phase["blocks"]
             if block["voided"]
         ]
 
-    @property
-    def flags(self) -> list[dict[str, Any]]:
-        return [
-            {"day": attempt["day"], "local_date": attempt["local_date"], "reason": reason}
-            for attempt in self.attempts
-            for reason in attempt["flags"]
-        ]
+    def reading_floor(self) -> Decimal | None:
+        """The lowest total the next reading may show (None before the first phase)."""
+        if not self.phases:
+            return None
+        return self._anchor(self.phases[-1])
 
-    @property
+    def has_open_block(self) -> bool:
+        return any(self._open_block(phase) is not None for phase in self.phases)
+
+    def dates_with_block_readings(self) -> list[str]:
+        return sorted({r["local_date"] for r in self.readings if r["kind"] == "block"})
+
     def pending_reconciliations(self) -> list[str]:
-        """Local dates of clean days whose desktop total is missing or does not match."""
-        return [
-            attempt["local_date"]
-            for attempt in self.attempts
-            if attempt["status"] == "complete" and self.reconciliation(attempt) is not True
-        ]
+        return [d for d in self.dates_with_block_readings() if d not in self.reconciled]
 
-    def reconciliation_tolerance(self) -> Decimal:
-        return RECONCILE_CENT * (len(self.pack["groups"]) + 1)
+    def date_status(self, local_date: str) -> str:
+        entry = self.reconciled.get(local_date)
+        if entry is None:
+            return "pending"
+        return "passed" if entry["passed"] else "failed"
 
-    def clean_attempt(self, day: int) -> dict[str, Any] | None:
-        for attempt in self.attempts:
-            if attempt["day"] == day and attempt["status"] == "complete":
-                return attempt
-        return None
+    def date_summary(self, local_date: str) -> dict[str, Any] | None:
+        """Meter change across a local date (last reading minus first) and its tolerance.
 
-    def attempt_for_date(self, local_date: str) -> dict[str, Any] | None:
-        for attempt in self.attempts:
-            if attempt["local_date"] == local_date:
-                return attempt
-        return None
-
-    def span(self, attempt: dict[str, Any]) -> Decimal | None:
-        """Meter change across the whole day: last reading minus first reading.
-
-        Includes voided blocks and any flagged gaps. On a clean day it equals the sum
-        of the group deltas.
+        Readings are phase-start and group readings dated ``local_date``. The tolerance is
+        $0.01 times (number of groups with a reading that date + 1). None when the date
+        has no group reading.
         """
-        blocks = attempt["blocks"]
-        if not blocks or blocks[-1]["after"] is None:
+        readings = [r for r in self.readings if r["local_date"] == local_date]
+        if not any(r["kind"] == "block" for r in readings):
             return None
-        return blocks[-1]["after"] - blocks[0]["before"]
+        blocks = self._blocks_on(local_date)
+        return {
+            "span": readings[-1]["total"] - readings[0]["total"],
+            "tolerance": RECONCILE_CENT * (blocks + 1),
+            "blocks": blocks,
+            "ready_at": readings[-1]["utc"] + REVIEW_DELAY,
+        }
 
-    def reconciliation(self, attempt: dict[str, Any]) -> bool | None:
-        """None when no desktop total is recorded, else whether it matches the span."""
-        desktop = self.desktop_totals.get(attempt["local_date"])
-        if desktop is None:
-            return None
-        measured = self.span(attempt)
-        if measured is None:
-            return False
-        return abs(desktop - measured) <= self.reconciliation_tolerance()
+    def reconcile_ready_at(self, local_date: str) -> datetime | None:
+        """When a date may be checked: 4 hours after its last reading."""
+        summary = self.date_summary(local_date)
+        return None if summary is None else summary["ready_at"]
 
-    def valid_block(self, attempt: dict[str, Any], group_id: str) -> dict[str, Any] | None:
-        """The finished, non-voided block for a group on a day, if there is one."""
-        for block in attempt["blocks"]:
-            if block["group_id"] == group_id and not block["voided"] and block["after"] is not None:
-                return block
-        return None
+    def block_outcome(self, phase: dict[str, Any], block: dict[str, Any]) -> str:
+        if block["voided"]:
+            return OUT_VOIDED
+        if block["after"] is None:
+            return OUT_IN_PROGRESS
+        if block["before_date"] != block["after_date"]:
+            return OUT_SPANS_MIDNIGHT
+        status = self.date_status(block["before_date"])
+        if status == "pending":
+            return OUT_DATE_PENDING
+        if status == "failed":
+            return OUT_DATE_FAILED
+        return OUT_INCLUDED
 
     def next_action(self) -> dict[str, Any]:
         """What the wizard should ask for next."""
         if not self.started:
             return {"action": "start_study"}
-        attempt = self._open_attempt()
-        if attempt is None:
-            day = self.current_day
-            if day is None:
-                return {"action": "done"}
-            slot = self.schedule[day - 1]
+        if self.phases:
+            phase = self.phases[-1]
+            block = self._open_block(phase)
+            if block is not None:
+                pending = self._pending_tasks(phase, block)
+                if pending:
+                    return {
+                        "action": "ask_task",
+                        "phase": phase["phase"],
+                        "group_id": block["group_id"],
+                        "task_id": pending[0],
+                    }
+                return {
+                    "action": "read_after",
+                    "phase": phase["phase"],
+                    "group_id": block["group_id"],
+                }
+            group_id = self._next_group(phase)
+            if group_id is not None:
+                return {"action": "read_before", "phase": phase["phase"], "group_id": group_id}
+        if len(self.phases) < PHASE_COUNT:
+            slot = self.schedule[len(self.phases)]
             return {
-                "action": "start_day",
-                "day": day,
-                "round": slot["round"],
+                "action": "start_phase",
+                "phase": slot["phase"],
+                "half": slot["half"],
                 "method": slot["method"],
             }
-        day = attempt["day"]
-        block = self._open_block(attempt)
-        if block is not None:
-            pending = self._pending_tasks(attempt, block)
-            if pending:
-                return {
-                    "action": "ask_task",
-                    "day": day,
-                    "group_id": block["group_id"],
-                    "task_id": pending[0],
-                }
-            return {"action": "read_after", "day": day, "group_id": block["group_id"]}
-        group_id = self._next_group(attempt)
-        if group_id is None:
-            return {"action": "finish_day", "day": day}
-        return {"action": "read_before", "day": day, "group_id": group_id}
+        return {"action": "done"}
 
     # ---- rule application
 
@@ -980,8 +1014,8 @@ class StudyState:
             return
         if not self.started:
             raise _fail("study_not_started")
-        if kind == "day_started":
-            self._day_started(record)
+        if kind == "phase_started":
+            self._phase_started(record)
         elif kind == "block_before":
             self._block_before(record)
         elif kind == "task_answer":
@@ -990,10 +1024,8 @@ class StudyState:
             self._block_after(record)
         elif kind == "block_voided":
             self._block_voided(record)
-        elif kind == "day_finished":
-            self._day_finished(record)
         else:
-            self._day_reconciled(record)
+            self._reconciled_date(record)
 
     def _start(self, record: dict[str, Any]) -> None:
         if self.started:
@@ -1007,54 +1039,58 @@ class StudyState:
         self.seed_hex = record["seed_hex"]
         self.schedule = schedule
 
-    def _day_started(self, record: dict[str, Any]) -> None:
-        if self._open_attempt() is not None:
-            raise _fail("day_already_open")
-        current = self.current_day
-        if current is None:
+    def _phase_started(self, record: dict[str, Any]) -> None:
+        if self.has_open_block():
+            raise _fail("block_open")
+        if len(self.phases) >= PHASE_COUNT:
             raise _fail("study_complete")
-        if record["day"] != current:
-            raise _fail("day_out_of_order")
-        slot = self.schedule[current - 1]
-        if (record["round"], record["method"]) != (slot["round"], slot["method"]):
-            raise _fail("day_mismatch")
-        if self.attempt_for_date(record["local_date"]) is not None:
-            raise _fail("one_day_per_local_date")
-        self.attempts.append(
+        if self.phases and not self._phase_complete(self.phases[-1]):
+            raise _fail("phase_incomplete")
+        number = len(self.phases) + 1
+        if record["phase"] != number:
+            raise _fail("phase_out_of_order")
+        slot = self.schedule[number - 1]
+        if (record["half"], record["method"]) != (slot["half"], slot["method"]):
+            raise _fail("phase_mismatch")
+        total = self._new_reading(record, kind="phase", floor=self.reading_floor())
+        self.phases.append(
             {
-                "day": current,
-                "round": slot["round"],
+                "phase": number,
+                "half": slot["half"],
                 "method": slot["method"],
-                "local_date": record["local_date"],
-                "utc_offset": record["utc_offset"],
-                "status": "open",
-                "flags": [],
+                "started_utc": record["utc"],
+                "start_total": total,
                 "blocks": [],
             }
         )
 
     def _block_before(self, record: dict[str, Any]) -> None:
-        attempt = self._require_open()
-        if self._open_block(attempt) is not None:
+        phase = self._open_phase()
+        if self._open_block(phase) is not None:
             raise _fail("block_open")
-        if record["group_id"] != self._next_group(attempt):
+        group_id = self._next_group(phase)
+        if record["group_id"] != group_id:
             raise _fail("block_not_next")
-        total = _reading(record["total"])
-        if attempt["blocks"]:
-            last = attempt["blocks"][-1]
-            anchor = last["after"] if last["after"] is not None else last["before"]
-            if last["voided"]:
-                if total < anchor:
-                    _add_flag(attempt, FLAG_BACKWARDS)
-            elif total > anchor:
-                _add_flag(attempt, FLAG_SPEND_BETWEEN)
-            elif total < anchor:
-                _add_flag(attempt, FLAG_BACKWARDS)
-        attempt["blocks"].append(
+        anchor = self._anchor(phase)
+        previous = phase["blocks"][-1] if phase["blocks"] else None
+        total = self._new_reading(record, kind="block", floor=anchor)
+        if previous is not None and not previous["voided"] and total > anchor:
+            self.warnings.append(
+                {
+                    "phase": phase["phase"],
+                    "group_id": record["group_id"],
+                    "local_date": record["local_date"],
+                    "reason": FLAG_SPEND_BETWEEN,
+                }
+            )
+        phase["blocks"].append(
             {
                 "group_id": record["group_id"],
                 "before": total,
+                "before_date": record["local_date"],
                 "after": None,
+                "after_date": None,
+                "after_utc": None,
                 "voided": False,
                 "void_reason": None,
                 "answers": [],
@@ -1062,11 +1098,11 @@ class StudyState:
         )
 
     def _task_answer(self, record: dict[str, Any]) -> None:
-        attempt = self._require_open()
-        block = self._open_block(attempt)
+        phase = self._open_phase()
+        block = self._open_block(phase)
         if block is None:
             raise _fail("block_not_open")
-        pending = self._pending_tasks(attempt, block)
+        pending = self._pending_tasks(phase, block)
         if not pending or record["task_id"] != pending[0]:
             raise _fail("task_out_of_order")
         block["answers"].append(
@@ -1078,123 +1114,164 @@ class StudyState:
         )
 
     def _block_after(self, record: dict[str, Any]) -> None:
-        attempt = self._require_open()
-        block = self._open_block(attempt)
+        phase = self._open_phase()
+        block = self._open_block(phase)
         if block is None or record["group_id"] != block["group_id"]:
             raise _fail("block_not_open")
-        if len(block["answers"]) != len(self._group_tasks(attempt, block["group_id"])):
+        if len(block["answers"]) != len(self._group_tasks(phase, block["group_id"])):
             raise _fail("block_incomplete")
-        total = _reading(record["total"])
-        if total < block["before"]:
-            raise _fail("reading_decreased")
-        if total - block["before"] > MAX_BLOCK_DELTA:
-            raise _fail("reading_delta_too_large")
+        total = self._new_reading(
+            record,
+            kind="block",
+            floor=block["before"],
+            ceiling=block["before"] + MAX_BLOCK_DELTA,
+        )
         block["after"] = total
+        block["after_date"] = record["local_date"]
+        block["after_utc"] = record["utc"]
 
     def _block_voided(self, record: dict[str, Any]) -> None:
-        attempt = self._require_open()
-        if not attempt["blocks"]:
+        if not self.phases or not self.phases[-1]["blocks"]:
             raise _fail("void_target_invalid")
-        block = attempt["blocks"][-1]
+        block = self.phases[-1]["blocks"][-1]
         if block["voided"] or block["group_id"] != record["group_id"]:
             raise _fail("void_target_invalid")
+        for local_date in (block["before_date"], block["after_date"]):
+            if local_date is not None and local_date in self.reconciled:
+                raise _fail("date_already_reconciled")
         block["voided"] = True
         block["void_reason"] = record["reason"]
-        _add_flag(attempt, FLAG_BLOCK_VOIDED)
 
-    def _day_finished(self, record: dict[str, Any]) -> None:
-        attempt = self._require_open()
-        if record["status"] == "abandoned":
-            attempt["status"] = "abandoned"
-            return
-        if self._open_block(attempt) is not None:
+    def _reconciled_date(self, record: dict[str, Any]) -> None:
+        local_date = record["local_date"]
+        if local_date in self.reconciled:
+            raise _fail("date_already_reconciled")
+        if self.has_open_block():
             raise _fail("block_open")
-        if self._next_group(attempt) is not None:
-            raise _fail("day_incomplete")
-        if record["local_date"] != attempt["local_date"]:
-            _add_flag(attempt, FLAG_OTHER_DATE)
-        attempt["status"] = "flagged" if attempt["flags"] else "complete"
-
-    def _day_reconciled(self, record: dict[str, Any]) -> None:
-        attempt = self.attempt_for_date(record["local_date"])
-        if attempt is None:
+        summary = self.date_summary(local_date)
+        if summary is None:
             raise _fail("day_not_found")
-        if attempt["status"] not in ("complete", "flagged"):
-            raise _fail("day_not_reconcilable")
-        self.desktop_totals[record["local_date"]] = _reading(record["desktop_total"])
+        if parse_utc(record["utc"]) < summary["ready_at"]:
+            raise _fail("reconcile_too_early")
+        desktop = _reading(record["desktop_total"])
+        passed = abs(desktop - summary["span"]) <= summary["tolerance"]
+        self.reconciled[local_date] = {
+            "desktop": desktop,
+            "span": summary["span"],
+            "tolerance": summary["tolerance"],
+            "passed": passed,
+        }
+
+    def _new_reading(
+        self,
+        record: dict[str, Any],
+        *,
+        kind: str,
+        floor: Decimal | None = None,
+        ceiling: Decimal | None = None,
+    ) -> Decimal:
+        total = _reading(record["total"])
+        if record["local_date"] in self.reconciled:
+            raise _fail("date_already_reconciled")
+        if floor is not None and total < floor:
+            raise _fail("reading_decreased")
+        if ceiling is not None and total > ceiling:
+            raise _fail("reading_delta_too_large")
+        self.readings.append(
+            {
+                "kind": kind,
+                "local_date": record["local_date"],
+                "utc": parse_utc(record["utc"]),
+                "total": total,
+            }
+        )
+        return total
 
     # ---- helpers
 
-    def _open_attempt(self) -> dict[str, Any] | None:
-        for attempt in self.attempts:
-            if attempt["status"] == "open":
-                return attempt
-        return None
-
-    def _require_open(self) -> dict[str, Any]:
-        attempt = self._open_attempt()
-        if attempt is None:
-            raise _fail("no_open_day")
-        return attempt
+    def _open_phase(self) -> dict[str, Any]:
+        if not self.phases or self._phase_complete(self.phases[-1]):
+            raise _fail("no_open_phase")
+        return self.phases[-1]
 
     @staticmethod
-    def _open_block(attempt: dict[str, Any]) -> dict[str, Any] | None:
-        if attempt["blocks"]:
-            last = attempt["blocks"][-1]
+    def _open_block(phase: dict[str, Any] | None) -> dict[str, Any] | None:
+        if phase is not None and phase["blocks"]:
+            last = phase["blocks"][-1]
             if last["after"] is None and not last["voided"]:
                 return last
         return None
 
-    def _next_group(self, attempt: dict[str, Any]) -> str | None:
-        for group in self.schedule[attempt["day"] - 1]["groups"]:
-            if self.valid_block(attempt, group["group_id"]) is None:
+    @staticmethod
+    def _anchor(phase: dict[str, Any]) -> Decimal:
+        """The last total seen in this phase, or its starting reading."""
+        if not phase["blocks"]:
+            return phase["start_total"]
+        last = phase["blocks"][-1]
+        return last["after"] if last["after"] is not None else last["before"]
+
+    def _group_done(self, phase: dict[str, Any], group_id: str) -> bool:
+        return any(
+            block["group_id"] == group_id and not block["voided"] and block["after"] is not None
+            for block in phase["blocks"]
+        )
+
+    def _phase_complete(self, phase: dict[str, Any]) -> bool:
+        slot = self.schedule[phase["phase"] - 1]
+        return all(self._group_done(phase, group["group_id"]) for group in slot["groups"])
+
+    def _next_group(self, phase: dict[str, Any]) -> str | None:
+        for group in self.schedule[phase["phase"] - 1]["groups"]:
+            if not self._group_done(phase, group["group_id"]):
                 return group["group_id"]
         return None
 
-    def _group_tasks(self, attempt: dict[str, Any], group_id: str) -> list[str]:
-        for group in self.schedule[attempt["day"] - 1]["groups"]:
+    def _group_tasks(self, phase: dict[str, Any], group_id: str) -> list[str]:
+        for group in self.schedule[phase["phase"] - 1]["groups"]:
             if group["group_id"] == group_id:
                 return list(group["tasks"])
         raise _fail("group_unknown")
 
-    def _pending_tasks(self, attempt: dict[str, Any], block: dict[str, Any]) -> list[str]:
+    def _pending_tasks(self, phase: dict[str, Any], block: dict[str, Any]) -> list[str]:
         answered = {answer["task_id"] for answer in block["answers"]}
         return [
-            task for task in self._group_tasks(attempt, block["group_id"]) if task not in answered
+            task for task in self._group_tasks(phase, block["group_id"]) if task not in answered
         ]
 
-
-def _add_flag(attempt: dict[str, Any], reason: str) -> None:
-    if reason not in attempt["flags"]:
-        attempt["flags"].append(reason)
+    def _blocks_on(self, local_date: str) -> int:
+        return sum(
+            1
+            for phase in self.phases
+            for block in phase["blocks"]
+            if local_date in (block["before_date"], block["after_date"])
+        )
 
 
 # ------------------------------------------------------------------- reconciliation
 
 
 def reconcile(state: StudyState, local_date: str, desktop_total: str) -> dict[str, Any]:
-    """Compare one finished day's meter change with Claude Desktop's line for that date.
+    """Compare one date's meter change with Claude Desktop's line for that date.
 
     Returns a result without changing the state. Record a ``day_reconciled`` entry to
-    keep it. The tolerance is $0.01 times (number of groups + 1).
+    keep it; the ledger then enforces the 4-hour wait.
     """
     if _valid_date_text(local_date) is None:
         raise _fail("record_invalid")
     desktop = _reading(desktop_total)
-    attempt = state.attempt_for_date(local_date)
-    if attempt is None:
+    if local_date in state.reconciled:
+        raise _fail("date_already_reconciled")
+    if state.has_open_block():
+        raise _fail("block_open")
+    summary = state.date_summary(local_date)
+    if summary is None:
         raise _fail("day_not_found")
-    if attempt["status"] != "complete":
-        raise _fail("day_not_reconcilable")
-    measured = state.span(attempt)
-    if measured is None:  # pragma: no cover - a complete day always has a closing reading
-        raise _fail("day_not_reconcilable")
-    difference = desktop - measured
-    tolerance = state.reconciliation_tolerance()
+    difference = desktop - summary["span"]
+    tolerance = summary["tolerance"]
     return {
         "local_date": local_date,
         "desktop_total": _money(desktop),
-        "measured_total": _money(measured),
+        "measured_total": _money(summary["span"]),
         "difference": _money(difference),
         "tolerance": _money(tolerance),
         "passed": abs(difference) <= tolerance,
@@ -1219,12 +1296,14 @@ def _interval_out(interval: Any) -> dict[str, Any]:
 
 
 def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
-    """Build the study report. All money is a 2-decimal string and no floats are used.
+    """Build the study report. Money is a 2-decimal string and no floats are used.
 
-    Only clean, reconciled days are included. A comparison needs every one of the eight
-    days to be included (provenance) and must clear the pack's minimums. The primary
-    comparison (B vs C_normal) is also withheld when B has more than
-    ``quality_tolerance`` fewer correct answers than C_normal.
+    Units are groups: for each method pair, one unit per group where both methods have
+    an included group run (cluster = group). Only included runs count: not voided, not
+    spanning midnight, and on a date that passed its check. Provenance needs the whole
+    study complete and every date with a non-voided group checked (pass or fail; a
+    failed date's groups are simply left out). The primary comparison (B vs C_normal)
+    is also withheld when B has more than ``quality_tolerance`` fewer correct answers.
     """
     checked = validate_pack(pack)
     if state.pack_sha256 != pack_digest(checked):
@@ -1232,79 +1311,78 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
     if not state.started:
         raise _fail("study_not_started")
 
-    included: dict[int, dict[str, Any]] = {}
-    for day in range(1, DAY_COUNT + 1):
-        attempt = state.clean_attempt(day)
-        if attempt is not None and state.reconciliation(attempt) is True:
-            included[day] = attempt
-    day_of = {
-        (slot["round"], slot["method"]): index + 1 for index, slot in enumerate(state.schedule)
-    }
     group_ids = [group["group_id"] for group in checked["groups"]]
     tasks = [task["task_id"] for task in checked["tasks"]]
+    included: dict[tuple[str, str], dict[str, Any]] = {}
+    left_out: list[dict[str, Any]] = []
+    needed_dates: set[str] = set()
+    for phase in state.phases:
+        for block in phase["blocks"]:
+            outcome = state.block_outcome(phase, block)
+            if outcome == OUT_INCLUDED:
+                included[(phase["method"], block["group_id"])] = block
+            else:
+                left_out.append(
+                    {"phase": phase["phase"], "group_id": block["group_id"], "reason": outcome}
+                )
+            if not block["voided"]:
+                needed_dates.add(block["before_date"])
+                if block["after_date"] is not None:
+                    needed_dates.add(block["after_date"])
 
-    def cost(day: int, group_id: str) -> Decimal:
-        block = state.valid_block(included[day], group_id)
-        assert block is not None and block["after"] is not None
+    def cost(block: dict[str, Any]) -> Decimal:
         return block["after"] - block["before"]
 
     spend: dict[str, Decimal] = {}
     correct: dict[str, int] = {}
     attempted: dict[str, int] = {}
-    days_by_method: dict[str, list[int]] = {}
-    per_task: dict[str, dict[str, list[int]]] = {task: {} for task in tasks}
+    group_counts: dict[str, int] = {}
+    per_task: dict[str, dict[str, list[int]]] = {
+        task: {method: [0, 0] for method in METHODS} for task in tasks
+    }
     for method in METHODS:
-        days = sorted(day for day in included if state.schedule[day - 1]["method"] == method)
-        days_by_method[method] = days
-        spend[method] = sum((state.span(included[day]) or Decimal(0) for day in days), Decimal(0))
-        correct[method] = 0
-        attempted[method] = 0
-        for task in tasks:
-            per_task[task][method] = [0, 0]
-        for day in days:
-            for group_id in group_ids:
-                block = state.valid_block(included[day], group_id)
-                assert block is not None
-                for answer in block["answers"]:
-                    attempted[method] += 1
-                    per_task[answer["task_id"]][method][1] += 1
-                    if answer["correct"]:
-                        correct[method] += 1
-                        per_task[answer["task_id"]][method][0] += 1
+        blocks = [included[(method, g)] for g in group_ids if (method, g) in included]
+        answers = [answer for block in blocks for answer in block["answers"]]
+        group_counts[method] = len(blocks)
+        spend[method] = sum((cost(block) for block in blocks), Decimal(0))
+        correct[method] = sum(1 for answer in answers if answer["correct"])
+        attempted[method] = len(answers)
+        for answer in answers:
+            counts = per_task[answer["task_id"]][method]
+            counts[1] += 1
+            if answer["correct"]:
+                counts[0] += 1
 
     methods_out = {}
     for method in METHODS:
         per_correct = None
         if correct[method]:
-            ratio = spend[method] / Decimal(correct[method])
-            per_correct = _money(ratio)
+            per_correct = _money(spend[method] / Decimal(correct[method]))
         methods_out[method] = {
-            "days": len(days_by_method[method]),
+            "groups": group_counts[method],
             "spend": _money(spend[method]),
             "tasks_attempted": attempted[method],
             "correct": correct[method],
             "cost_per_correct": per_correct,
         }
 
-    provenance = len(included) == DAY_COUNT
+    study_complete = state.study_complete
+    provenance = (
+        study_complete
+        and bool(needed_dates)
+        and all(state.date_status(d) != "pending" for d in needed_dates)
+    )
     tolerance = checked["quality_tolerance"]
     regression = correct["B"] < correct["C_normal"] - tolerance
 
     comparisons = []
     for key, candidate, reference, primary in COMPARISONS:
         units: list[PairedUnit] = []
-        for round_no in range(1, 3):
-            cand_day = day_of[(round_no, candidate)]
-            ref_day = day_of[(round_no, reference)]
-            if cand_day not in included or ref_day not in included:
-                continue
-            for group_id in group_ids:
-                units.append(
-                    PairedUnit(
-                        cluster_id=group_id,
-                        difference=cost(cand_day, group_id) - cost(ref_day, group_id),
-                    )
-                )
+        for group_id in group_ids:
+            cand = included.get((candidate, group_id))
+            ref = included.get((reference, group_id))
+            if cand is not None and ref is not None:
+                units.append(PairedUnit(cluster_id=group_id, difference=cost(cand) - cost(ref)))
         interval = paired_difference_interval(
             units, confidence=Decimal("0.95"), resamples=10000, seed=REPORT_SEED
         )
@@ -1323,6 +1401,8 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
                 decision["claim"] = "none"
         if not provenance and REASON_PROVENANCE not in decision["reasons"]:
             decision["reasons"].append(REASON_PROVENANCE)
+        if not study_complete and REASON_INCOMPLETE not in decision["reasons"]:
+            decision["reasons"].append(REASON_INCOMPLETE)
         comparisons.append(
             {
                 "key": key,
@@ -1338,39 +1418,55 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
             }
         )
 
-    days_out = []
-    for day in range(1, DAY_COUNT + 1):
-        slot = state.schedule[day - 1]
-        attempts = [attempt for attempt in state.attempts if attempt["day"] == day]
-        reasons: list[str] = []
-        for attempt in attempts:
-            for reason in attempt["flags"]:
-                if reason not in reasons:
-                    reasons.append(reason)
-        latest = attempts[-1] if attempts else None
-        if latest is None:
-            status = "not_started"
+    phases_out = []
+    for slot in state.schedule:
+        phase = next((p for p in state.phases if p["phase"] == slot["phase"]), None)
+        if phase is None:
+            status, started, ended = "not_started", None, None
+        elif state._phase_complete(phase):
+            status = "complete"
+            started, ended = phase["started_utc"], phase["blocks"][-1]["after_utc"]
         else:
-            status = latest["status"]
-            if latest["status"] == "abandoned":
-                reasons.append("abandoned")
-            if latest["status"] == "complete":
-                reconciled = state.reconciliation(latest)
-                if reconciled is not True:
-                    reasons.append(
-                        "reconciliation_failed" if reconciled is False else "reconciliation_pending"
-                    )
-        days_out.append(
+            status, started, ended = "in_progress", phase["started_utc"], None
+        phases_out.append(
             {
-                "day": day,
-                "round": slot["round"],
+                "phase": slot["phase"],
+                "half": slot["half"],
                 "method": slot["method"],
                 "status": status,
-                "attempts": len(attempts),
-                "included": day in included,
-                "reasons": reasons,
+                "started_utc": started,
+                "ended_utc": ended,
             }
         )
+
+    dates_out = []
+    for local_date in state.dates_with_block_readings():
+        runs = [
+            block
+            for phase in state.phases
+            for block in phase["blocks"]
+            if local_date in (block["before_date"], block["after_date"])
+        ]
+        dates_out.append(
+            {
+                "local_date": local_date,
+                "status": state.date_status(local_date),
+                "group_runs": len(runs),
+                "included_group_runs": sum(
+                    1 for block in runs if state.block_outcome(None, block) == OUT_INCLUDED
+                ),
+            }
+        )
+
+    warnings_out = [
+        {
+            "phase": w["phase"],
+            "group_id": w["group_id"],
+            "local_date": w["local_date"],
+            "reason": w["reason"],
+        }
+        for w in state.warnings
+    ]
 
     quality_correct = {method: correct[method] for method in METHODS}
     return {
@@ -1382,11 +1478,15 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
         "seed_commitment": hashlib.sha256((state.seed_hex or "").encode("ascii")).hexdigest(),
         "scope": dict(SCOPE),
         "progress": {
-            "days_total": DAY_COUNT,
-            "days_complete": len(state.completed_days),
-            "days_included": len(included),
-            "current_day": state.current_day,
-            "study_complete": state.study_complete,
+            "phases_total": PHASE_COUNT,
+            "phases_started": len(state.phases),
+            "phases_complete": len(state.completed_phases),
+            "current_phase": state.current_phase,
+            "study_complete": study_complete,
+            "group_runs_total": state.group_runs_total,
+            "group_runs_recorded": state.recorded_group_runs(),
+            "group_runs_included": len(included),
+            "chats_total": state.chats_total,
         },
         "methods": methods_out,
         "per_task": {
@@ -1405,19 +1505,24 @@ def analyze(pack: Any, state: StudyState) -> dict[str, Any]:
             "regression": regression,
         },
         "comparisons": comparisons,
-        "days": days_out,
-        "flagged_days": [day for day in days_out if day["reasons"]],
-        "pending_reconciliations": state.pending_reconciliations,
+        "phases": phases_out,
+        "dates": dates_out,
+        "pending_reconciliations": state.pending_reconciliations(),
+        "warnings": warnings_out,
+        "left_out": left_out,
     }
 
 
 __all__ = [
     "ANSWER_KINDS",
     "COMPARISONS",
-    "DAY_COUNT",
+    "HALVES",
     "LEDGER_TYPES",
     "METHODS",
+    "PHASE_COUNT",
+    "PILOT_METHODS",
     "REPORT_SEED",
+    "REVIEW_DELAY",
     "SCOPE",
     "SelfTestError",
     "StudyState",
@@ -1429,7 +1534,9 @@ __all__ = [
     "default_state_dir",
     "method_setup",
     "new_seed_hex",
+    "parse_utc",
     "pack_digest",
+    "pilot_changed",
     "reconcile",
     "render_prompt",
     "study_started_fields",
