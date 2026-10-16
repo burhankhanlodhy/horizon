@@ -2,9 +2,18 @@
 
 Writes ``DIR/documents/*`` and ``DIR/pack.json`` for a clearly fictional company.
 Every answer is computed from the generated data structures. Output depends only
-on ``--seed`` and this file: no clock, no locale, LF line endings.
+on the seed, the profile and this file: no clock, no locale, LF line endings.
 
-Usage: python make_dataset.py --out DIR [--seed 20261015]
+Profiles:
+
+- ``single`` (default): six documents and twelve one-question tasks, for the
+  single-question test. Default seed 20261015.
+- ``session``: four documents (about 415 KB in total) and twelve questions
+  asked in one long chat, interleaved by file. Default seed 20261016 and study
+  id st_session_v1. Only the methods B and C_normal apply, so ``--methods``
+  is refused.
+
+Usage: python make_dataset.py --out DIR [--profile single|session] [--seed N]
 
 Standard library only.
 """
@@ -24,7 +33,11 @@ from typing import Any
 
 DEFAULT_SEED = 20261015
 DEFAULT_STUDY_ID = "st_generated_v1"
+SESSION_SEED = 20261016
+SESSION_STUDY_ID = "st_session_v1"
+PROFILES = ["single", "session"]
 ALL_METHODS = ["A", "B", "C_normal", "C_tuned"]
+SESSION_METHODS = ["B", "C_normal"]
 _STUDY_ID = re.compile(r"^st_[a-z0-9_]{1,40}$")
 COMPANY = "Quorvale Freight Partners"
 NOTICE = (
@@ -38,6 +51,20 @@ TARGET_BYTES = {
     "contract_summary.md": 3 * 1024,
     "team_contacts.csv": 3 * 1024,
 }
+# Session profile: the four documents and the generator sizes that give them
+# about 140 KB (orders, events), 90 KB (handbook) and 45 KB (config) on disk.
+SESSION_DOCUMENTS = [
+    "orders_export.json",
+    "service_events.txt",
+    "operations_handbook.md",
+    "platform_config.json",
+]
+SESSION_TARGET_BYTES = {
+    "service_events.txt": 140 * 1024,
+    "operations_handbook.md": 100 * 1024,
+}
+SESSION_ORDER_COUNT = 389
+SESSION_CHANGELOG_RANGE = (6, 8)
 _SKU_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 _REGIONS = [
     "Northern Plains",
@@ -189,7 +216,9 @@ def _paragraph(rng: random.Random) -> str:
     return " ".join(_sentence(rng) for _ in range(rng.randint(4, 6)))
 
 
-def _handbook(rng: random.Random) -> tuple[str, dict[str, dict[str, Any]]]:
+def _handbook(
+    rng: random.Random, target: int = TARGET_BYTES["operations_handbook.md"]
+) -> tuple[str, dict[str, dict[str, Any]]]:
     """Return the Markdown text and the three fact records (values drawn here)."""
     hours = rng.randint(12, 96)
     weight = rng.choice(range(600, 1600, 50))
@@ -212,7 +241,7 @@ def _handbook(rng: random.Random) -> tuple[str, dict[str, dict[str, Any]]]:
             "answer": {"kind": "date", "expected": _date_2026(11, audit_day)},
         },
     }
-    per_section = TARGET_BYTES["operations_handbook.md"] * 4 // (5 * len(_HANDBOOK_TITLES))
+    per_section = target * 4 // (5 * len(_HANDBOOK_TITLES))
     parts = [f"> {NOTICE}", "", f"# Operations Handbook: {COMPANY}", ""]
     for number, title in enumerate(_HANDBOOK_TITLES, 1):
         paragraphs: list[str] = []
@@ -236,9 +265,9 @@ def _handbook(rng: random.Random) -> tuple[str, dict[str, dict[str, Any]]]:
 # ------------------------------------------------------------------- order export
 
 
-def _orders(rng: random.Random) -> tuple[str, list[dict[str, Any]]]:
+def _orders(rng: random.Random, count: int = 350) -> tuple[str, dict[str, dict[str, Any]]]:
     """Return the JSON text and the three lookup tasks, computed from the orders."""
-    ids = rng.sample(range(10000, 20000), 350)
+    ids = rng.sample(range(10000, 20000), count)
     orders: list[dict[str, Any]] = []
     for number in ids:
         skus: list[str] = []
@@ -401,9 +430,10 @@ def _trace_frames(rng: random.Random) -> list[str]:
     return frames
 
 
-def _service_events(rng: random.Random) -> tuple[str, dict[str, str], int]:
+def _service_events(
+    rng: random.Random, target: int = TARGET_BYTES["service_events.txt"]
+) -> tuple[str, dict[str, str], int]:
     """Return the log text, the task answers and the restart count."""
-    target = TARGET_BYTES["service_events.txt"]
 
     # Stack traces: each trace's frames repeat identically after a timestamped
     # ERROR header, 3-8 times, at seeded positions in the log.
@@ -552,9 +582,11 @@ _FLAGS = [
 ]
 
 
-def _service_config(rng: random.Random, name: str) -> dict[str, Any]:
+def _service_config(
+    rng: random.Random, name: str, changelog_range: tuple[int, int] = (4, 6)
+) -> dict[str, Any]:
     changelog = []
-    for _ in range(rng.randint(4, 6)):
+    for _ in range(rng.randint(*changelog_range)):
         changelog.append(
             {
                 "version": f"{rng.randint(1, 4)}.{rng.randint(0, 19)}.{rng.randint(0, 99)}",
@@ -581,16 +613,18 @@ def _service_config(rng: random.Random, name: str) -> dict[str, Any]:
     }
 
 
-def _platform(rng: random.Random) -> tuple[str, int]:
-    services = {name: _service_config(rng, name) for name in _SERVICE_NAMES}
+def _platform(
+    rng: random.Random, changelog_range: tuple[int, int] = (4, 6)
+) -> tuple[str, dict[str, Any]]:
+    """Return the JSON text and the parsed document the config questions read from."""
+    services = {name: _service_config(rng, name, changelog_range) for name in _SERVICE_NAMES}
     doc = {
         "_notice": NOTICE,
         "environment": "test-sandbox",
         "schema": 3,
         "services": services,
     }
-    value = services["billing-core"]["limits"]["checkout"]["max_batch_items"]
-    return _json_text(doc), value
+    return _json_text(doc), doc
 
 
 # ------------------------------------------------------------------------ contract
@@ -725,6 +759,20 @@ def _pack(
     return pack
 
 
+def _session_pack(tasks: list[dict[str, Any]], study_id: str) -> dict[str, Any]:
+    """The session pack: one long chat per method, questions in the order asked."""
+    return {
+        "schema_version": 1,
+        "kind": "self_test_session_pack",
+        "study_id": study_id,
+        "model_label": "Claude Opus, Medium effort",
+        "quality_tolerance": 1,
+        "methods": list(SESSION_METHODS),
+        "documents": list(SESSION_DOCUMENTS),
+        "tasks": tasks,
+    }
+
+
 def _method_list(text: str) -> list[str]:
     """Parse ``--methods``: a comma list of distinct names, in the canonical order."""
     names = [name.strip() for name in text.split(",")]
@@ -737,13 +785,118 @@ def _method_list(text: str) -> list[str]:
     return [name for name in ALL_METHODS if name in names]
 
 
+# ------------------------------------------------------------------------- tasks
+
+_CONFIG_NESTED = ["services", "billing-core", "limits", "checkout", "max_batch_items"]
+_CONFIG_PORT = ["services", "edge-router", "listen", "port"]
+_CONFIG_SEARCH = ["services", "ledger-sync", "limits", "search", "max_results"]
+_SESSION_ORDER = [
+    "t_ord_unit_price",
+    "t_log_first_error",
+    "t_hb_dock_hold",
+    "t_cfg_nested",
+    "t_ord_region",
+    "t_log_warn_code",
+    "t_hb_quarantine_code",
+    "t_cfg_port",
+    "t_ord_created",
+    "t_log_restart_count",
+    "t_hb_audit_freeze",
+    "t_cfg_search",
+]
+
+
+def _config_task(task_id: str, path: list[str], doc: dict[str, Any]) -> dict[str, Any]:
+    node: Any = doc
+    for key in path:
+        node = node[key]
+    question = (
+        f"In platform_config.json, what is the value of {' -> '.join(path)}? "
+        "Answer with the number only."
+    )
+    return _task(
+        task_id,
+        "platform_config.json",
+        question,
+        {"kind": "number", "expected": str(node), "tolerance": "0"},
+    )
+
+
+def _log_tasks(event_answers: dict[str, str], restarts: int) -> dict[str, dict[str, Any]]:
+    return {
+        "t_log_first_error": _task(
+            "t_log_first_error",
+            "service_events.txt",
+            f"In service_events.txt, what is the timestamp of the first ERROR line for service {_ERROR_SERVICE}? Answer with the timestamp exactly as written in the file.",
+            {"kind": "text_contains", "expected": event_answers["error"]},
+        ),
+        "t_log_warn_code": _task(
+            "t_log_warn_code",
+            "service_events.txt",
+            f"In service_events.txt, what code is on the WARN line for service {_WARN_SERVICE} that reports a backlog? Answer with the code only.",
+            {"kind": "text_contains", "expected": event_answers["warn"]},
+        ),
+        "t_log_restart_count": _task(
+            "t_log_restart_count",
+            "service_events.txt",
+            f"In service_events.txt, how many RESTART events are recorded for service {_RESTART_SERVICE}? Answer with the number only.",
+            {"kind": "number", "expected": str(restarts), "tolerance": "0"},
+        ),
+    }
+
+
+def _order_tasks(order_tasks: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        "t_ord_unit_price": _task(
+            "t_ord_unit_price",
+            "orders_export.json",
+            order_tasks["price"]["question"],
+            order_tasks["price"]["answer"],
+        ),
+        "t_ord_region": _task(
+            "t_ord_region",
+            "orders_export.json",
+            order_tasks["region"]["question"],
+            order_tasks["region"]["answer"],
+        ),
+        "t_ord_created": _task(
+            "t_ord_created",
+            "orders_export.json",
+            order_tasks["created"]["question"],
+            order_tasks["created"]["answer"],
+        ),
+    }
+
+
+def _handbook_tasks(facts: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        "t_hb_dock_hold": _task(
+            "t_hb_dock_hold",
+            "operations_handbook.md",
+            facts["dock"]["question"],
+            facts["dock"]["answer"],
+        ),
+        "t_hb_quarantine_code": _task(
+            "t_hb_quarantine_code",
+            "operations_handbook.md",
+            facts["quarantine"]["question"],
+            facts["quarantine"]["answer"],
+        ),
+        "t_hb_audit_freeze": _task(
+            "t_hb_audit_freeze",
+            "operations_handbook.md",
+            facts["audit"]["question"],
+            facts["audit"]["answer"],
+        ),
+    }
+
+
 # ------------------------------------------------------------------------- driver
 
 
-def build(
-    seed: int, study_id: str = DEFAULT_STUDY_ID, methods: list[str] | None = None
+def _build_single(
+    seed: int, study_id: str, methods: list[str] | None
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    """Return ``{file_name: text}`` and the pack, all derived from ``seed``."""
     rng = random.Random(seed)
     files: dict[str, str] = {}
 
@@ -756,7 +909,7 @@ def build(
     events_text, event_answers, restarts = _service_events(rng)
     files["service_events.txt"] = events_text
 
-    config_text, config_value = _platform(rng)
+    config_text, config_doc = _platform(rng)
     files["platform_config.json"] = config_text
 
     contract_text, contract_answer = _contract(rng)
@@ -765,67 +918,20 @@ def build(
     contacts_text, extension, person = _contacts(rng)
     files["team_contacts.csv"] = contacts_text
 
+    hb = _handbook_tasks(facts)
+    od = _order_tasks(order_tasks)
+    lg = _log_tasks(event_answers, restarts)
     tasks = [
-        _task(
-            "t_hb_dock_hold",
-            "operations_handbook.md",
-            facts["dock"]["question"],
-            facts["dock"]["answer"],
-        ),
-        _task(
-            "t_hb_quarantine_code",
-            "operations_handbook.md",
-            facts["quarantine"]["question"],
-            facts["quarantine"]["answer"],
-        ),
-        _task(
-            "t_hb_audit_freeze",
-            "operations_handbook.md",
-            facts["audit"]["question"],
-            facts["audit"]["answer"],
-        ),
-        _task(
-            "t_ord_unit_price",
-            "orders_export.json",
-            order_tasks["price"]["question"],
-            order_tasks["price"]["answer"],
-        ),
-        _task(
-            "t_ord_region",
-            "orders_export.json",
-            order_tasks["region"]["question"],
-            order_tasks["region"]["answer"],
-        ),
-        _task(
-            "t_ord_created",
-            "orders_export.json",
-            order_tasks["created"]["question"],
-            order_tasks["created"]["answer"],
-        ),
-        _task(
-            "t_log_first_error",
-            "service_events.txt",
-            f"In service_events.txt, what is the timestamp of the first ERROR line for service {_ERROR_SERVICE}? Answer with the timestamp exactly as written in the file.",
-            {"kind": "text_contains", "expected": event_answers["error"]},
-        ),
-        _task(
-            "t_log_warn_code",
-            "service_events.txt",
-            f"In service_events.txt, what code is on the WARN line for service {_WARN_SERVICE} that reports a backlog? Answer with the code only.",
-            {"kind": "text_contains", "expected": event_answers["warn"]},
-        ),
-        _task(
-            "t_log_restart_count",
-            "service_events.txt",
-            f"In service_events.txt, how many RESTART events are recorded for service {_RESTART_SERVICE}? Answer with the number only.",
-            {"kind": "number", "expected": str(restarts), "tolerance": "0"},
-        ),
-        _task(
-            "t_cfg_nested",
-            "platform_config.json",
-            "In platform_config.json, what is the value of services -> billing-core -> limits -> checkout -> max_batch_items? Answer with the number only.",
-            {"kind": "number", "expected": str(config_value), "tolerance": "0"},
-        ),
+        hb["t_hb_dock_hold"],
+        hb["t_hb_quarantine_code"],
+        hb["t_hb_audit_freeze"],
+        od["t_ord_unit_price"],
+        od["t_ord_region"],
+        od["t_ord_created"],
+        lg["t_log_first_error"],
+        lg["t_log_warn_code"],
+        lg["t_log_restart_count"],
+        _config_task("t_cfg_nested", _CONFIG_NESTED, config_doc),
         _task(
             "t_contract_notice",
             "contract_summary.md",
@@ -842,21 +948,77 @@ def build(
     return files, _pack(tasks, study_id, methods)
 
 
-def generate(
-    out: Path,
-    seed: int = DEFAULT_SEED,
+def _build_session(seed: int, study_id: str) -> tuple[dict[str, str], dict[str, Any]]:
+    rng = random.Random(seed)
+    files: dict[str, str] = {}
+
+    handbook_text, facts = _handbook(rng, SESSION_TARGET_BYTES["operations_handbook.md"])
+    files["operations_handbook.md"] = handbook_text
+
+    orders_text, order_tasks = _orders(rng, SESSION_ORDER_COUNT)
+    files["orders_export.json"] = orders_text
+
+    events_text, event_answers, restarts = _service_events(
+        rng, SESSION_TARGET_BYTES["service_events.txt"]
+    )
+    files["service_events.txt"] = events_text
+
+    config_text, config_doc = _platform(rng, SESSION_CHANGELOG_RANGE)
+    files["platform_config.json"] = config_text
+
+    by_id: dict[str, dict[str, Any]] = {}
+    by_id.update(_handbook_tasks(facts))
+    by_id.update(_order_tasks(order_tasks))
+    by_id.update(_log_tasks(event_answers, restarts))
+    by_id["t_cfg_nested"] = _config_task("t_cfg_nested", _CONFIG_NESTED, config_doc)
+    by_id["t_cfg_port"] = _config_task("t_cfg_port", _CONFIG_PORT, config_doc)
+    by_id["t_cfg_search"] = _config_task("t_cfg_search", _CONFIG_SEARCH, config_doc)
+    tasks = [by_id[task_id] for task_id in _SESSION_ORDER]
+    return files, _session_pack(tasks, study_id)
+
+
+def build(
+    seed: int,
     study_id: str = DEFAULT_STUDY_ID,
     methods: list[str] | None = None,
+    profile: str = "single",
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Return ``{file_name: text}`` and the pack, all derived from ``seed``."""
+    if profile == "session":
+        return _build_session(seed, study_id)
+    return _build_single(seed, study_id, methods)
+
+
+def generate(
+    out: Path,
+    seed: int | None = None,
+    study_id: str | None = None,
+    methods: list[str] | None = None,
+    profile: str = "single",
 ) -> dict[str, Any]:
-    """Write the dataset into ``out`` and return the pack. Refuses a non-empty ``out``."""
+    """Write the dataset into ``out`` and return the pack. Refuses a non-empty ``out``.
+
+    ``seed`` and ``study_id`` default to the profile's own values (single: 20261015 and
+    st_generated_v1; session: 20261016 and st_session_v1).
+    """
     out = Path(out)
+    if profile not in PROFILES:
+        raise DatasetError("--profile must be single or session")
+    if profile == "session":
+        if methods is not None:
+            raise DatasetError("--methods is not allowed with --profile session")
+        seed = SESSION_SEED if seed is None else seed
+        study_id = SESSION_STUDY_ID if study_id is None else study_id
+    else:
+        seed = DEFAULT_SEED if seed is None else seed
+        study_id = DEFAULT_STUDY_ID if study_id is None else study_id
     if not _STUDY_ID.fullmatch(study_id):
         raise DatasetError("--study-id must look like st_my_study (lowercase letters, digits, _)")
     if out.exists() and not out.is_dir():
         raise DatasetError("output path exists and is not a directory")
     if out.is_dir() and any(out.iterdir()):
         raise DatasetError("refusing to overwrite a non-empty directory")
-    files, pack = build(seed, study_id, methods)
+    files, pack = build(seed, study_id, methods, profile)
     documents = out / "documents"
     documents.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
@@ -870,17 +1032,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out", required=True, type=Path, help="output directory (must be empty or absent)"
     )
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="integer seed")
-    parser.add_argument("--study-id", default=DEFAULT_STUDY_ID, help="study id written to the pack")
+    parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default="single",
+        help="single (six documents, twelve questions) or session (four documents, long chat)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="integer seed (default 20261015 for single, 20261016 for session)",
+    )
+    parser.add_argument(
+        "--study-id",
+        default=None,
+        help="study id written to the pack (default st_generated_v1, or st_session_v1)",
+    )
     parser.add_argument(
         "--methods",
-        default=",".join(ALL_METHODS),
-        help="comma list of methods, from A,B,C_normal,C_tuned; must include B and C_normal",
+        default=None,
+        help="single profile only: comma list from A,B,C_normal,C_tuned; must include B and C_normal (default all four)",
     )
     args = parser.parse_args(argv)
     try:
-        methods = _method_list(args.methods)
-        generate(args.out, args.seed, args.study_id, methods)
+        methods = None if args.methods is None else _method_list(args.methods)
+        generate(args.out, args.seed, args.study_id, methods, args.profile)
     except DatasetError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

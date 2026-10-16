@@ -218,7 +218,9 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "contextshrink_open",
         "description": (
-            "Open a source in one presentation mode; choose by task. find: with a query, to look "
+            "Open a source in one presentation mode; choose by task. Open a file by its name "
+            "directly; no search is needed when you know the name. For each new question, call "
+            "find again instead of re-reading the whole file. find: with a query, to look "
             "up a specific value, ID, name or date, or to count lines (returns every matching "
             "line with line numbers and the total count; set context_lines to see nearby lines). "
             "One open normally answers the question; results hold large files whole, so do not "
@@ -233,7 +235,12 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
         "inputSchema": {
             "type": "object",
             "properties": {
-                "source": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Path, or only the file name when one approved folder holds it.",
+                },
                 "mode": {
                     "type": "string",
                     "description": "find and focused need a query; see the tool description.",

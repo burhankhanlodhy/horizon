@@ -305,3 +305,49 @@ def test_windows_alternate_data_stream_path_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(SourceAccessError) as error:
         reader.read(f"{source}:secret")
     assert error.value.code == "source_unapproved"
+
+
+def test_bare_name_resolves_across_roots_only_when_exactly_one_root_holds_it(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "orders.json").write_text("first copy", encoding="utf-8")
+    (second / "other.json").write_text("other", encoding="utf-8")
+    reader = SourceReader((first, second))
+
+    assert reader.read("orders.json").text == "first copy"
+
+    (second / "orders.json").write_text("second copy", encoding="utf-8")
+    with pytest.raises(SourceAccessError) as ambiguous:
+        reader.read("orders.json")
+    assert ambiguous.value.code == "source_unapproved"
+
+    with pytest.raises(SourceAccessError) as missing:
+        reader.read("absent.json")
+    assert missing.value.code == "source_unapproved"
+
+
+def test_bare_name_ignores_directories_and_path_segments_across_roots(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    (first / "docs").mkdir(parents=True)
+    second.mkdir()
+    (first / "docs" / "memo.md").write_text("nested", encoding="utf-8")
+    reader = SourceReader((first, second))
+
+    # A directory of the same name is not a file, and a nested file needs its path.
+    (second / "docs").mkdir()
+    with pytest.raises(SourceAccessError) as directory:
+        reader.read("docs")
+    assert directory.value.code == "source_unapproved"
+
+    with pytest.raises(SourceAccessError) as nested:
+        reader.read("memo.md")
+    assert nested.value.code == "source_unapproved"
+    # A relative path with separators still needs a single root.
+    with pytest.raises(SourceAccessError) as relative:
+        reader.read("docs/memo.md")
+    assert relative.value.code == "source_unapproved"
