@@ -85,3 +85,33 @@ def test_line_selector_keeps_unicode_separator_in_the_same_physical_line() -> No
 def test_rows_reject_non_csv_sources() -> None:
     with pytest.raises(SelectorError, match="selector_format_unsupported"):
         select_exact("a,b\n1,2\n", {"type": "rows", "start": 1, "end": 1}, kind="txt")
+
+
+def test_json_pointer_array_units_concatenate_to_the_exact_selected_text() -> None:
+    source = '{\r\n  "orders": [\r\n    {"id": 1},\r\n    {"id": 2, "tags": ["a", "b"]},\r\n    3\r\n  ],\r\n  "other": 0\r\n}\r\n'
+    selected = select_exact(source, {"type": "json_pointer", "pointer": "/orders"}, kind="json")
+    assert selected.paginable is True
+    assert selected.scope_kind == "json_pointer"
+    assert len(selected.units) == 3
+    assert "".join(unit[2] for unit in selected.units) == selected.text
+    assert selected.text.startswith("[") and selected.text.endswith("]")
+    assert selected.units[0][0] == selected.line_start
+    assert selected.units[-1][1] == selected.line_end
+    assert selected.units[1][2].startswith('{"id": 2')
+
+
+def test_json_pointer_object_units_are_members_in_document_order() -> None:
+    source = '{"obj": {"b": 1, "a": [2]}}'
+    selected = select_exact(source, {"type": "json_pointer", "pointer": "/obj"}, kind="json")
+    assert selected.paginable is True
+    assert [unit[2] for unit in selected.units] == ['{"b": 1, ', '"a": [2]}']
+    assert "".join(unit[2] for unit in selected.units) == selected.text
+
+
+def test_json_pointer_empty_container_and_scalar_stay_unpaginable() -> None:
+    empty = select_exact('{"a": []}', {"type": "json_pointer", "pointer": "/a"}, kind="json")
+    assert empty.text == "[]"
+    assert empty.paginable is False
+    scalar = select_exact('{"a": "text"}', {"type": "json_pointer", "pointer": "/a"}, kind="json")
+    assert scalar.paginable is False
+    assert scalar.units == ((1, 1, '"text"'),)

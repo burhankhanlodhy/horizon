@@ -13,6 +13,7 @@ from typing import Any
 from .artifacts import ArtifactError, ArtifactStore, Dependency
 from .batching import BatchError, fuse_reads
 from .broker_transport import ARTIFACT_CHUNK_BYTES
+from .find import parse_terms
 from .measurement import (
     CumulativeUsageStats,
     LocalUsageLedger,
@@ -59,8 +60,8 @@ class LocalBackend:
         max_snapshot_bytes: int = 8 * 1024 * 1024,
         max_store_bytes: int = 32 * 1024 * 1024,
         max_snapshots: int = 128,
-        result_token_budget: int = 2000,
-        max_result_bytes: int = 65536,
+        result_token_budget: int = 32000,
+        max_result_bytes: int = 262144,
         counting_model: str | None = None,
         eval_arm: str = "optimized",
         min_compaction_gain_tokens: int = 64,
@@ -215,6 +216,7 @@ class LocalBackend:
         query: str | None = None,
         result_token_budget: int | None = None,
         cursor: str | None = None,
+        context_lines: int | None = None,
     ) -> dict[str, Any] | None:
         """Open a granted path into a snapshot or read an existing opaque handle."""
         if not isinstance(source, str) or not source or len(source) > 4096:
@@ -223,18 +225,29 @@ class LocalBackend:
             raise LocalBackendError("invalid_arguments")
         if query is not None and (not isinstance(query, str) or len(query) > 4096):
             raise LocalBackendError("invalid_arguments")
+        if context_lines is not None and (
+            mode != "find"
+            or isinstance(context_lines, bool)
+            or not isinstance(context_lines, int)
+            or not 0 <= context_lines <= 50
+        ):
+            raise LocalBackendError("invalid_arguments")
+        if mode == "find" and not parse_terms(query or ""):
+            raise LocalBackendError("query_required")
         if result_token_budget is not None and (
             isinstance(result_token_budget, bool)
             or not isinstance(result_token_budget, int)
-            or not 128 <= result_token_budget <= 8000
+            or not 128 <= result_token_budget <= 64000
         ):
             raise LocalBackendError("invalid_arguments")
         if (start_line is None) != (end_line is None):
             raise LocalBackendError("selector_out_of_range")
-        if mode not in {"exact", "compact", "focused", "overview"}:
+        if mode not in {"exact", "compact", "focused", "overview", "find"}:
             raise LocalBackendError("unsupported_mode")
         requested_mode = mode
         active_mode = "exact" if self.eval_arm == "raw" else mode
+        # Raw evaluation serves find as exact, so context is only bound for find.
+        active_context_lines = context_lines if active_mode == "find" else None
         effective_budget = (
             self.result_token_budget
             if result_token_budget is None
@@ -266,6 +279,7 @@ class LocalBackend:
                     eval_arm=self.eval_arm,
                     min_compaction_gain_tokens=self.min_compaction_gain_tokens,
                     min_compaction_gain_percent=self.min_compaction_gain_percent,
+                    context_lines=active_context_lines,
                 )
                 self._observe(
                     "contextshrink_open",
@@ -641,7 +655,7 @@ class LocalBackend:
                 "catalog_truncated": self._catalog_truncated,
                 "catalog_skipped": self._catalog_skipped,
                 "compression_enabled": True,
-                "supported_modes": ["exact", "compact", "focused", "overview"],
+                "supported_modes": ["exact", "compact", "focused", "overview", "find"],
                 "compression_applied": compact_count > 0,
                 "compression_applied_scope": usage_ledger.get(
                     "retained_successful_compact_result_scope",
@@ -744,6 +758,7 @@ class LocalBackend:
         eval_arm: str = "optimized",
         min_compaction_gain_tokens: int = 64,
         min_compaction_gain_percent: int = 5,
+        context_lines: int | None = None,
     ) -> dict[str, Any]:
         return present_snapshot(
             snapshot,
@@ -764,6 +779,7 @@ class LocalBackend:
             eval_arm=eval_arm,
             min_compaction_gain_tokens=min_compaction_gain_tokens,
             min_compaction_gain_percent=min_compaction_gain_percent,
+            context_lines=context_lines,
         )
 
     @staticmethod

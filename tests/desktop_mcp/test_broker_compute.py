@@ -133,7 +133,7 @@ def test_compute_source_id_must_be_a_string() -> None:
     _invalid("render", _render_args(source_id=["cs1_example"]))
 
 
-@pytest.mark.parametrize("budget", [True, False, 127, 8001, 1.5, "2000", None])
+@pytest.mark.parametrize("budget", [True, False, 127, 64001, 1.5, "2000", None])
 def test_compute_result_token_budget_must_be_an_int_in_range(budget: Any) -> None:
     _invalid("analyze", _analyze_args(result_token_budget=budget))
     _invalid("retrieve_batch", _batch_args(result_token_budget=budget))
@@ -191,7 +191,7 @@ def test_batch_items_are_closed_and_source_checked(item: Any) -> None:
         {"type": "lines", "start": 2, "end": 1},
         {"type": "lines", "start": 1, "end": 1, "extra": 1},
         {"type": "lines", "start": True, "end": 2},
-        {"type": "lines", "start": 1, "end": 2002},
+        {"type": "lines", "start": 1, "end": 200002},
         {"type": "rows", "start": 0, "end": 1},
         {"type": "markdown_section", "heading": " "},
         {"type": "json_pointer", "pointer": "no-slash"},

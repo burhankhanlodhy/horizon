@@ -41,15 +41,22 @@ class SearchArguments(_StrictModel):
 
 class OpenArguments(_StrictModel):
     source: str = Field(min_length=1, max_length=4096)
-    mode: Literal["exact", "compact", "focused", "overview"] = "exact"
-    result_token_budget: int | None = Field(default=None, ge=128, le=8000)
+    mode: Literal["exact", "compact", "focused", "overview", "find"] = "exact"
+    result_token_budget: int | None = Field(default=None, ge=128, le=64000)
     query: str | None = None
     cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    context_lines: int | None = Field(default=None, ge=0, le=50)
 
     @field_validator("query")
     @classmethod
     def query_length(cls, value: str | None) -> str | None:
         return _bounded_text(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def context_lines_need_find(self) -> OpenArguments:
+        if self.context_lines is not None and self.mode != "find":
+            raise ValueError("context_lines is valid only with mode find")
+        return self
 
 
 class LinesSelector(_StrictModel):
@@ -59,7 +66,7 @@ class LinesSelector(_StrictModel):
 
     @model_validator(mode="after")
     def end_not_before_start(self) -> LinesSelector:
-        if self.end < self.start or self.end - self.start > 2000:
+        if self.end < self.start or self.end - self.start > 200000:
             raise ValueError("line range must be ordered and bounded")
         return self
 
@@ -98,7 +105,7 @@ class RowsSelector(_StrictModel):
 
     @model_validator(mode="after")
     def ordered_bounded_rows(self) -> RowsSelector:
-        if self.end < self.start or self.end - self.start > 2000:
+        if self.end < self.start or self.end - self.start > 200000:
             raise ValueError("row range must be ordered and bounded")
         return self
 
@@ -153,7 +160,7 @@ Selector = Annotated[
 class RetrieveArguments(_StrictModel):
     source_id: str = Field(min_length=1, max_length=4096)
     selector: Selector
-    result_token_budget: int | None = Field(default=None, ge=128, le=8000)
+    result_token_budget: int | None = Field(default=None, ge=128, le=64000)
     cursor: str | None = Field(default=None, min_length=1, max_length=256)
 
 
@@ -164,7 +171,7 @@ class StatsArguments(_StrictModel):
 class AnalyzeArguments(_StrictModel):
     source_id: str = Field(min_length=1, max_length=4096)
     operation: dict[str, Any]
-    result_token_budget: int | None = Field(default=None, ge=128, le=8000)
+    result_token_budget: int | None = Field(default=None, ge=128, le=64000)
 
 
 class RenderArguments(_StrictModel):
@@ -183,13 +190,16 @@ class BatchRequest(_StrictModel):
 
 class RetrieveBatchArguments(_StrictModel):
     requests: list[BatchRequest] = Field(min_length=1, max_length=16)
-    result_token_budget: int | None = Field(default=None, ge=128, le=8000)
+    result_token_budget: int | None = Field(default=None, ge=128, le=64000)
 
 
 _TOOL_SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "contextshrink_search",
-        "description": "Search available ContextShrink sources.",
+        "description": (
+            "Find approved source files by name. It does not search inside files; use "
+            "contextshrink_open with mode find for that."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -208,13 +218,17 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
     {
         "name": "contextshrink_open",
         "description": (
-            "Open a source in one presentation mode; choose by task. compact: for JSON, logs, "
-            "config or diff files; output is verified or labelled normalized and falls back to "
-            "exact when the saving is small. focused: with a query, to answer a specific question "
-            "in a long document; exact passages only, coverage is partial, so use "
-            "contextshrink_retrieve for exact sections. overview: first, to orient in a long "
-            "document; headings or pages only, not a summary. exact (default): for quoting, full "
-            "review, small files, or when the user asks for everything."
+            "Open a source in one presentation mode; choose by task. find: with a query, to look "
+            "up a specific value, ID, name or date, or to count lines (returns every matching "
+            "line with line numbers and the total count; set context_lines to see nearby lines). "
+            "One open normally answers the question; results hold large files whole, so do not "
+            "page through a file to look for something. compact: for JSON, logs, config or diff "
+            "files; output is verified or labelled normalized and falls back to exact when the "
+            "saving is small. focused: with a query, to answer a specific question in a long "
+            "document; exact passages only, coverage is partial, so use contextshrink_retrieve "
+            "for exact sections. overview: first, to orient in a long document; headings or pages "
+            "only, not a summary. exact (default): for quoting, full review, small files, or when "
+            "the user asks for everything."
         ),
         "inputSchema": {
             "type": "object",
@@ -222,13 +236,19 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
                 "source": {"type": "string", "minLength": 1, "maxLength": 4096},
                 "mode": {
                     "type": "string",
-                    "description": "focused needs a query; see the tool description.",
-                    "enum": ["exact", "compact", "focused", "overview"],
+                    "description": "find and focused need a query; see the tool description.",
+                    "enum": ["exact", "compact", "focused", "overview", "find"],
                     "default": "exact",
                 },
-                "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 8000},
+                "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 64000},
                 "query": {"type": "string", "maxLength": 4096},
                 "cursor": {"type": "string", "minLength": 1, "maxLength": 256},
+                "context_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 50,
+                    "description": "find only: lines of context around each match; default 0.",
+                },
             },
             "required": ["source"],
             "additionalProperties": False,
@@ -336,7 +356,7 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
                     ],
                     "discriminator": {"propertyName": "type"},
                 },
-                "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 8000},
+                "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 64000},
                 "cursor": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["source_id", "selector"],
@@ -389,7 +409,7 @@ _ANALYZE_SPEC: dict[str, Any] = {
         "properties": {
             "source_id": {"type": "string", "minLength": 1, "maxLength": 4096},
             "operation": {"type": "object", "description": _OPERATION_DESCRIPTION},
-            "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 8000},
+            "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 64000},
         },
         "required": ["source_id", "operation"],
         "additionalProperties": False,
@@ -459,7 +479,7 @@ _RETRIEVE_BATCH_SPEC: dict[str, Any] = {
                     "additionalProperties": False,
                 },
             },
-            "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 8000},
+            "result_token_budget": {"type": "integer", "minimum": 128, "maximum": 64000},
         },
         "required": ["requests"],
         "additionalProperties": False,
@@ -519,6 +539,7 @@ _TOOL_FIELDS = {
     "end",
     "index",
     "cursor",
+    "context_lines",
     "heading",
     "occurrence",
     "pointer",

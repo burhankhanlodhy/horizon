@@ -253,7 +253,7 @@ def _validate_selector(selector: Any) -> None:
             or not isinstance(end, int)
             or start < 1
             or end < start
-            or end - start > 2000
+            or end - start > 200000
         ):
             raise BrokerTransportError("invalid_arguments")
     elif kind == "markdown_section":
@@ -342,7 +342,7 @@ def _validate_compute_args(operation: str, args: Any) -> None:
         _validate_source_id(args["source_id"])
     if "result_token_budget" in args:
         budget = args["result_token_budget"]
-        if isinstance(budget, bool) or not isinstance(budget, int) or not 128 <= budget <= 8000:
+        if isinstance(budget, bool) or not isinstance(budget, int) or not 128 <= budget <= 64000:
             raise BrokerTransportError("invalid_arguments")
     if operation == "analyze":
         if not isinstance(args["operation"], dict):
@@ -392,7 +392,7 @@ def _validate_operation_args(operation: str, args: Any) -> None:
         if not (is_legacy or is_selected):
             raise BrokerTransportError("invalid_arguments")
     elif operation == "open":
-        optional = {"mode", "query", "result_token_budget", "cursor"}
+        optional = {"mode", "query", "result_token_budget", "cursor", "context_lines"}
         if not base_keys.issubset(keys) or keys - base_keys - optional:
             raise BrokerTransportError("invalid_arguments")
     elif keys != base_keys:
@@ -429,7 +429,7 @@ def _validate_operation_args(operation: str, args: Any) -> None:
                 or not isinstance(end_line, int)
                 or start_line < 1
                 or end_line < start_line
-                or end_line - start_line > 2000
+                or end_line - start_line > 200000
             ):
                 raise BrokerTransportError("invalid_arguments")
     else:
@@ -443,20 +443,28 @@ def _validate_operation_args(operation: str, args: Any) -> None:
             or not isinstance(end_line, int)
             or start_line < 1
             or end_line < start_line
-            or end_line - start_line > 2000
+            or end_line - start_line > 200000
         ):
             raise BrokerTransportError("invalid_arguments")
         if "mode" in args and (
             not isinstance(args["mode"], str)
-            or args["mode"] not in {"exact", "compact", "focused", "overview"}
+            or args["mode"] not in {"exact", "compact", "focused", "overview", "find"}
         ):
             raise BrokerTransportError("invalid_arguments")
         query = args.get("query")
         if query is not None and (not isinstance(query, str) or len(query) > 4096):
             raise BrokerTransportError("invalid_arguments")
+        context_lines = args.get("context_lines")
+        if context_lines is not None and (
+            args.get("mode") != "find"
+            or isinstance(context_lines, bool)
+            or not isinstance(context_lines, int)
+            or not 0 <= context_lines <= 50
+        ):
+            raise BrokerTransportError("invalid_arguments")
     budget = args.get("result_token_budget")
     if budget is not None and (
-        isinstance(budget, bool) or not isinstance(budget, int) or not 128 <= budget <= 8000
+        isinstance(budget, bool) or not isinstance(budget, int) or not 128 <= budget <= 64000
     ):
         raise BrokerTransportError("invalid_arguments")
     cursor = args.get("cursor")

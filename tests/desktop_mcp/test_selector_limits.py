@@ -77,3 +77,17 @@ def test_csv_parse_error_restores_global_field_limit() -> None:
 
     assert error.value.code == "csv_invalid"
     assert csv.field_size_limit() == previous_limit
+
+
+def test_lines_selector_accepts_a_ten_thousand_line_span() -> None:
+    source = "x\n" * 10001
+
+    selected = select_exact(source, {"type": "lines", "start": 1, "end": 10001}, kind="txt")
+
+    assert len(selected.units) == 10001
+    assert selected.text == source
+
+
+def test_lines_selector_rejects_a_span_over_the_200000_line_cap() -> None:
+    with pytest.raises(SelectorError, match="selector_out_of_range"):
+        select_exact("x\n", {"type": "lines", "start": 1, "end": 200002}, kind="txt")

@@ -188,6 +188,7 @@ def create_server(
                 or values["query"] is not None
                 or values["result_token_budget"] is not None
                 or values["cursor"] is not None
+                or values["context_lines"] is not None
             ):
                 return _error(
                     "feature_unavailable", "Only exact reads are available in this phase."
@@ -195,6 +196,11 @@ def create_server(
             source = values["source"]
             try:
                 if local_profile:
+                    # context_lines is forwarded only when set, so backends that
+                    # predate find mode keep their existing open() signature.
+                    open_kwargs: dict[str, Any] = {}
+                    if values["context_lines"] is not None:
+                        open_kwargs["context_lines"] = values["context_lines"]
                     payload = await call_backend(
                         selected_backend.open,
                         source,
@@ -202,6 +208,7 @@ def create_server(
                         query=values["query"],
                         result_token_budget=values["result_token_budget"],
                         cursor=values["cursor"],
+                        **open_kwargs,
                     )
                 else:
                     payload = selected_backend.open(source)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
 import io
 import json
@@ -79,6 +80,7 @@ class SelectedScope:
 
 _HEADING = re.compile(r"^ {0,3}(?P<marks>#{1,6})[ \t]+(?P<title>.*?)(?:[ \t]+#+[ \t]*)?$")
 _FENCE = re.compile(r"^ {0,3}(?P<mark>`{3,}|~{3,})(?P<tail>.*)$")
+_LINE_ENDING = re.compile(r"\r\n|\r|\n")
 _MAX_JSON_DEPTH = 64
 _MAX_JSON_NODES = 100_000
 
@@ -122,6 +124,28 @@ class _JsonSpanParser:
         if found is None:
             raise SelectorError("selector_not_found")
         return found
+
+    def member_starts(self, start: int) -> list[int]:
+        """Return the source offset of each element or member of the validated container at start."""
+        closer = "]" if self.text[start] == "[" else "}"
+        self.i = start + 1
+        self._space()
+        starts: list[int] = []
+        if self.i < len(self.text) and self.text[self.i] == closer:
+            return starts
+        while True:
+            self._space()
+            starts.append(self.i)
+            if closer == "}":
+                self._string()
+                self._space()
+                self.i += 1  # the ':' after the key, already validated by parse_pointer
+            self._value([], 1, select=True)
+            self._space()
+            if self.i < len(self.text) and self.text[self.i] == ",":
+                self.i += 1
+                continue
+            return starts
 
     def _space(self) -> None:
         while self.i < len(self.text) and self.text[self.i] in " \t\r\n":
@@ -321,6 +345,16 @@ def _select_json_pointer(text: str, selector: dict[str, Any]) -> SelectedScope:
     selected = text[start:end]
     start_line = physical_line_number(text, start)
     end_line = physical_line_number(text, end)
+    paginable = False
+    units: tuple[tuple[int, int, str], ...] = ((start_line, end_line, selected),)
+    if text[start] in "[{":
+        starts = _JsonSpanParser(text).member_starts(start)
+        if starts:
+            # Each unit is one element or member plus the separator that follows it.
+            # The opening bracket joins the first unit and the closing bracket the last,
+            # so the unit texts concatenate to the exact selected span.
+            paginable = True
+            units = _json_container_units(text, start, end, starts)
     return SelectedScope(
         selected,
         {"type": "json_pointer", "pointer": pointer},
@@ -331,8 +365,24 @@ def _select_json_pointer(text: str, selector: dict[str, Any]) -> SelectedScope:
         end,
         start_line,
         end_line,
-        False,
-        ((start_line, end_line, selected),),
+        paginable,
+        units,
+    )
+
+
+def _json_container_units(
+    text: str, start: int, end: int, starts: list[int]
+) -> tuple[tuple[int, int, str], ...]:
+    bounds = [start, *starts[1:], end]
+    # Line endings ending at or before an offset give the physical line of that offset.
+    line_ends = [match.end() for match in _LINE_ENDING.finditer(text)]
+
+    def line_of(offset: int) -> int:
+        return bisect.bisect_right(line_ends, offset) + 1
+
+    return tuple(
+        (line_of(first), line_of(following - 1), text[first:following])
+        for first, following in zip(bounds, bounds[1:])
     )
 
 
@@ -545,7 +595,7 @@ def select_exact(
             or not isinstance(end, int)
             or start < 1
             or end < start
-            or end - start > 2000
+            or end - start > 200000
         ):
             raise SelectorError("selector_out_of_range")
     if selector_type == "lines":

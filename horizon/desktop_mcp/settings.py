@@ -44,8 +44,8 @@ class DesktopSettings(BaseModel):
     profile: Literal["diagnostic", "local"] = "diagnostic"
     approved_roots: tuple[Path, ...] = ()
     broker_id: str = "desktop"
-    result_token_budget: int = Field(default=2000, ge=128, le=8000)
-    max_result_bytes: int = Field(default=65536, ge=1024, le=1048576)
+    result_token_budget: int = Field(default=32000, ge=128, le=64000)
+    max_result_bytes: int = Field(default=262144, ge=1024, le=1048576)
     max_input_bytes: int = Field(default=32768, ge=1024, le=1048576)
     max_source_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
     max_snapshot_bytes: int = Field(default=16 * 1024 * 1024, ge=1024, le=256 * 1024 * 1024)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import subprocess
 import sys
@@ -407,6 +408,31 @@ def _without_descriptions(value: Any) -> Any:
     return value
 
 
+def _raise_budget_ceiling(value: Any, key: str | None = None) -> Any:
+    """Apply the intended 0.1.4 result_token_budget ceiling (8000 -> 64000) to a baseline."""
+    if isinstance(value, dict):
+        return {
+            name: (
+                64000
+                if name == "maximum" and item == 8000 and key == "result_token_budget"
+                else _raise_budget_ceiling(item, name)
+            )
+            for name, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_raise_budget_ceiling(item) for item in value]
+    return value
+
+
+def _add_find_mode(spec: Any) -> Any:
+    """Apply the intended 0.1.4 find-mode change (mode enum and context_lines) to an open spec."""
+    spec = copy.deepcopy(spec)
+    properties = spec["inputSchema"]["properties"]
+    properties["mode"]["enum"] = [*properties["mode"]["enum"], "find"]
+    properties["context_lines"] = {"type": "integer", "minimum": 0, "maximum": 50}
+    return spec
+
+
 def test_source_profile_schemas_match_baseline_except_retrieve_selector_extension(
     tmp_path: Path,
 ) -> None:
@@ -419,9 +445,15 @@ def test_source_profile_schemas_match_baseline_except_retrieve_selector_extensio
     current_specs = {spec["name"]: spec for spec in tool_specs("source")}
     assert list(current_specs) == list(head_specs)
     # Descriptions are guidance text, not schema structure; every other key is compared.
+    # The result_token_budget ceiling is an intended 0.1.4 change, so the baseline takes it.
     for name, spec in head_specs.items():
         if name != "contextshrink_retrieve":
-            assert _without_descriptions(current_specs[name]) == _without_descriptions(spec), name
+            expected = _raise_budget_ceiling(spec)
+            if name == "contextshrink_open":
+                expected = _add_find_mode(expected)
+            assert _without_descriptions(current_specs[name]) == _without_descriptions(expected), (
+                name
+            )
 
     head_retrieve = head_specs["contextshrink_retrieve"]
     current_retrieve = current_specs["contextshrink_retrieve"]
@@ -429,7 +461,7 @@ def test_source_profile_schemas_match_baseline_except_retrieve_selector_extensio
     current_selector = current_retrieve["inputSchema"]["properties"]["selector"]
     assert current_selector["oneOf"][: len(head_selector["oneOf"])] == head_selector["oneOf"]
     assert len(current_selector["oneOf"]) == len(head_selector["oneOf"]) + 3
-    stripped_head = _without_descriptions(head_retrieve)
+    stripped_head = _raise_budget_ceiling(_without_descriptions(head_retrieve))
     stripped_current = _without_descriptions(current_retrieve)
     for item in (stripped_head, stripped_current):
         item["inputSchema"]["properties"]["selector"].pop("oneOf")

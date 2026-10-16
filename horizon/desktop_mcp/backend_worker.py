@@ -48,7 +48,7 @@ def _make_backend(settings: DesktopSettings) -> Any:
         max_snapshot_bytes=settings.max_snapshot_bytes,
         max_store_bytes=settings.max_store_bytes,
         max_snapshots=settings.max_snapshots,
-        result_token_budget=getattr(settings, "result_token_budget", 2000),
+        result_token_budget=getattr(settings, "result_token_budget", 32000),
         max_result_bytes=settings.max_result_bytes,
         counting_model=getattr(settings, "counting_model", None),
         eval_arm=getattr(settings, "eval_arm", "optimized"),
@@ -149,6 +149,9 @@ class Runtime:
             if operation == "search":
                 result = self.backend.search(args["query"], limit=args["limit"])
             elif operation == "open":
+                open_kwargs: dict[str, Any] = {}
+                if args.get("context_lines") is not None:
+                    open_kwargs["context_lines"] = args["context_lines"]
                 result = self.backend.open(
                     args["source"],
                     start_line=args["start_line"],
@@ -157,6 +160,7 @@ class Runtime:
                     query=args.get("query"),
                     result_token_budget=args.get("result_token_budget"),
                     cursor=args.get("cursor"),
+                    **open_kwargs,
                 )
             elif operation == "analyze":
                 result = self.backend.analyze(
