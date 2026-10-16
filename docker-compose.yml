@@ -63,6 +63,11 @@ services:
       # Seconds to compress one Codex WebSocket frame before forwarding it as is
       # (default 5). Slower hosts such as the Pi 5 need more.
       - HORIZON_CODEX_WS_COMPRESSION_TIMEOUT_SECONDS=${HORIZON_CODEX_WS_COMPRESSION_TIMEOUT_SECONDS:-}
+      # Documents pasted into a prompt (horizon/transforms/content_router.py):
+      # off unless .env sets 1. QUERY keeps only the sections a narrow question
+      # is about (horizon/transforms/query_prune.py); whole-document asks are left whole.
+      - HORIZON_PROMPT_DOCUMENTS=${HORIZON_PROMPT_DOCUMENTS:-0}
+      - HORIZON_PROMPT_DOCUMENTS_QUERY=${HORIZON_PROMPT_DOCUMENTS_QUERY:-0}
       - CONTEXTSHRINK_SERVICE_TOKEN=${CONTEXTSHRINK_SERVICE_TOKEN:?set CONTEXTSHRINK_SERVICE_TOKEN}
     volumes:
       - horizon_workspace:/home/nonroot/.horizon
