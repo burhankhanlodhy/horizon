@@ -1,6 +1,6 @@
 """Build the portable self-test kit for a laptop without Python.
 
-    python desktop/mcp/self-test/build_kit.py [--skip-build] [--seed 20261015] [--profile session|single]
+    python desktop/mcp/self-test/build_kit.py [--skip-build] [--seed N] [--profile session|single]
 
 It builds (or reuses) the frozen extension, generates the fictional test
 documents and pack, and writes a zip holding the launcher, the bundled runtime,
@@ -232,14 +232,18 @@ def _session_plan(pack: dict) -> dict[str, str]:
     return {"tasks": str(len(pack["tasks"]))}
 
 
-def dataset_args(profile: str, seed: int, out: Path) -> list[str]:
-    """Arguments for make_dataset.main: the session profile, or the earlier single kit."""
+def dataset_args(profile: str, seed: int | None, out: Path) -> list[str]:
+    """Arguments for make_dataset.main: the session profile, or the earlier single kit.
+
+    Without a seed each profile uses its own default (session 20261016, single
+    20261015), so the kit holds the same documents the dataset tests check.
+    """
+    seed_args = [] if seed is None else ["--seed", str(seed)]
     if profile == "session":
         return [
             "--out",
             str(out),
-            "--seed",
-            str(seed),
+            *seed_args,
             "--study-id",
             SESSION_STUDY_ID,
             "--profile",
@@ -248,8 +252,7 @@ def dataset_args(profile: str, seed: int, out: Path) -> list[str]:
     return [
         "--out",
         str(out),
-        "--seed",
-        str(seed),
+        *seed_args,
         "--study-id",
         KIT_STUDY_ID,
         "--methods",
@@ -267,7 +270,7 @@ def _zip_dir(source: Path, target: Path, root_name: str) -> None:
             archive.writestr(info, path.read_bytes())
 
 
-def build_kit(*, skip_build: bool, seed: int, profile: str = DEFAULT_PROFILE) -> Path:
+def build_kit(*, skip_build: bool, seed: int | None, profile: str = DEFAULT_PROFILE) -> Path:
     if profile not in PROFILES:
         raise SystemExit(f"unknown profile: {profile}")
     build_extension = _load("cs_build_extension", EXTENSION_DIR / "build_extension.py")
@@ -320,7 +323,7 @@ def build_kit(*, skip_build: bool, seed: int, profile: str = DEFAULT_PROFILE) ->
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--skip-build", action="store_true", help="reuse the existing build")
-    parser.add_argument("--seed", type=int, default=20261015)
+    parser.add_argument("--seed", type=int, default=None, help="default: the profile's own seed")
     parser.add_argument(
         "--profile",
         choices=PROFILES,

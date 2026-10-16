@@ -791,6 +791,9 @@ def test_kit_defaults_to_the_session_profile_and_keeps_the_single_kit(tmp_path: 
     assert "--profile" not in single
     assert single[single.index("--study-id") + 1] == "st_generated_v2"
     assert single[single.index("--methods") + 1] == "B,C_normal"
+    # No seed given: each profile keeps its own default, the dataset the tests check.
+    assert "--seed" not in kit.dataset_args("session", None, tmp_path)
+    assert "--seed" not in kit.dataset_args("single", None, tmp_path)
 
 
 def test_session_guide_covers_the_two_chats_the_check_and_the_documents() -> None:
