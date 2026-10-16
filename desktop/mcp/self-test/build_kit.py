@@ -26,6 +26,9 @@ EXTENSION_DIR = REPO_ROOT / "desktop" / "mcp" / "extension"
 DIST_DIR = EXTENSION_DIR / "dist"
 # Fixed timestamp so the same inputs give the same zip bytes.
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+# The laptop kit runs the two methods that matter for the main question (24 chats).
+KIT_STUDY_ID = "st_generated_v2"
+KIT_METHODS = "B,C_normal"
 
 
 def _load(name: str, path: Path) -> ModuleType:
@@ -97,10 +100,10 @@ GUIDE = """ContextShrink self test - quick guide
 
 What this does
   Measures, on your own Claude Enterprise account, whether ContextShrink
-  makes Claude Desktop work cheaper without worse answers. You do 12 tasks,
-  each with 4 methods (48 chats), in one day: about 3 hours. Cost comes from
-  the usage total Claude Desktop shows you. The documents in the
-  "documents" folder are invented test data.
+  makes Claude Desktop work cheaper without worse answers. You do {tasks}
+  tasks, each with {methods} methods ({chats} chats), in one day: about
+  {hours} hours. Cost comes from the usage total Claude Desktop shows you.
+  The documents in the "documents" folder are invented test data.
 
 One-time setup
   1. Unzip this whole folder somewhere permanent, for example your Desktop.
@@ -116,10 +119,10 @@ On the test day
     no Claude Code, no Codex. They show up in the usage total.
   - Double-click "Start Self Test.cmd" and press 1. The wizard shows every
     step:
-      * Each of the 8 phases starts with a setup list. When it says to
+      * Each of the {phases} phases starts with a setup list. When it says to
         change Pilot method, fully quit and reopen Claude Desktop, then ask
         Claude "show ContextShrink stats" in a new chat to confirm
-        evaluation_arm (raw for method A, optimized for B).
+        evaluation_arm (optimized for method B, raw for method A).
       * For each task: type the usage total (Settings > Usage, for example
         20.23), start a NEW chat, paste the prompt (press C to copy),
         attach the file if the method says so, wait for the full reply,
@@ -137,6 +140,27 @@ At the end
   Send report.json to Claude Code. It holds no document text and no answer
   text, only costs, right/wrong counts and the verdict.
 """
+
+
+def _plan_numbers(pack: dict) -> dict[str, str]:
+    """The plan figures for the guide, from the pack: tasks, methods, phases, chats, hours."""
+    from horizon.desktop_mcp.self_test_cli import MINUTES_PER_CHAT, MINUTES_PER_PHASE
+
+    methods = len(pack.get("methods", ["A", "B", "C_normal", "C_tuned"]))
+    tasks = len(pack["tasks"])
+    phases = 2 * methods
+    chats = tasks * methods
+    low = (chats * MINUTES_PER_CHAT[0] + phases * MINUTES_PER_PHASE[0]) / 60
+    high = (chats * MINUTES_PER_CHAT[1] + phases * MINUTES_PER_PHASE[1]) / 60
+    # The middle of the planning range, rounded to the nearest half hour.
+    hours = round((low + high) / 2 * 2) / 2
+    return {
+        "tasks": str(tasks),
+        "methods": str(methods),
+        "phases": str(phases),
+        "chats": str(chats),
+        "hours": f"{hours:g}",
+    }
 
 
 def _zip_dir(source: Path, target: Path, root_name: str) -> None:
@@ -165,7 +189,17 @@ def build_kit(*, skip_build: bool, seed: int) -> Path:
     kit_name = f"ContextShrink-SelfTest-{VERSION}"
     with tempfile.TemporaryDirectory() as scratch:
         generated = Path(scratch) / "generated"
-        if make_dataset.main(["--out", str(generated), "--seed", str(seed)]) != 0:
+        dataset_args = [
+            "--out",
+            str(generated),
+            "--seed",
+            str(seed),
+            "--study-id",
+            KIT_STUDY_ID,
+            "--methods",
+            KIT_METHODS,
+        ]
+        if make_dataset.main(dataset_args) != 0:
             raise SystemExit("dataset generation failed")
         pack = json.loads((generated / "pack.json").read_text(encoding="utf-8"))
 
@@ -177,7 +211,9 @@ def build_kit(*, skip_build: bool, seed: int) -> Path:
         shutil.copy2(generated / "pack.json", kit / "pack.json")
         launcher = LAUNCHER.replace("{study_id}", pack["study_id"])
         (kit / "Start Self Test.cmd").write_bytes(launcher.replace("\n", "\r\n").encode("ascii"))
-        guide = GUIDE.format(version=VERSION, model_label=pack["model_label"])
+        guide = GUIDE.format(
+            version=VERSION, model_label=pack["model_label"], **_plan_numbers(pack)
+        )
         (kit / "GUIDE.txt").write_bytes(guide.replace("\n", "\r\n").encode("utf-8"))
 
         DIST_DIR.mkdir(parents=True, exist_ok=True)

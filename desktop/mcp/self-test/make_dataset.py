@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_SEED = 20261015
+DEFAULT_STUDY_ID = "st_generated_v1"
+ALL_METHODS = ["A", "B", "C_normal", "C_tuned"]
+_STUDY_ID = re.compile(r"^st_[a-z0-9_]{1,40}$")
 COMPANY = "Quorvale Freight Partners"
 NOTICE = (
     f"Fictional test data: {COMPANY} is an invented company, so nothing in these files is real."
@@ -700,11 +703,13 @@ def _task(task_id: str, source: str, question: str, answer: dict[str, Any]) -> d
     return {"task_id": task_id, "source_files": [source], "question": question, "answer": answer}
 
 
-def _pack(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def _pack(
+    tasks: list[dict[str, Any]], study_id: str = DEFAULT_STUDY_ID, methods: list[str] | None = None
+) -> dict[str, Any]:
+    pack: dict[str, Any] = {
         "schema_version": 1,
         "kind": "self_test_pack",
-        "study_id": "st_generated_v1",
+        "study_id": study_id,
         "model_label": "Claude Opus, Medium effort",
         "minimums": {"paired_units": 10, "groups": 8},
         "quality_tolerance": 1,
@@ -714,12 +719,30 @@ def _pack(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         ],
         "tasks": tasks,
     }
+    # Only a subset is written out; the full set is the default and is left implicit.
+    if methods is not None and methods != ALL_METHODS:
+        pack["methods"] = methods
+    return pack
+
+
+def _method_list(text: str) -> list[str]:
+    """Parse ``--methods``: a comma list of distinct names, in the canonical order."""
+    names = [name.strip() for name in text.split(",")]
+    if any(name not in ALL_METHODS for name in names):
+        raise DatasetError("--methods names an unknown method")
+    if len(set(names)) != len(names):
+        raise DatasetError("--methods lists a method twice")
+    if not {"B", "C_normal"} <= set(names):
+        raise DatasetError("--methods must include B and C_normal")
+    return [name for name in ALL_METHODS if name in names]
 
 
 # ------------------------------------------------------------------------- driver
 
 
-def build(seed: int) -> tuple[dict[str, str], dict[str, Any]]:
+def build(
+    seed: int, study_id: str = DEFAULT_STUDY_ID, methods: list[str] | None = None
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Return ``{file_name: text}`` and the pack, all derived from ``seed``."""
     rng = random.Random(seed)
     files: dict[str, str] = {}
@@ -816,17 +839,24 @@ def build(seed: int) -> tuple[dict[str, str], dict[str, Any]]:
             {"kind": "number", "expected": str(extension), "tolerance": "0"},
         ),
     ]
-    return files, _pack(tasks)
+    return files, _pack(tasks, study_id, methods)
 
 
-def generate(out: Path, seed: int = DEFAULT_SEED) -> dict[str, Any]:
+def generate(
+    out: Path,
+    seed: int = DEFAULT_SEED,
+    study_id: str = DEFAULT_STUDY_ID,
+    methods: list[str] | None = None,
+) -> dict[str, Any]:
     """Write the dataset into ``out`` and return the pack. Refuses a non-empty ``out``."""
     out = Path(out)
+    if not _STUDY_ID.fullmatch(study_id):
+        raise DatasetError("--study-id must look like st_my_study (lowercase letters, digits, _)")
     if out.exists() and not out.is_dir():
         raise DatasetError("output path exists and is not a directory")
     if out.is_dir() and any(out.iterdir()):
         raise DatasetError("refusing to overwrite a non-empty directory")
-    files, pack = build(seed)
+    files, pack = build(seed, study_id, methods)
     documents = out / "documents"
     documents.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
@@ -841,9 +871,16 @@ def main(argv: list[str] | None = None) -> int:
         "--out", required=True, type=Path, help="output directory (must be empty or absent)"
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="integer seed")
+    parser.add_argument("--study-id", default=DEFAULT_STUDY_ID, help="study id written to the pack")
+    parser.add_argument(
+        "--methods",
+        default=",".join(ALL_METHODS),
+        help="comma list of methods, from A,B,C_normal,C_tuned; must include B and C_normal",
+    )
     args = parser.parse_args(argv)
     try:
-        generate(args.out, args.seed)
+        methods = _method_list(args.methods)
+        generate(args.out, args.seed, args.study_id, methods)
     except DatasetError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
