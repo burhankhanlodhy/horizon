@@ -317,7 +317,12 @@ def _prompt_document_question(text: str, start: int, end: int, hint: str = "") -
     # Typed words sit at the outer ends: before a paste, or after it.
     lead = [p.strip() for p in _PROMPT_DOC_BREAK_RE.split(text[:start]) if p.strip()]
     tail = [p.strip() for p in _PROMPT_DOC_BREAK_RE.split(text[end:]) if p.strip()]
-    parts = [p for p in lead[:1] + tail[-1:] if len(p) <= PROMPT_DOC_QUESTION_MAX_CHARS]
+    parts = [
+        p
+        for p in lead[:1] + tail[-1:]
+        # A markdown heading is the document's own title, not the ask.
+        if len(p) <= PROMPT_DOC_QUESTION_MAX_CHARS and not p.startswith("#")
+    ]
     return "\n".join(dict.fromkeys(parts))
 
 

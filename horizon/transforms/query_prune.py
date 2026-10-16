@@ -178,7 +178,9 @@ def question_scope(question: str, document: str | None = None) -> str | None:
     With ``document``, a narrow question must name at least two things the
     document itself mentions: "is this ready to ship?" names nothing in it.
     """
-    q = " ".join(question.split())
+    # Line breaks separate asks ("Thanks.\nHow does X work?"): keep them as
+    # sentence breaks so a question on its own line is still seen as one.
+    q = " ".join(re.sub(r"\s*\n\s*", ". ", question.strip()).split())
     if not q:
         return None
     if _WHOLE_DOC_RE.search(q):
