@@ -283,11 +283,19 @@ async def _run_arm(
                 + sum(call["argument_utf8_bytes"] for call in calls)
                 + sum(call["sdk_call_tool_result_utf8_bytes"] for call in calls)
             ),
-            "counterfactual_per_call_raw_equivalent_inner_tokens": sum(
-                (row.get("full_inner_result_accounting") or {}).get(
-                    "raw_equivalent_token_estimate", 0
+            # Since 0.1.6 the MCP result is the model view, which carries no accounting;
+            # report None rather than a silent zero when it is absent.
+            "counterfactual_per_call_raw_equivalent_inner_tokens": (
+                sum(
+                    row["full_inner_result_accounting"].get("raw_equivalent_token_estimate", 0)
+                    for row in quality_rows
                 )
-                for row in quality_rows
+                if quality_rows
+                and all(
+                    isinstance(row.get("full_inner_result_accounting"), dict)
+                    for row in quality_rows
+                )
+                else None
             ),
         },
     }
@@ -332,7 +340,7 @@ async def _evaluate(
             "sdk_result": "serialized typed CallToolResult objects counted for every call, including errors and exact recovery calls",
             "arguments": "serialized tool arguments counted for every call",
             "schemas_and_instructions": "captured once per arm and included as fixed one-time estimate",
-            "inner_result": "TextContent.text counted separately; per-result source/full-result accounting is nested in opened results",
+            "inner_result": "TextContent.text counted separately; since 0.1.6 the MCP result is the model view without per-result accounting",
             "json_rpc_framing": "not captured by the in-memory transport",
             "stdio_protocol_bytes": "not measured",
             "host_added_context": "unknown",

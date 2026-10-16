@@ -74,7 +74,7 @@ def test_template_and_build_validation_pass() -> None:
 
 
 def test_version_is_the_current_release() -> None:
-    assert VERSION == "0.1.5"
+    assert VERSION == "0.1.6"
 
 
 # --- argument mapping ----------------------------------------------------------------

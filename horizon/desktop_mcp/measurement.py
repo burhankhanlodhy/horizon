@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .model_view import model_view
+
 _O200K_URL = "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
 _O200K_SHA256 = "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d"
 _TOKENIZER_NAME = "o200k_base"
@@ -217,8 +219,9 @@ def _payload_with_accounting(payload: dict[str, Any], accounting: dict[str, Any]
 def _count_pair(
     payload: dict[str, Any], raw_payload: dict[str, Any], estimator: TokenEstimator
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    delivered = measure_payload(payload, estimator)
-    raw = measure_payload(raw_payload, estimator)
+    """Measure both sides as the model receives them (see ``model_view``)."""
+    delivered = measure_payload(model_view(payload), estimator)
+    raw = measure_payload(model_view(raw_payload), estimator)
     return raw, delivered
 
 
@@ -237,8 +240,9 @@ def finalize_accounting(
 
     The raw baseline must be the same metadata/scope with ``raw_text`` in the
     same text-bearing field as ``rendered_text`` in ``payload``.  Counting is
-    performed on the full inner JSON result, including its metadata and the
-    final accounting object.  Three passes bound self-counting overhead.
+    performed on the model view of the inner JSON result (``model_view``), which
+    drops the accounting object itself, so the figures describe what the model
+    receives.  The passes bound the fixed point of the byte fields.
     """
     if not isinstance(payload, dict) or not isinstance(raw_payload, dict):
         raise TypeError("payload and raw_payload must be dictionaries")
@@ -325,8 +329,8 @@ def finalize_accounting(
     for _ in range(8):
         final_payload = _payload_with_accounting(clean_payload, accounting)
         final_raw_payload = _payload_with_accounting(clean_raw, accounting)
-        actual_delivered = measure_payload(final_payload, active)
-        actual_raw = measure_payload(final_raw_payload, active)
+        actual_delivered = measure_payload(model_view(final_payload), active)
+        actual_raw = measure_payload(model_view(final_raw_payload), active)
         result_accounting = accounting["result"]
         if (
             result_accounting.get("delivered_utf8_bytes") == actual_delivered["utf8_bytes"]

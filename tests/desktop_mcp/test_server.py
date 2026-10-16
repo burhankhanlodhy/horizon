@@ -118,15 +118,18 @@ async def test_results_obey_configured_byte_limit() -> None:
 
 
 @pytest.mark.anyio
-async def test_local_presentation_controls_are_forwarded_and_accounting_is_not_mutated() -> None:
+async def test_local_presentation_controls_are_forwarded_and_model_sees_projection() -> None:
+    # The backend keeps the full payload (accounting included); the MCP result is
+    # the model view, so bookkeeping such as accounting and selector is not sent.
     class LocalContractBackend:
         def __init__(self) -> None:
             self.open_calls = []
             self.retrieve_calls = []
+            self.last_payload = None
 
         def open(self, source, *, mode="exact", query=None, result_token_budget=None, cursor=None):
             self.open_calls.append((source, mode, query, result_token_budget, cursor))
-            return {
+            self.last_payload = {
                 "source_id": "cs1_example",
                 "version": "v1",
                 "mode": mode,
@@ -135,10 +138,11 @@ async def test_local_presentation_controls_are_forwarded_and_accounting_is_not_m
                 "more_available": cursor is None,
                 "next_cursor": "next-page" if cursor is None else None,
             }
+            return self.last_payload
 
         def retrieve(self, source_id, selector, *, result_token_budget=None, cursor=None):
             self.retrieve_calls.append((source_id, selector, result_token_budget, cursor))
-            return {
+            self.last_payload = {
                 "source_id": source_id,
                 "version": "v1",
                 "selector": selector,
@@ -146,6 +150,7 @@ async def test_local_presentation_controls_are_forwarded_and_accounting_is_not_m
                 "accounting": {"delivered_payload_est_tokens": 24, "count_basis": "test"},
                 "more_available": cursor is None,
             }
+            return self.last_payload
 
         def stats(self):
             return {}
@@ -171,7 +176,14 @@ async def test_local_presentation_controls_are_forwarded_and_accounting_is_not_m
             )
             assert response.isError is False
             assert response.structuredContent is None
-            assert json.loads(response.content[0].text)["accounting"] == {
+            # Final page: no cursor is offered, and the model view keeps no
+            # version, accounting or pagination fields.
+            assert json.loads(response.content[0].text) == {
+                "source_id": "cs1_example",
+                "mode": mode,
+                "text": "bounded result",
+            }
+            assert backend.last_payload["accounting"] == {
                 "delivered_payload_est_tokens": 42,
                 "count_basis": "test",
             }
@@ -193,7 +205,9 @@ async def test_local_presentation_controls_are_forwarded_and_accounting_is_not_m
                 },
             )
             assert response.isError is False
-            assert json.loads(response.content[0].text)["selector"]["type"] == selector["type"]
+            body = json.loads(response.content[0].text)
+            assert body == {"source_id": "cs1_example", "text": "exact excerpt"}
+            assert backend.last_payload["selector"]["type"] == selector["type"]
 
     assert len(backend.open_calls) == 4
     assert backend.open_calls[2] == ("cs1_example", "focused", "renewal", 512, "cursor-token")

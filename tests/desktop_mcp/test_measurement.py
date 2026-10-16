@@ -8,6 +8,7 @@ from horizon.desktop_mcp.measurement import (
     finalize_accounting,
     measure_payload,
 )
+from horizon.desktop_mcp.model_view import model_view
 
 
 class _CharacterEstimator:
@@ -94,7 +95,11 @@ def test_finalize_accounting_separates_source_reduction_from_complete_result() -
     assert accounting["host_overhead"] == "unknown"
     assert accounting["retrieval"]["call_count"] == 0
     assert "accounting" not in raw
-    serialized = json.dumps(finalized, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    # Delivered figures describe the model view, which carries no accounting block.
+    assert "accounting" not in model_view(finalized)
+    serialized = json.dumps(
+        model_view(finalized), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
     assert len(serialized.encode("utf-8")) == accounting["result"]["delivered_utf8_bytes"]
     assert estimator.count_text(serialized) == accounting["result"]["delivered_token_estimate"]
     json.dumps(finalized)
