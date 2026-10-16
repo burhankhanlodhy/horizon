@@ -183,6 +183,12 @@ What this does
   chat. Cost comes from the usage total Claude Desktop shows you. The documents in
   the "documents" folder are invented test data.
 
+When ContextShrink helps
+  It saves money on files Claude reads through it, most when a chat keeps
+  asking about large files. It does not change ordinary chatting, small
+  attachments or code Claude writes, so this result applies to chats like
+  this test, not to every chat.
+
 One-time setup
   1. Unzip this whole folder somewhere permanent, for example your Desktop.
   2. Fully quit Claude Desktop from the tray. In Settings > Extensions, remove any

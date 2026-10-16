@@ -18,6 +18,12 @@ Build it with `python desktop/mcp/self-test/build_kit.py`. It writes
 generated documents, a launcher (`Start Self Test.cmd`) and its own short
 `GUIDE.txt`.
 
+**What the test can show.** ContextShrink saves money only on files Claude
+reads through it, and most when a chat keeps asking about large files. It does
+not change ordinary chatting, small attachments, or code that Claude writes.
+See "When ContextShrink helps" in `extension/README.md`. A result from this test
+applies to chats like the test, not to every chat.
+
 ## Before the day
 
 1. **Install extension 0.1.3 on the test laptop.** Fully quit Claude Desktop from

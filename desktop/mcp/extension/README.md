@@ -17,6 +17,23 @@ Build output goes to `build/` and `dist/` in this directory. Both are
 git-ignored. Nothing here uploads or publishes an artifact. Installers are not
 hosted on GitHub.
 
+## When ContextShrink helps
+
+ContextShrink can only shrink what Claude reads through its tools: files in
+your approved folders. It cannot change your messages, Claude's answers, or the
+chat history that Claude Desktop keeps.
+
+| Your chat | Expected effect |
+|---|---|
+| Repeated questions about large files (exports, logs, contracts, folders of documents) | Saves money. `find` returns a few hundred tokens instead of the whole file, and only that small result stays in the history for later questions. |
+| Files too large to attach | Makes the work possible at all |
+| One question about a large file | About the same as attaching it, or slightly more |
+| A long chat with one or two small files | About break-even. Attaching small files is cheap. |
+| Chatting with no files | No saving. The tool list adds about 1,500 cached tokens per turn, usually well under 1% of the bill. |
+| Building code or documents in the chat | No saving. Claude's own output and the history are outside the extension's reach. ContextShrink is read-only. |
+
+Turn the connector on for chats about large local files, and off otherwise.
+
 ## Commands
 
 Run from the repository root with the project virtual environment:
