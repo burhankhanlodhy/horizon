@@ -219,18 +219,18 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
         "name": "contextshrink_open",
         "description": (
             "Open a source in one presentation mode; choose by task. Open a file by its name "
-            "directly; no search is needed when you know the name. For each new question, call "
-            "find again instead of re-reading the whole file. find: with a query, to look "
-            "up a specific value, ID, name or date, or to count lines (returns every matching "
-            "line with line numbers and the total count; set context_lines to see nearby lines). "
-            "One open normally answers the question; results hold large files whole, so do not "
-            "page through a file to look for something. compact: for JSON, logs, config or diff "
-            "files; output is verified or labelled normalized and falls back to exact when the "
-            "saving is small. focused: with a query, to answer a specific question in a long "
-            "document; exact passages only, coverage is partial, so use contextshrink_retrieve "
-            "for exact sections. overview: first, to orient in a long document; headings or pages "
-            "only, not a summary. exact (default): for quoting, full review, small files, or when "
-            "the user asks for everything."
+            "directly. For several questions about one structured file (JSON, logs, config), open "
+            "it once in compact and answer later questions from that result; for a single lookup "
+            "or prose, use find. find: with a query, to look up a specific value, ID, name or "
+            "date, or to count lines (every matching line with line numbers and the total count; "
+            "set context_lines to see nearby lines). One open normally answers the question; do not page "
+            "through a file to look for something. compact: for JSON, logs, config or diff files; "
+            "output is verified or labelled normalized and falls back to exact when the saving is "
+            "small. focused: with a query, to answer a specific question in a long document; exact "
+            "passages only, coverage is partial, so use contextshrink_retrieve for exact sections. "
+            "overview: first, to orient in a long document; headings or pages only, not a summary. "
+            "exact (default): for quoting, full review, small files, or when the user asks for "
+            "everything."
         ),
         "inputSchema": {
             "type": "object",

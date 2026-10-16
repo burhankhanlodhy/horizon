@@ -10,13 +10,15 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from horizon.desktop_mcp.compression import compact_json, compact_text
+from horizon.desktop_mcp.compression import _minify_json_whitespace, compact_json, compact_text
+from horizon.desktop_mcp.json_table import decode, same_json
 from horizon.desktop_mcp.local_backend import LocalBackend, LocalBackendError
 from horizon.desktop_mcp.policies import PolicyError, present_snapshot
 from horizon.desktop_mcp.selectors import SelectorError, select_exact
@@ -334,22 +336,30 @@ _JSON_CASES = {
 def test_compact_json_preserves_tokens_order_and_number_lexemes(name: str) -> None:
     source = _JSON_CASES[name]
     outcome = compact_json(source)
-    out = outcome.text
 
     assert outcome.applied, "every case has insignificant whitespace"
+    assert outcome.fidelity in ("normalized_json_whitespace", "normalized_json_table")
+    original_numbers = _number_lexemes(_typed(_tagged(source)))
+    if outcome.transform == "json_table":
+        # The table form is not JSON text; its contract is value, key order,
+        # exact types and number spelling (see test_json_table.py).
+        assert same_json(decode(outcome.text), json.loads(source, parse_float=Decimal))
+        for lexeme in original_numbers:
+            assert lexeme in outcome.text, f"number lexeme {lexeme} was not kept verbatim"
+        return
+
+    out = outcome.text
     assert outcome.fidelity == "normalized_json_whitespace"
     assert _spec_tokens(out) == _spec_tokens(source)
     assert _typed(_tagged(out)) == _typed(_tagged(source))
-
-    original_numbers = _number_lexemes(_typed(_tagged(source)))
     assert _number_lexemes(_typed(_tagged(out))) == original_numbers
     for lexeme in original_numbers:
         assert lexeme in out, f"number lexeme {lexeme} was not kept verbatim"
 
 
-def test_compact_json_keeps_string_escape_spellings_verbatim() -> None:
+def test_whitespace_minification_keeps_string_escape_spellings_verbatim() -> None:
     source = _JSON_CASES["escapes"]
-    out = compact_json(source).text
+    out = _minify_json_whitespace(source)
     assert r"\u00e9" in out
     assert r"\ud83d\ude00" in out
     assert r"\n" in out
@@ -357,8 +367,8 @@ def test_compact_json_keeps_string_escape_spellings_verbatim() -> None:
     assert r"\\slash" in out
 
 
-def test_compact_json_preserves_key_order_as_written() -> None:
-    out = compact_json(_JSON_CASES["key_order"]).text
+def test_whitespace_minification_preserves_key_order_as_written() -> None:
+    out = _minify_json_whitespace(_JSON_CASES["key_order"])
     assert out.index('"z"') < out.index('"a"') < out.index('"m"')
     assert out.index('"y"') < out.index('"b"')
 
@@ -538,11 +548,12 @@ def test_percent_gate_wins_when_five_percent_exceeds_token_minimum() -> None:
     source = _boundary_source()
     raw, gain = _measured_gain(source)
     five_percent = int(raw * 5 / 100)
-    # Preconditions: the token minimum (64) passes, but 5% of raw is larger.
-    assert 64 <= gain < five_percent
+    # Preconditions: the token minimum (the measured gain, which counts the
+    # compression_ratio field) passes, but 5% of raw is larger.
+    assert gain < five_percent
 
-    assert _present_compact(source, min_tokens=64, min_percent=0)["compression_applied"] is True
-    assert _present_compact(source, min_tokens=64, min_percent=5)["compression_applied"] is False
+    assert _present_compact(source, min_tokens=gain, min_percent=0)["compression_applied"] is True
+    assert _present_compact(source, min_tokens=gain, min_percent=5)["compression_applied"] is False
 
 
 @pytest.mark.parametrize("min_tokens", [0, 64, 200])

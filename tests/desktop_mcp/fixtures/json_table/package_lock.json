@@ -1,0 +1,481 @@
+{
+  "name": "fixture-app",
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "requires": true,
+  "dependencies": {
+    "pkg-billing-018": {
+      "version": "3.17.5",
+      "resolved": "https://registry.example.test/pkg-billing-018/-/pkg-billing-018-3.17.5.tgz",
+      "integrity": "sha512-YGxf8+WEMcNfV7j5+e2bieCIonqSk33CS9a5UzLZx0kEBJJU925bSOl8CbzEIsXRrpqw1YSZFtTu/pQ98TjJDA==",
+      "dev": true
+    },
+    "pkg-export-012": {
+      "version": "0.16.3",
+      "resolved": "https://registry.example.test/pkg-export-012/-/pkg-export-012-0.16.3.tgz",
+      "integrity": "sha512-vdR/x83xC5lTWCx8ftUNcfURFzXqQSxIwd9JMufc6gJCuRK0MjtUFt0MBfmrwP+leUH9dQRyWIB/oMJdveuUuQ==",
+      "requires": {
+        "pkg-retry-047": "^1.0.0",
+        "pkg-session-031": "^1.2.0",
+        "pkg-session-053": "^2.8.0"
+      },
+      "dependencies": {
+        "pkg-migration-072": {
+          "version": "4.13.0",
+          "resolved": "https://registry.example.test/pkg-migration-072/-/pkg-migration-072-4.13.0.tgz",
+          "integrity": "sha512-0S/rExdpHuoZSZLeeXaqmqw+7mwXRrSMVJsT9cm/S0ZtIdqexYJ52tS34fR/J+kIw0/jCrFFy6+bGZFMwrFCgA==",
+          "dev": true,
+          "requires": {
+            "pkg-upload-055": "^3.6.0",
+            "pkg-render-035": "^1.9.0"
+          }
+        },
+        "pkg-schema-005": {
+          "version": "0.11.8",
+          "resolved": "https://registry.example.test/pkg-schema-005/-/pkg-schema-005-0.11.8.tgz",
+          "integrity": "sha512-MMrCke9vEUUQdoaT8d8JZa9RWpObalEzh266xr7nWcHE0mKiwSQyFpBxDl0q8wksH9b/Tyuh5jz01oa/fclyzw==",
+          "requires": {
+            "pkg-latency-074": "^1.2.0",
+            "pkg-schema-027": "^2.9.0"
+          },
+          "dependencies": {
+            "pkg-index-080": {
+              "version": "2.14.26",
+              "resolved": "https://registry.example.test/pkg-index-080/-/pkg-index-080-2.14.26.tgz",
+              "integrity": "sha512-Scvy9GQOEJODU71aDWAZhJt8sqvkuteKmmHI+jzBstd/Cd5KLUaE8y2Fp2GpaBZF5cT2loXaXFxULEWWhykUoA==",
+              "dev": true,
+              "requires": {
+                "pkg-webhook-070": "^3.5.0"
+              }
+            },
+            "pkg-replica-082": {
+              "version": "2.4.27",
+              "resolved": "https://registry.example.test/pkg-replica-082/-/pkg-replica-082-2.4.27.tgz",
+              "integrity": "sha512-IQRD4sH8sIBhL/x/a87Plc0Vd0HGTji51aOhczQlSHG/GsFfkL/lsM4VobllP4BY3lTqF8vkCfFjrGS1pYl3oA==",
+              "requires": {
+                "pkg-parser-045": "^3.3.0",
+                "pkg-migration-028": "^0.9.0",
+                "pkg-index-080": "^0.3.0"
+              }
+            }
+          }
+        },
+        "pkg-timeout-002": {
+          "version": "4.9.3",
+          "resolved": "https://registry.example.test/pkg-timeout-002/-/pkg-timeout-002-4.9.3.tgz",
+          "integrity": "sha512-tEo+ekIJ6GZKcX8it9t9olqn3armlF3L/A8oMgriW/m4XbDkDmK8gDhMGSrk4Gz4yo0oZYIuumKonvwi0/lHsQ==",
+          "requires": {
+            "pkg-render-057": "^0.0.0"
+          }
+        }
+      }
+    },
+    "pkg-export-056": {
+      "version": "2.13.11",
+      "resolved": "https://registry.example.test/pkg-export-056/-/pkg-export-056-2.13.11.tgz",
+      "integrity": "sha512-iNV46H4UexJYR40tSucI9XWZUMMUW4aAJko+MNIOD72uN1OSFfA83hHfL86OeW4MsERye/4w2FSZZ2d5A2HU5Q==",
+      "dev": true,
+      "requires": {
+        "pkg-billing-062": "^0.4.0",
+        "pkg-parser-045": "^2.4.0"
+      }
+    },
+    "pkg-index-014": {
+      "version": "4.20.21",
+      "resolved": "https://registry.example.test/pkg-index-014/-/pkg-index-014-4.20.21.tgz",
+      "integrity": "sha512-xS4dUkrLT45PHqnip2/AhdFA/hVYZtSReaZSITIMN1JYxWeL26yFqS3IO04iH4DX2L9Ek27v64sH7PZd+WoCMg=="
+    },
+    "pkg-index-036": {
+      "version": "1.1.0",
+      "resolved": "https://registry.example.test/pkg-index-036/-/pkg-index-036-1.1.0.tgz",
+      "integrity": "sha512-qiFV9WfKzoRUrNI6eYVJ9Ul++4hwfX+Jk+eRkYMzInqaR86+3dyQMY56cxRqHbRqKCkQNJXayGVnNQ4AA3vh0Q==",
+      "dependencies": {
+        "pkg-export-078": {
+          "version": "2.11.19",
+          "resolved": "https://registry.example.test/pkg-export-078/-/pkg-export-078-2.11.19.tgz",
+          "integrity": "sha512-5F1IvO8/eSb22acT6bSI8TtWZSv1HalN0GEqICR+WV1A/KuzlN9rWJftKUNExjXDgtP+C3sVzt9/LTN1dwmbaw==",
+          "requires": {
+            "pkg-metrics-043": "^1.0.0",
+            "pkg-index-014": "^1.7.0"
+          },
+          "dependencies": {
+            "pkg-parser-045": {
+              "version": "4.13.19",
+              "resolved": "https://registry.example.test/pkg-parser-045/-/pkg-parser-045-4.13.19.tgz",
+              "integrity": "sha512-/+XgkWoLAC4UP8MJMqO/fDsKW1k5yXiL8tkOxKAHHOMxFocNa8ZW4IrW/E7RZAlI/f9Rd7CB6JN055EUWmHgAg==",
+              "requires": {
+                "pkg-session-053": "^3.8.0",
+                "pkg-replica-038": "^1.3.0",
+                "pkg-quota-039": "^3.5.0"
+              }
+            }
+          }
+        },
+        "pkg-render-057": {
+          "version": "1.9.30",
+          "resolved": "https://registry.example.test/pkg-render-057/-/pkg-render-057-1.9.30.tgz",
+          "integrity": "sha512-nvfBgrjCDrlrIo+jDzQnWP6rpkeXbDNBgE+R1hX0fOktLaNHz26a43ZjKHYQ5w2qQhZhjncFswa/xULymmarVw==",
+          "requires": {
+            "pkg-billing-018": "^1.5.0",
+            "pkg-shard-081": "^2.8.0"
+          }
+        },
+        "pkg-shard-081": {
+          "version": "3.4.5",
+          "resolved": "https://registry.example.test/pkg-shard-081/-/pkg-shard-081-3.4.5.tgz",
+          "integrity": "sha512-i0y7SODDXyASZljkqVJyRpvwr/oSP7MGRU4wzrAIG/lkNA3LL9NYv02w1isGVYSw3xyme5rtPKRro4wRjwZUYQ=="
+        }
+      }
+    },
+    "pkg-index-080": {
+      "version": "2.13.2",
+      "resolved": "https://registry.example.test/pkg-index-080/-/pkg-index-080-2.13.2.tgz",
+      "integrity": "sha512-Fjt6Lkrjm5VfHoAVcE9SmonWLfqwOm4sig332b8QVE0sKN2M/Q0zRGdaAQWL5O5eKxIZEgMoOmxkaJ2M8PBC/g==",
+      "dev": true,
+      "requires": {
+        "pkg-schema-049": "^1.4.0",
+        "pkg-session-031": "^3.6.0"
+      }
+    },
+    "pkg-latency-008": {
+      "version": "1.7.7",
+      "resolved": "https://registry.example.test/pkg-latency-008/-/pkg-latency-008-1.7.7.tgz",
+      "integrity": "sha512-gjhIimJPcnjsPx84BJfrBaD1vnQD6Ywu8WaCUW3glYsO/jFDNBMQ5RmNg0jzw7mxAktj5o/LvyK1wZ9MYwzsBA==",
+      "requires": {
+        "pkg-webhook-004": "^3.2.0"
+      }
+    },
+    "pkg-login-041": {
+      "version": "2.4.23",
+      "resolved": "https://registry.example.test/pkg-login-041/-/pkg-login-041-2.4.23.tgz",
+      "integrity": "sha512-Lp5/R+3q+fKg1Sevr2xvjnIPW82TZ4mXIKZF7jsTV6FyPNbEZVBPxCx8mMF2U19u0we6cT8uAXMBeO6PV/wN/A==",
+      "requires": {
+        "pkg-index-080": "^0.9.0",
+        "pkg-schema-071": "^0.8.0",
+        "pkg-parser-045": "^1.0.0"
+      }
+    },
+    "pkg-metrics-065": {
+      "version": "2.8.27",
+      "resolved": "https://registry.example.test/pkg-metrics-065/-/pkg-metrics-065-2.8.27.tgz",
+      "integrity": "sha512-IIH8HwK9Ffz5WG0UIawPBPX7JIYBBZAP4nA/2vE9Qm+BrQ1EbkYEy+c3s5J5wLWlJ/CESQ9Y1S/qHGCCN0T7Og==",
+      "requires": {
+        "pkg-index-058": "^0.0.0"
+      }
+    },
+    "pkg-metrics-087": {
+      "version": "3.11.20",
+      "resolved": "https://registry.example.test/pkg-metrics-087/-/pkg-metrics-087-3.11.20.tgz",
+      "integrity": "sha512-bNZSKCsyWL9BWbdre8gz3ak/5FwFQKVMAhoTOuY17fsjW1T8If9X30s9OTEcYbl4hdLHkswJLeshcNFKByEueA=="
+    },
+    "pkg-migration-006": {
+      "version": "2.17.14",
+      "resolved": "https://registry.example.test/pkg-migration-006/-/pkg-migration-006-2.17.14.tgz",
+      "integrity": "sha512-/VUM8MR4EphroEu6ieS+N88zOfjhJGyk7reFRs6WRQwykXZgbsxyjc8jIZNqtv77vDl1J3fRivG7lDUpgmoVPg==",
+      "requires": {
+        "pkg-login-019": "^3.8.0",
+        "pkg-queue-007": "^3.0.0",
+        "pkg-schema-071": "^1.8.0"
+      },
+      "dependencies": {
+        "pkg-billing-062": {
+          "version": "1.0.7",
+          "resolved": "https://registry.example.test/pkg-billing-062/-/pkg-billing-062-1.0.7.tgz",
+          "integrity": "sha512-5+zN6rAVQqS53/m3W3GoAqZD57Yo94oetFiJnexgc42mtzEjseyE20NMUIvx/nFwUvk9AkLKMM7+tY2q02pRsQ==",
+          "requires": {
+            "pkg-session-053": "^1.2.0"
+          }
+        },
+        "pkg-export-078": {
+          "version": "2.11.30",
+          "resolved": "https://registry.example.test/pkg-export-078/-/pkg-export-078-2.11.30.tgz",
+          "integrity": "sha512-ek5LyumTvoVKuS3BfQZLYQ3eeh1CE2MtviQHk47B3dqUOhjKMhdLRGDHpqCP6HcOgNwXNE8L6P+ha6kj+GGQMg==",
+          "dev": true,
+          "requires": {
+            "pkg-export-056": "^0.4.0",
+            "pkg-queue-029": "^0.8.0",
+            "pkg-token-076": "^0.4.0"
+          }
+        },
+        "pkg-render-035": {
+          "version": "4.6.13",
+          "resolved": "https://registry.example.test/pkg-render-035/-/pkg-render-035-4.6.13.tgz",
+          "integrity": "sha512-qK4eCjlh9vzAlnop65Okg4rPvU2nIFer6GdGf3c/aH5OmLrvd1ZGw2jqLmEYNlRenXHotJ9fyAnyFgiT0gOeiw==",
+          "dev": true,
+          "requires": {
+            "pkg-session-009": "^3.0.0",
+            "pkg-webhook-004": "^3.3.0",
+            "pkg-export-078": "^0.0.0"
+          }
+        }
+      }
+    },
+    "pkg-parser-045": {
+      "version": "4.0.20",
+      "resolved": "https://registry.example.test/pkg-parser-045/-/pkg-parser-045-4.0.20.tgz",
+      "integrity": "sha512-5FrEMGmnYXLEM8DLM4CR3uP/+zsEJ7y9KXL6tbTeJAUbyrAofSkrbQ7aGX1/lUj/CpYmSqC9SZuTqTiUm1ejKQ==",
+      "requires": {
+        "pkg-upload-011": "^2.0.0",
+        "pkg-shard-015": "^0.7.0"
+      }
+    },
+    "pkg-queue-029": {
+      "version": "3.17.14",
+      "resolved": "https://registry.example.test/pkg-queue-029/-/pkg-queue-029-3.17.14.tgz",
+      "integrity": "sha512-eyezehlgS4sfRkr3ZVgzAWQFFR3T2Mn+lPTOzEPdlnh8e2IcrfbuVmJ0KBVI7c23lbFwD2SyqaWHii01QVeafQ==",
+      "requires": {
+        "pkg-cache-066": "^2.5.0",
+        "pkg-render-035": "^2.9.0"
+      }
+    },
+    "pkg-quota-039": {
+      "version": "4.20.22",
+      "resolved": "https://registry.example.test/pkg-quota-039/-/pkg-quota-039-4.20.22.tgz",
+      "integrity": "sha512-KjuDhplmKIaCOEOAF3lD2OCCsFgI4BpfHg4ijTO65hx57UXTiyfzf/phU/p/a6Wll8xNgmWdbHhDpmQlvNz1WQ==",
+      "dev": true,
+      "requires": {
+        "pkg-billing-084": "^1.3.0",
+        "pkg-timeout-046": "^1.8.0"
+      }
+    },
+    "pkg-render-035": {
+      "version": "4.17.21",
+      "resolved": "https://registry.example.test/pkg-render-035/-/pkg-render-035-4.17.21.tgz",
+      "integrity": "sha512-zr0RDOfNJ6I2gZiJPDTKOSzhzj0+TS47EUBIa12H/4WUnlgFyJStyjemLTTYpcdoWnjdHvNaIGpbA080niVZHQ==",
+      "requires": {
+        "pkg-timeout-068": "^1.8.0",
+        "pkg-billing-084": "^0.8.0",
+        "pkg-quota-039": "^1.3.0"
+      }
+    },
+    "pkg-render-057": {
+      "version": "4.16.22",
+      "resolved": "https://registry.example.test/pkg-render-057/-/pkg-render-057-4.16.22.tgz",
+      "integrity": "sha512-hIVq0hyheYWZH8u/n3BrDcFCpTQLubK9eqn9WHF94dAei2IdLAzFWXZuvSzJJJI4J//M8GQDTT+20UlEs14D3A==",
+      "requires": {
+        "pkg-timeout-024": "^1.3.0",
+        "pkg-render-035": "^2.4.0",
+        "pkg-replica-060": "^3.0.0"
+      }
+    },
+    "pkg-replica-016": {
+      "version": "0.10.8",
+      "resolved": "https://registry.example.test/pkg-replica-016/-/pkg-replica-016-0.10.8.tgz",
+      "integrity": "sha512-Fe3lveshE47O5IcsMn0LrlWoqJdH2GYov5zwVhIFvlTxKmXc9XRIWiJ9UeHSV5/UP9ogaWEtA7bX1MhgwVLt0g==",
+      "dependencies": {
+        "pkg-quota-039": {
+          "version": "3.18.16",
+          "resolved": "https://registry.example.test/pkg-quota-039/-/pkg-quota-039-3.18.16.tgz",
+          "integrity": "sha512-elLLw/JzA9Qji8SLqMGB5MxxYE2Ofvv0+hu414CE/aAAr1xm7Isv6EdpqIiItFqFUaH0Y9csmrIqSTwIrqFYaQ==",
+          "requires": {
+            "pkg-upload-011": "^1.0.0",
+            "pkg-cache-088": "^3.6.0",
+            "pkg-timeout-068": "^3.2.0"
+          }
+        },
+        "pkg-schema-071": {
+          "version": "1.3.20",
+          "resolved": "https://registry.example.test/pkg-schema-071/-/pkg-schema-071-1.3.20.tgz",
+          "integrity": "sha512-V9VsBKIdxtvHhHVOH2ZYF/82HbUcmLZrFchjCwzatvcwZVYbG1J2cdmUCj8CjQI6BtfwkUIup4m321fEHTIEqA==",
+          "dev": true,
+          "requires": {
+            "pkg-token-010": "^1.7.0"
+          },
+          "dependencies": {
+            "pkg-queue-007": {
+              "version": "1.17.21",
+              "resolved": "https://registry.example.test/pkg-queue-007/-/pkg-queue-007-1.17.21.tgz",
+              "integrity": "sha512-uibzcH9mD3pZU/Y1lTNHPLE/hfhotOfvIIcqljYkn1omCJLUIDLkDS6kD4FCSwKYq+PowM70EKAPg8t3CU29hw==",
+              "requires": {
+                "pkg-schema-071": "^2.1.0",
+                "pkg-shard-081": "^0.5.0",
+                "pkg-webhook-070": "^0.0.0"
+              }
+            },
+            "pkg-retry-047": {
+              "version": "0.8.23",
+              "resolved": "https://registry.example.test/pkg-retry-047/-/pkg-retry-047-0.8.23.tgz",
+              "integrity": "sha512-TapL++Q1nWLIAQMaXU4UV/TnSIfhbdyDR+IqcUBp64gyJqHV63YAOt8e40zTTKh5vFhnu8YsgLLWdHO+XbTXoA==",
+              "requires": {
+                "pkg-token-032": "^0.1.0",
+                "pkg-retry-003": "^0.7.0",
+                "pkg-index-014": "^0.3.0"
+              }
+            }
+          }
+        },
+        "pkg-session-053": {
+          "version": "2.11.7",
+          "resolved": "https://registry.example.test/pkg-session-053/-/pkg-session-053-2.11.7.tgz",
+          "integrity": "sha512-eve62dCl32KHqvSwaXsgfOZqMQTXIc7lSFMXcYLG8UDps+kMFtFs+IBNpQFe8iHE1MIw/ATUWvh+lGiSv7lWww==",
+          "requires": {
+            "pkg-cache-066": "^2.6.0"
+          }
+        }
+      }
+    },
+    "pkg-replica-038": {
+      "version": "1.8.1",
+      "resolved": "https://registry.example.test/pkg-replica-038/-/pkg-replica-038-1.8.1.tgz",
+      "integrity": "sha512-aSdiZpAXhRlQiu8wtUW+4d0u6jDGz7t14gVPk6EOclvVr8M+586vy6FlQ7pX16/k1fF/VtLqbJzQk4Q8w42MkQ==",
+      "requires": {
+        "pkg-export-078": "^2.9.0"
+      }
+    },
+    "pkg-retry-003": {
+      "version": "3.9.16",
+      "resolved": "https://registry.example.test/pkg-retry-003/-/pkg-retry-003-3.9.16.tgz",
+      "integrity": "sha512-AKraWSl2JOyfypk/5C5Y7GI5SmmFuYUPHQQc+uXjRQgOclmQFT7LL0tHOMla8enasZn0MSMwk5tQ2x+FouM4LA==",
+      "requires": {
+        "pkg-retry-025": "^2.2.0",
+        "pkg-quota-083": "^1.0.0"
+      }
+    },
+    "pkg-retry-047": {
+      "version": "2.0.16",
+      "resolved": "https://registry.example.test/pkg-retry-047/-/pkg-retry-047-2.0.16.tgz",
+      "integrity": "sha512-CTi9sjFQKrnS2ID0mtS7kbNYySiB/cyvrE7nl7rwD3NQNZx0VUaXFpp9/KBrivN3TjjrBDWmUUUp/zxNv/EU9w==",
+      "requires": {
+        "pkg-session-009": "^0.3.0",
+        "pkg-replica-060": "^0.0.0"
+      }
+    },
+    "pkg-retry-069": {
+      "version": "2.12.20",
+      "resolved": "https://registry.example.test/pkg-retry-069/-/pkg-retry-069-2.12.20.tgz",
+      "integrity": "sha512-690Z0D0FajQ91o1WMriwtw+vmWpXH8/xnHPRk/3/mU4ejD7OYEagXoS9enXDZzSl0xRu+wirxgOBUPg2r/uWhw==",
+      "requires": {
+        "pkg-latency-052": "^2.5.0"
+      }
+    },
+    "pkg-schema-027": {
+      "version": "3.3.9",
+      "resolved": "https://registry.example.test/pkg-schema-027/-/pkg-schema-027-3.3.9.tgz",
+      "integrity": "sha512-+uN1Srnoqrk2njnwdfDwHNPx32ARgEFtRvztjmuVCirp+xnQNOVhZPrbEOs5iaFcf6bOeKu4lf4v70rbe+fIhQ=="
+    },
+    "pkg-session-009": {
+      "version": "2.14.1",
+      "resolved": "https://registry.example.test/pkg-session-009/-/pkg-session-009-2.14.1.tgz",
+      "integrity": "sha512-3u1YKJhV0Dw9C3HCr26YqsbHw8NX9oEjU2r2I5nBYe/2q4lEhigptuFGHHC20L2WGLw7If7vuOfq5HJwVUVrhQ==",
+      "requires": {
+        "pkg-export-078": "^1.9.0",
+        "pkg-token-076": "^2.7.0"
+      }
+    },
+    "pkg-shard-015": {
+      "version": "2.11.9",
+      "resolved": "https://registry.example.test/pkg-shard-015/-/pkg-shard-015-2.11.9.tgz",
+      "integrity": "sha512-2rEeSyvQXFtiOOSwPFe3tn5p0UZyZNWK3Kj4f7ygW4Tu7BYdzTkHHwwAxC3jhq3/rPRZXCHALTjgV3hoR04F7Q==",
+      "requires": {
+        "pkg-webhook-070": "^0.2.0",
+        "pkg-session-009": "^2.3.0",
+        "pkg-cache-044": "^0.1.0"
+      }
+    },
+    "pkg-summary-020": {
+      "version": "2.9.12",
+      "resolved": "https://registry.example.test/pkg-summary-020/-/pkg-summary-020-2.9.12.tgz",
+      "integrity": "sha512-KqmpkUvZC/rhWu3FxxzE9wY2KEUYDV+YImK3v0woz4obC1w/eFpUNFHTroBrvpJKJBuI7B0c2rMx0tx4BR8w4Q==",
+      "requires": {
+        "pkg-latency-074": "^1.4.0",
+        "pkg-render-013": "^1.8.0",
+        "pkg-summary-086": "^3.5.0"
+      }
+    },
+    "pkg-summary-042": {
+      "version": "2.18.28",
+      "resolved": "https://registry.example.test/pkg-summary-042/-/pkg-summary-042-2.18.28.tgz",
+      "integrity": "sha512-Ew8nVZPJU++C4rrtHcDcVf28ftUY733mcNSQZ1rVi52quq7616jQq4P7Rw9/p2oNbSzbdWBw2/TAW7P1MAAFWg==",
+      "dev": true
+    },
+    "pkg-timeout-002": {
+      "version": "4.10.29",
+      "resolved": "https://registry.example.test/pkg-timeout-002/-/pkg-timeout-002-4.10.29.tgz",
+      "integrity": "sha512-ueYDtWaGhPJndbYCwKxGmJBicjS6SgWhUbK4M8bHok0WnG0H8FD08smmeu2yDmwiE28kCclPdACe/7B0+6HDZA==",
+      "dev": true,
+      "requires": {
+        "pkg-upload-077": "^2.5.0"
+      },
+      "dependencies": {
+        "pkg-shard-015": {
+          "version": "0.7.28",
+          "resolved": "https://registry.example.test/pkg-shard-015/-/pkg-shard-015-0.7.28.tgz",
+          "integrity": "sha512-LxWkaIqB2YK7ppwQZ6beDYYVlWCpOvfMjtu/Y+xKgC+hKpE4OHx2lofN34rQA67Jx97I+3td7ftzkr0zziBNog==",
+          "requires": {
+            "pkg-schema-005": "^0.9.0",
+            "pkg-billing-040": "^1.2.0",
+            "pkg-timeout-068": "^2.5.0"
+          }
+        },
+        "pkg-upload-011": {
+          "version": "3.1.23",
+          "resolved": "https://registry.example.test/pkg-upload-011/-/pkg-upload-011-3.1.23.tgz",
+          "integrity": "sha512-8rl0/U7hz9cjMaF4sa+hSA+ptC5pdvSKyOTNuuaWREACJnxtz5ZtqpBy12uXK0akOcbFAMeDIimxyU2eT+Kx0w==",
+          "dev": true,
+          "requires": {
+            "pkg-render-013": "^0.1.0"
+          }
+        }
+      }
+    },
+    "pkg-timeout-024": {
+      "version": "4.9.4",
+      "resolved": "https://registry.example.test/pkg-timeout-024/-/pkg-timeout-024-4.9.4.tgz",
+      "integrity": "sha512-ZNy+SjkNI1lepIKIAmaRFKQCkB+82BrOtMs7KI8GlguYuQRXQVruPwhOqQ90kPrW44QrkfvrLbYk5AxCvXNAzA==",
+      "requires": {
+        "pkg-metrics-021": "^0.1.0",
+        "pkg-upload-055": "^3.7.0",
+        "pkg-summary-086": "^2.5.0"
+      }
+    },
+    "pkg-timeout-068": {
+      "version": "4.2.15",
+      "resolved": "https://registry.example.test/pkg-timeout-068/-/pkg-timeout-068-4.2.15.tgz",
+      "integrity": "sha512-wvdGhuZyTMBNR3g9aDwxZapF3rZJgLgRtZQutQnwqvTMRbVnqmO5U51NfmcCeuiBLBn/drbd5rWRAKWhyThgrw==",
+      "requires": {
+        "pkg-latency-074": "^1.1.0",
+        "pkg-quota-061": "^3.3.0",
+        "pkg-summary-020": "^0.9.0"
+      },
+      "dependencies": {
+        "pkg-login-063": {
+          "version": "2.19.10",
+          "resolved": "https://registry.example.test/pkg-login-063/-/pkg-login-063-2.19.10.tgz",
+          "integrity": "sha512-edsckFG1gRstLfu1S0YLxtJ8tPQ2eacX2ac4KCbtSwVxRGorrsio8SmIDQOhtG6hC2UhzL+8cXW2GbGyctt00Q==",
+          "dependencies": {
+            "pkg-schema-049": {
+              "version": "0.9.20",
+              "resolved": "https://registry.example.test/pkg-schema-049/-/pkg-schema-049-0.9.20.tgz",
+              "integrity": "sha512-7HEv/Z6mt6husnfFxF3tSGesjlKyfvlZpRHUgAbJnxFb7eRkqZjNpu++kEla8olSxkKKD9c67QT4kkb6fgMydg==",
+              "requires": {
+                "pkg-metrics-043": "^1.0.0",
+                "pkg-cache-088": "^0.9.0",
+                "pkg-token-076": "^1.7.0"
+              }
+            },
+            "pkg-session-009": {
+              "version": "2.16.12",
+              "resolved": "https://registry.example.test/pkg-session-009/-/pkg-session-009-2.16.12.tgz",
+              "integrity": "sha512-SFixZdgmOSMDJdzcgSShvNYizRsUB5J3VVOnn4DkcOLP/8rqlu4UCR4H/V75ic2E2UEwL952hxmHrgUd0hSsZA=="
+            }
+          }
+        },
+        "pkg-summary-042": {
+          "version": "3.14.4",
+          "resolved": "https://registry.example.test/pkg-summary-042/-/pkg-summary-042-3.14.4.tgz",
+          "integrity": "sha512-WvCMbwnkf82igqgl4XZuzfRG7xbDon0c3z79QlK73DZEkUWRFYnXYHZ7e823ry7iPRzv6U2sKVo82nXIoQz66w=="
+        }
+      }
+    },
+    "pkg-token-032": {
+      "version": "3.11.8",
+      "resolved": "https://registry.example.test/pkg-token-032/-/pkg-token-032-3.11.8.tgz",
+      "integrity": "sha512-IHVj9KFzNpNZb/nEhSnUd2Ia2ozLS4MUaFHAUPFveqgZDRzjueeDOkPq8rSkF9/wrhQa/wNe+HQFbVi5sIaBlA==",
+      "requires": {
+        "pkg-queue-073": "^2.6.0",
+        "pkg-metrics-021": "^0.9.0",
+        "pkg-migration-006": "^3.9.0"
+      }
+    }
+  }
+}

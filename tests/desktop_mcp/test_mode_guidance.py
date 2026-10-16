@@ -124,10 +124,18 @@ def test_diagnostic_instructions_do_not_carry_mode_guidance() -> None:
     assert "compact for JSON" not in instructions
 
 
-def test_open_description_says_bare_names_open_directly_and_find_is_reused() -> None:
+def test_open_description_says_bare_names_open_directly() -> None:
     description = _open_description()
     assert "Open a file by its name directly" in description
-    assert "call find again instead of re-reading the whole file" in description
+
+
+def test_open_description_pairs_compact_for_many_questions_with_find_for_one() -> None:
+    description = _open_description()
+    assert "several questions about one structured file" in description
+    assert "open it once in compact" in description
+    assert "for a single lookup or prose, use find" in description
+    # The older advice to re-run find for each question is gone.
+    assert "call find again" not in description
 
 
 def test_source_property_accepts_a_bare_file_name() -> None:
