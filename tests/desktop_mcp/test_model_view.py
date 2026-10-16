@@ -1,4 +1,4 @@
-"""Model-facing projection of presentation results (0.1.6)."""
+"""Model-facing projection of presentation results (0.1.6), and its review fixes."""
 
 from __future__ import annotations
 
@@ -11,16 +11,34 @@ from typing import Any
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from horizon.desktop_mcp.backend_worker import Runtime
+from horizon.desktop_mcp.extractors import DocumentBlock
 from horizon.desktop_mcp.local_backend import LocalBackend
 from horizon.desktop_mcp.model_view import DROPPED, KEPT, model_view
 from horizon.desktop_mcp.policies import CursorSigner, present_selected_scope, present_snapshot
 from horizon.desktop_mcp.selectors import select_exact
 from horizon.desktop_mcp.server import create_server
-from horizon.desktop_mcp.settings import DesktopSettings
+from horizon.desktop_mcp.settings import DesktopSettings, load_settings
 from horizon.desktop_mcp.snapshots import SnapshotStore
 from horizon.desktop_mcp.source_access import SourceReader
 
 ROOT = "approved-root"
+
+PDF_TEXT = "page one line a\npage one line b\np3\np4 x\np4 y\n"
+PDF_BLOCKS = (
+    DocumentBlock("page", 1, 1, 2),
+    DocumentBlock("page", 2, 3, 2),
+    DocumentBlock("page", 3, 3, 3),
+    DocumentBlock("page", 4, 4, 5),
+)
+DOCX_TEXT = "Title\nBody one\nline two\na\tb\nc\td\nTail\n"
+DOCX_BLOCKS = (
+    DocumentBlock("heading", 1, 1, 1, {"heading_level": 1}),
+    DocumentBlock("paragraph", 2, 2, 3),
+    DocumentBlock("table", 1, 4, 5, {"rows": 2, "columns": 2}),
+    DocumentBlock("paragraph", 3, 6, 6),
+)
+CSV_TEXT = "id,name,score\n1,a,10\n2,b,20\n3,c,30\n"
 
 
 class _FakeEstimator:
@@ -39,7 +57,7 @@ class _FakeEstimator:
         }
 
 
-def _snapshot(text: str, kind: str = "txt"):
+def _snapshot(text: str, kind: str = "txt", blocks: tuple[DocumentBlock, ...] = ()):
     raw = text.encode("utf-8")
     return SnapshotStore().put(
         root_key=ROOT,
@@ -50,6 +68,7 @@ def _snapshot(text: str, kind: str = "txt"):
         digest=hashlib.sha256(raw).hexdigest(),
         byte_count=len(raw),
         identity="volume:file-id",
+        blocks=blocks,
     )
 
 
@@ -59,6 +78,11 @@ def _full_payload() -> dict[str, Any]:
     payload.update(
         {
             "source_id": "cs1_example",
+            "kind": "json",
+            "tool": "retrieve",
+            "selector": {"type": "lines", "start": 1, "end": 3},
+            "line_ranges": [{"start_line": 1, "end_line": 3}],
+            "context_lines": 2,
             "mode": "exact",
             "requested_mode": "compact",
             "coverage": "partial (limit)",
@@ -86,6 +110,7 @@ def test_projection_keeps_listed_fields_in_order() -> None:
 
     assert list(view) == [
         "source_id",
+        "kind",
         "mode",
         "requested_mode",
         "coverage",
@@ -96,8 +121,12 @@ def test_projection_keeps_listed_fields_in_order() -> None:
         "compression_decoding_hint",
         "line_count",
         "selected_lines",
+        "selector",
+        "line_ranges",
         "match_count",
+        "context_lines",
         "headings",
+        "block_counts",
         "omitted_ranges",
         "warnings",
         "text",
@@ -105,6 +134,7 @@ def test_projection_keeps_listed_fields_in_order() -> None:
         "next_cursor",
     ]
     assert view["warnings"] == ["ocr skipped"]
+    assert view["block_counts"] == {"page": 1}
 
 
 def test_bookkeeping_fields_are_dropped() -> None:
@@ -190,10 +220,231 @@ def test_odd_payload_fields_do_not_raise_and_input_is_not_mutated() -> None:
     }
 
 
-def _log_text() -> str:
-    return "".join(f"unique line {n:04d} with stable detail\n" for n in range(300)) + (
-        "status ok\n" * 60
+def test_kind_is_always_kept() -> None:
+    view = model_view({"source_id": "cs1", "kind": "txt", "mode": "exact", "text": "t"})
+
+    assert view["kind"] == "txt"
+
+
+def test_context_lines_are_kept_only_when_find_used_context() -> None:
+    base = {"source_id": "cs1", "mode": "find", "text": "t", "match_count": 1}
+
+    assert "context_lines" not in model_view({**base, "context_lines": 0})
+    assert model_view({**base, "context_lines": 2})["context_lines"] == 2
+    assert "context_lines" not in model_view({**base, "context_lines": True})
+
+
+def test_block_counts_are_lifted_only_when_non_empty() -> None:
+    kept = model_view(
+        {
+            "source_id": "cs1",
+            "mode": "exact",
+            "text": "t",
+            "extraction": {"block_counts": {"table": 2}},
+        }
     )
+    empty = model_view(
+        {"source_id": "cs1", "mode": "exact", "text": "t", "extraction": {"block_counts": {}}}
+    )
+
+    assert kept["block_counts"] == {"table": 2}
+    assert "block_counts" not in empty
+
+
+def test_find_keeps_block_headers_not_ranges() -> None:
+    text = "alpha\nZZFIND beta\ngamma\n"
+    result = present_snapshot(
+        _snapshot(text),
+        mode="find",
+        query="ZZFIND",
+        result_token_budget=6000,
+        estimator=_FakeEstimator(),  # type: ignore[arg-type]
+        cursor_signer=CursorSigner(),
+        context_lines=0,
+    )
+
+    view = model_view(result)
+    assert result["match_count"] == 1
+    assert "[[lines 2-2]]" in view["text"]
+    for key in ("line_ranges", "matches", "selector"):
+        assert key not in view
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "blocks", "selector"),
+    [
+        (PDF_TEXT, "pdf", PDF_BLOCKS, {"type": "page", "start": 1, "end": 1}),
+        (DOCX_TEXT, "docx", DOCX_BLOCKS, {"type": "table", "index": 1}),
+        (CSV_TEXT, "csv", (), {"type": "rows", "start": 1, "end": 2}),
+    ],
+)
+def test_structured_retrieve_keeps_unit_boundaries(
+    text: str,
+    kind: str,
+    blocks: tuple[DocumentBlock, ...],
+    selector: dict[str, Any],
+) -> None:
+    selected = select_exact(text, selector, kind=kind, blocks=blocks)
+    payload = present_selected_scope(
+        _snapshot(text, kind, blocks),
+        selected,
+        result_token_budget=6000,
+        max_result_bytes=262_144,
+        estimator=_FakeEstimator(),  # type: ignore[arg-type]
+        cursor=None,
+        cursor_signer=CursorSigner(),
+    )
+
+    view = model_view(payload)
+    assert payload["tool"] == "retrieve"
+    assert view["selector"] == payload["selector"]
+    assert view["line_ranges"] == payload["line_ranges"]
+    assert view["line_ranges"]
+
+
+def test_document_block_counts_reach_the_model_view() -> None:
+    result = present_snapshot(
+        _snapshot(DOCX_TEXT, "docx", DOCX_BLOCKS),
+        mode="exact",
+        result_token_budget=6000,
+        estimator=_FakeEstimator(),  # type: ignore[arg-type]
+        cursor_signer=CursorSigner(),
+    )
+
+    assert model_view(result)["block_counts"] == result["extraction"]["block_counts"]
+    assert model_view(result)["block_counts"]["table"] == 1
+
+
+def test_analyze_accounting_measures_the_full_result_as_before_0_1_6(tmp_path: Path) -> None:
+    rows = "".join(f"item{number},{number}.25,2026-01-02\n" for number in range(2000))
+    path = tmp_path / "sales.csv"
+    path.write_bytes(("id,amount,date\n" + rows).encode("utf-8"))
+    backend = LocalBackend(SourceReader((tmp_path,), max_source_bytes=1_000_000))
+    opened = backend.open(str(path))
+    assert opened is not None
+
+    result = backend.analyze(
+        opened["source_id"],
+        {"columns": {"amount": "decimal"}, "select": ["id", "amount"]},
+    )
+
+    # Analyze is not model-projected, so its delivered bytes are the whole result.
+    full = json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    delivered = result["accounting"]["result"]["delivered_utf8_bytes"]
+    assert delivered == len(full.encode("utf-8"))
+    assert len(json.dumps(model_view(result), separators=(",", ":"), sort_keys=True)) < delivered
+
+
+def _worker_settings(tmp_path: Path, root: Path, max_bytes: int, budget: int) -> Path:
+    config = tmp_path / "settings.json"
+    config.write_text(
+        json.dumps(
+            {
+                "profile": "local",
+                "approved_roots": [str(root)],
+                "max_source_bytes": 1_000_000,
+                "max_snapshot_bytes": 4_000_000,
+                "max_store_bytes": 8_000_000,
+                "max_result_bytes": max_bytes,
+                "result_token_budget": budget,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config
+
+
+@pytest.mark.parametrize(("max_bytes", "budget"), [(65536, 32000), (16384, 8000)])
+def test_worker_accepts_every_projected_exact_page(
+    tmp_path: Path, max_bytes: int, budget: int
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    lines = [f"line {number:05d} steady worker text\n" for number in range(1, 3001)]
+    path = root / "long.txt"
+    path.write_bytes("".join(lines).encode("utf-8"))
+    config = _worker_settings(tmp_path, root, max_bytes, budget)
+    settings = load_settings(config)
+    runtime = Runtime(
+        config,
+        expected_broker_id=settings.broker_id,
+        expected_max_clients=settings.max_broker_clients,
+        expected_timeout=settings.broker_timeout_seconds,
+    )
+
+    pieces: list[str] = []
+    source: str = str(path)
+    cursor: str | None = None
+    for _ in range(500):
+        result = runtime.request(
+            "open",
+            {
+                "source": source,
+                "start_line": None,
+                "end_line": None,
+                "mode": "exact",
+                "query": None,
+                "result_token_budget": budget,
+                "cursor": cursor,
+                "context_lines": None,
+            },
+        )
+        assert "error" not in result, result
+        pieces.append(result["text"])
+        cursor = result.get("next_cursor")
+        if cursor is None:
+            break
+        source = result["source_id"]
+    assert len(pieces) > 1
+    assert "".join(pieces) == "".join(lines)
+
+
+class _FixedOpenBackend:
+    """Returns one presentation payload whose projection fits but whose full form does not."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    def open(self, source: str, **kwargs: Any) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+
+def test_worker_size_check_uses_the_projection_not_the_full_payload(tmp_path: Path) -> None:
+    max_bytes = 16384
+    config = _worker_settings(tmp_path, tmp_path, max_bytes, 8000)
+    settings = load_settings(config)
+    runtime = Runtime(
+        config,
+        expected_broker_id=settings.broker_id,
+        expected_max_clients=settings.max_broker_clients,
+        expected_timeout=settings.broker_timeout_seconds,
+    )
+    bare = {"source_id": "cs1_fixed", "mode": "exact", "text": ""}
+    room = max_bytes - len(json.dumps(bare, separators=(",", ":"), sort_keys=True)) - 60
+    # The accounting block is dropped by the projection, so only the full form exceeds the limit.
+    fixed = {
+        **bare,
+        "text": "a" * room,
+        "accounting": {"note": "x" * 900},
+    }
+    runtime.backend = _FixedOpenBackend(fixed)
+
+    result = runtime.request(
+        "open",
+        {
+            "source": "cs1_fixed",
+            "start_line": None,
+            "end_line": None,
+            "mode": "exact",
+            "query": None,
+            "result_token_budget": 8000,
+            "cursor": None,
+            "context_lines": None,
+        },
+    )
+
+    assert "error" not in result
+    assert result["text"] == "a" * room
 
 
 def _presentation_payloads() -> list[dict[str, Any]]:
@@ -210,6 +461,8 @@ def _presentation_payloads() -> list[dict[str, Any]]:
         "cursor_signer": signer,
         "max_result_bytes": 262_144,
     }
+    log_text = "".join(f"unique line {n:04d} with stable detail\n" for n in range(300))
+    log_text += "status ok\n" * 60
 
     # A cursor is bound to its snapshot, so continuations reuse one snapshot.
     long_snap = _snapshot(long_text)
@@ -233,7 +486,7 @@ def _presentation_payloads() -> list[dict[str, Any]]:
     )
     payloads.append(
         present_snapshot(
-            _snapshot(_log_text(), "log"),
+            _snapshot(log_text, "log"),
             mode="compact",
             result_token_budget=8000,
             min_compaction_gain_tokens=1,

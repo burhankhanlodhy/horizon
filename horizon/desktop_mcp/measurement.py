@@ -216,12 +216,20 @@ def _payload_with_accounting(payload: dict[str, Any], accounting: dict[str, Any]
     return result
 
 
+def _as_sent(payload: dict[str, Any], project: bool) -> dict[str, Any]:
+    """The object whose bytes are measured: the model view, or the full payload."""
+    return model_view(payload) if project else payload
+
+
 def _count_pair(
-    payload: dict[str, Any], raw_payload: dict[str, Any], estimator: TokenEstimator
+    payload: dict[str, Any],
+    raw_payload: dict[str, Any],
+    estimator: TokenEstimator,
+    project: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Measure both sides as the model receives them (see ``model_view``)."""
-    delivered = measure_payload(model_view(payload), estimator)
-    raw = measure_payload(model_view(raw_payload), estimator)
+    """Measure both sides as they are delivered (see ``model_view``)."""
+    delivered = measure_payload(_as_sent(payload, project), estimator)
+    raw = measure_payload(_as_sent(raw_payload, project), estimator)
     return raw, delivered
 
 
@@ -235,6 +243,7 @@ def finalize_accounting(
     retrieval_call_count: int = 0,
     retrieval_bytes: int = 0,
     retrieval_token_estimate: int = 0,
+    project: bool = True,
 ) -> dict[str, Any]:
     """Attach bounded, self-inclusive accounting to a complete result.
 
@@ -294,6 +303,7 @@ def finalize_accounting(
             _payload_with_accounting(clean_payload, accounting),
             _payload_with_accounting(clean_raw, accounting),
             active,
+            project,
         )
         raw_source_bytes = len(raw_text.encode("utf-8"))
         delivered_source_bytes = len(rendered_text.encode("utf-8"))
@@ -329,8 +339,8 @@ def finalize_accounting(
     for _ in range(8):
         final_payload = _payload_with_accounting(clean_payload, accounting)
         final_raw_payload = _payload_with_accounting(clean_raw, accounting)
-        actual_delivered = measure_payload(model_view(final_payload), active)
-        actual_raw = measure_payload(model_view(final_raw_payload), active)
+        actual_delivered = measure_payload(_as_sent(final_payload, project), active)
+        actual_raw = measure_payload(_as_sent(final_raw_payload, project), active)
         result_accounting = accounting["result"]
         if (
             result_accounting.get("delivered_utf8_bytes") == actual_delivered["utf8_bytes"]

@@ -877,6 +877,8 @@ class LocalBackend:
             snapshot.text,
             encoded,
             estimator=self.estimator,
+            # Analyze results are not model-projected, so they are measured whole.
+            project=False,
         )
         if len(self._canonical_json(accounted).encode("utf-8")) > self.max_result_bytes:
             raise LocalBackendError("analysis_result_too_large", metadata)

@@ -83,8 +83,12 @@ saving; it simply shrinks both sides.
 
 ### Paging
 
-Budget fitting in `policies.py` still measures the full payload. Pages may
-now be slightly under-filled, which is conservative and acceptable. Do not
+Budget fitting in `policies.py` is unchanged, but the bytes it checks are the
+accounting's delivered size, which is now the projected size (`model_view`).
+Pages are therefore filled against what the model receives, and the worker
+checks the same projected bytes, so a page that fits is never rejected later.
+Fitting still reserves room for the full accounting block, so pages can be
+under-filled by about a kilobyte. That is conservative and acceptable. Do not
 change the fitting logic in 0.1.6.
 
 ### Version
@@ -101,3 +105,44 @@ older (True), and 0.1.6 and 0.1.6.0 are not (False).
   with `source_id` from the projection;
 - an exact read shows no saving;
 - the stats file still counts the calls.
+
+## Review findings
+
+An independent review of 0.1.6 (commit 42e4feb9) found the following. Each
+item was fixed and has a test.
+
+- **Analyze accounting (high).** Analyze results are not model-projected, but
+  `finalize_accounting` measured the projection and so reported a saving of
+  about 99% that did not exist. `finalize_accounting` now takes
+  `project: bool = True`; analyze passes `project=False` and is measured whole,
+  as before 0.1.6. Test: `test_analyze_accounting_measures_the_full_result_as_before_0_1_6`.
+- **Worker size check (high).** The worker rejected open and retrieve results
+  whose full JSON exceeded `max_result_bytes`, but policy fitting measures the
+  projected size, so pages up to about a kilobyte over the limit were rejected.
+  The worker now checks the projected bytes; the full frame is still bounded by
+  `MAX_FRAME_BYTES`. The worker and the policy measure the same bytes, so
+  `_observe` cannot record a success for a result the worker then rejects.
+  Tests: `test_worker_accepts_every_projected_exact_page` (3000 lines, limits
+  65536 / 32000 and 16384 / 8000) and
+  `test_worker_size_check_uses_the_projection_not_the_full_payload`.
+- **Structured retrieve boundaries (medium).** Retrieve results lost their unit
+  boundaries. `selector` and `line_ranges` are now kept for retrieve results
+  only; find and focused still carry `[[lines]]` headers instead. Test:
+  `test_structured_retrieve_keeps_unit_boundaries` (PDF pages, DOCX table, CSV rows).
+- **Block counts (medium-low).** `extraction.block_counts` is lifted to a
+  top-level `block_counts` when non-empty, so the model knows DOCX table counts.
+  Test: `test_document_block_counts_reach_the_model_view`.
+- **Cursor continuation (low).** `kind` is always kept. `context_lines` is kept
+  when a find used context, so the model can repeat it with `next_cursor`. The
+  open schema is unchanged: a description sentence pushed the tool-spec token
+  growth to the 200-token limit in `test_mode_guidance.py`, so it was not added.
+  Tests:
+  `test_kind_is_always_kept` and
+  `test_context_lines_are_kept_only_when_find_used_context`.
+
+Known small accounting asymmetries, left as they are:
+
+- Exact paged reads show a small cost. The raw side excludes `next_cursor`, as
+  it did before 0.1.6, so a paged read is never reported as a saving.
+- Compact shows about 26 bytes of label effect, because `requested_mode` is
+  dropped on the delivered side when it equals `mode`, while the raw side keeps it.

@@ -16,6 +16,7 @@ from typing import Any
 
 KEPT: tuple[str, ...] = (
     "source_id",
+    "kind",
     "mode",
     "requested_mode",
     "coverage",
@@ -26,8 +27,12 @@ KEPT: tuple[str, ...] = (
     "compression_decoding_hint",
     "line_count",
     "selected_lines",
+    "selector",
+    "line_ranges",
     "match_count",
+    "context_lines",
     "headings",
+    "block_counts",
     "omitted_ranges",
     "warnings",
     "text",
@@ -41,24 +46,23 @@ DROPPED: frozenset[str] = frozenset(
         "approved_local_files",
         "blocks",
         "byte_count",
-        "context_lines",
         "digest",
         "eval_arm",
         "extraction",
         "extractor_version",
-        "kind",
-        "line_ranges",
         "match_count_complete",
         "matches",
         "policy_version",
         "result_token_budget_applied",
         "returned_text_is_raw",
-        "selector",
         "tool",
         "version",
     }
 )
 
+# Structural retrieve results keep their unit boundaries (PDF pages, DOCX
+# paragraphs, CSV rows); find and focused results carry [[lines]] headers instead.
+_RETRIEVE_ONLY_KEYS = frozenset({"selector", "line_ranges"})
 _COMPRESSION_KEYS = frozenset(
     {
         "compression_applied",
@@ -79,16 +83,28 @@ def model_view(payload: Any) -> Any:
     if not isinstance(payload, dict) or "error" in payload:
         return payload
     view: dict[str, Any] = {}
+    extraction = payload.get("extraction")
+    extraction = extraction if isinstance(extraction, dict) else {}
     for key in KEPT:
         if key == "warnings":
-            extraction = payload.get("extraction")
-            warnings = extraction.get("warnings") if isinstance(extraction, dict) else None
+            warnings = extraction.get("warnings")
             if isinstance(warnings, list) and warnings:
                 view["warnings"] = list(warnings)
+            continue
+        if key == "block_counts":
+            counts = extraction.get("block_counts")
+            if isinstance(counts, dict) and counts:
+                view["block_counts"] = dict(counts)
             continue
         if key not in payload:
             continue
         value = payload[key]
+        if key in _RETRIEVE_ONLY_KEYS and payload.get("tool") != "retrieve":
+            continue
+        if key == "context_lines" and not (
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ):
+            continue
         if key == "requested_mode" and value == payload.get("mode"):
             continue
         if key == "fidelity" and value == "byte_exact":
