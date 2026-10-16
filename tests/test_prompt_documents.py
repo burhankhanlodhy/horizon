@@ -407,3 +407,10 @@ def test_harness_reminders_are_not_taken_as_the_question(router, query_embedder)
     )["content"]
     assert out[0] == msg["content"][0]
     assert "[Section omitted" in out[1]["text"] and out[1]["text"].endswith(NARROW_Q)
+
+
+def test_the_asking_paragraph_wins_over_the_documents_own_last_paragraph():
+    doc = _sectioned_doc() + "\n\n- Review every risk and plan the whole rollout."
+    text = NARROW_Q + "\n\n" + doc
+    start, end = cr._prompt_document_span(text, cr.PROMPT_DOC_EDGE_CHARS)
+    assert cr._prompt_document_question(text, start, end) == NARROW_Q

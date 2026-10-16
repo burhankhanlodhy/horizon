@@ -323,7 +323,10 @@ def _prompt_document_question(text: str, start: int, end: int, hint: str = "") -
         # A markdown heading is the document's own title, not the ask.
         if len(p) <= PROMPT_DOC_QUESTION_MAX_CHARS and not p.startswith("#")
     ]
-    return "\n".join(dict.fromkeys(parts))
+    # A paragraph that asks something is the question on its own; the other end
+    # is usually the document's own first or last paragraph.
+    asking = [p for p in parts if "?" in p]
+    return "\n".join(dict.fromkeys(asking[:1] or parts))
 
 
 def _prompt_document_keep() -> float | None:
