@@ -1,0 +1,1783 @@
+[
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/1",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000017,
+    "node_id": "4r/kUsI/npleGfSE",
+    "number": 1,
+    "title": "Queue replica fails after latency change #1",
+    "user": {
+      "login": "fixture-user-05",
+      "id": 105,
+      "node_id": "hzsHfkLwNurDd/H2",
+      "avatar_url": "https://avatars.example.test/u/105?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-05",
+      "html_url": "https://example.test/fixture-user-05",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 0,
+    "created_at": "2026-06-25T11:36:00Z",
+    "updated_at": "2026-09-23T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Export index retry render summary render upload parser replica login queue metrics cache shard queue quota replica token webhook webhook latency replica quota webhook timeout export.\n\nShard timeout session webhook retry schema session summary token summary retry index upload login login summary parser timeout token timeout upload timeout.\n\nTimeout export metrics timeout webhook render replica retry schema session login queue token token index timeout webhook replica login index login token migration shard summary.",
+    "reactions": {
+      "total_count": 0,
+      "+1": 3,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/2",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000034,
+    "node_id": "9682+UXFBLasb7G2",
+    "number": 2,
+    "title": "Render timeout fails after shard change #2",
+    "user": {
+      "login": "fixture-user-16",
+      "id": 116,
+      "node_id": "MsTQm017aCFRBYtX",
+      "avatar_url": "https://avatars.example.test/u/116?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-16",
+      "html_url": "https://example.test/fixture-user-16",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 6,
+    "created_at": "2026-09-27T20:33:00Z",
+    "updated_at": "2026-09-20T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Queue migration upload upload cache cache render parser.\n\nReplica queue billing parser login billing queue quota schema render metrics session migration shard.",
+    "reactions": {
+      "total_count": 0,
+      "+1": 5,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/3",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000051,
+    "node_id": "86tgFmaYHG5M3tfS",
+    "number": 3,
+    "title": "Login cache fails after webhook change #3",
+    "user": {
+      "login": "fixture-user-07",
+      "id": 107,
+      "node_id": "GvuJGns6U8Sm+xrp",
+      "avatar_url": "https://avatars.example.test/u/107?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-07",
+      "html_url": "https://example.test/fixture-user-07",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 5,
+    "created_at": "2026-08-16T17:06:00Z",
+    "updated_at": "2026-09-23T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Retry metrics schema metrics parser metrics cache summary webhook schema schema latency export upload quota upload index summary billing token.\n\nQueue session shard login login replica latency export summary webhook render webhook billing cache export quota login upload shard latency index retry upload replica shard.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 3,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/4",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000068,
+    "node_id": "jWVQiO0rkEOT16OD",
+    "number": 4,
+    "title": "Timeout cache fails after summary change #4",
+    "user": {
+      "login": "fixture-user-10",
+      "id": 110,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      },
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 4,
+    "created_at": "2026-08-26T14:07:00Z",
+    "updated_at": "2026-09-17T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Migration upload token upload export export cache latency upload timeout quota billing export login export parser.\n\nExport parser render shard migration billing login parser export cache render.\n\nTimeout render metrics render schema latency shard webhook session webhook summary latency timeout schema login export render latency latency.\n\nSummary migration replica token replica replica webhook replica login quota summary queue export.\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 5,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/5",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000085,
+    "node_id": "QCmCONj91qVEvDXc",
+    "number": 5,
+    "title": "Webhook timeout fails after upload change #5",
+    "user": {
+      "login": "fixture-user-03",
+      "id": 103,
+      "node_id": "JecGg/T9SbrTPQdB",
+      "avatar_url": "https://avatars.example.test/u/103?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-03",
+      "html_url": "https://example.test/fixture-user-03",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-13",
+      "id": 448,
+      "node_id": "eZjRJp1RhkvcjQzG",
+      "avatar_url": "https://avatars.example.test/u/448?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-13",
+      "html_url": "https://example.test/fixture-user-13",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-13",
+        "id": 448,
+        "node_id": "eZjRJp1RhkvcjQzG",
+        "avatar_url": "https://avatars.example.test/u/448?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-13",
+        "html_url": "https://example.test/fixture-user-13",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 0,
+    "created_at": "2026-08-20T11:05:00Z",
+    "updated_at": "2026-09-23T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Parser replica quota schema parser login cache render webhook retry export shard.\n\nCache latency metrics session quota schema metrics session latency schema migration.\n\nQueue shard upload index queue cache index render parser render webhook quota quota upload shard index session schema parser.\n\nToken index session migration summary queue export queue migration summary latency session index schema cache export render metrics queue replica session.",
+    "reactions": {
+      "total_count": 4,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/6",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000102,
+    "node_id": "kXEaFw6Bi3Lzajfk",
+    "number": 6,
+    "title": "Webhook upload fails after billing change #6",
+    "user": {
+      "login": "fixture-user-02",
+      "id": 102,
+      "node_id": "Xjd8OPIBUGl2vk8j",
+      "avatar_url": "https://avatars.example.test/u/102?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-02",
+      "html_url": "https://example.test/fixture-user-02",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-08",
+      "id": 478,
+      "node_id": "VKg1/oOcuDEpM5A/",
+      "avatar_url": "https://avatars.example.test/u/478?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-08",
+      "html_url": "https://example.test/fixture-user-08",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-08",
+        "id": 478,
+        "node_id": "VKg1/oOcuDEpM5A/",
+        "avatar_url": "https://avatars.example.test/u/478?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-08",
+        "html_url": "https://example.test/fixture-user-08",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-08-17T01:14:00Z",
+    "updated_at": "2026-09-26T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Latency retry summary billing migration index quota replica billing export latency.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 5,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/7",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000119,
+    "node_id": "H00OY5qZEaRMibjG",
+    "number": 7,
+    "title": "Timeout migration fails after queue change #7",
+    "user": {
+      "login": "fixture-user-12",
+      "id": 112,
+      "node_id": "2zwrvERcUb35gFvV",
+      "avatar_url": "https://avatars.example.test/u/112?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-12",
+      "html_url": "https://example.test/fixture-user-12",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 8,
+    "created_at": "2026-07-28T09:53:00Z",
+    "updated_at": "2026-09-23T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Session migration queue latency token webhook upload latency login summary billing summary session token upload session retry upload metrics login billing schema parser timeout login render migration login.",
+    "reactions": {
+      "total_count": 2,
+      "+1": 5,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/8",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000136,
+    "node_id": "dgU0RS2VBGO+c1FY",
+    "number": 8,
+    "title": "Login index fails after retry change #8",
+    "user": {
+      "login": "fixture-user-06",
+      "id": 106,
+      "node_id": "pmd/gEiNecDWAKRO",
+      "avatar_url": "https://avatars.example.test/u/106?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-06",
+      "html_url": "https://example.test/fixture-user-06",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-07-25T01:20:00Z",
+    "updated_at": "2026-09-19T12:00:00Z",
+    "closed_at": "2026-09-30T08:15:00Z",
+    "author_association": "MEMBER",
+    "body": "Replica cache session shard cache upload timeout upload retry shard replica quota timeout queue quota parser webhook timeout login schema summary.\n\nTimeout webhook billing billing token quota cache shard summary webhook latency schema summary replica quota render metrics.\n\nBilling queue latency session parser shard quota replica export latency quota webhook shard index session.\n\nQuota render index summary latency webhook retry parser latency index render replica shard retry upload session summary upload.\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 2,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": "completed"
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/9",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000153,
+    "node_id": "nJ5VvCSSWdMH8Ghb",
+    "number": 9,
+    "title": "Metrics cache fails after upload change #9",
+    "user": {
+      "login": "fixture-user-18",
+      "id": 118,
+      "node_id": "d6Iq/vvfSJtMfm5m",
+      "avatar_url": "https://avatars.example.test/u/118?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-18",
+      "html_url": "https://example.test/fixture-user-18",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 4,
+    "created_at": "2026-06-14T07:59:00Z",
+    "updated_at": "2026-09-25T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Index webhook login quota metrics quota latency quota upload queue summary billing summary queue quota parser migration login quota session retry retry.\n\nMetrics migration upload billing render shard login render session replica parser login cache login metrics webhook webhook parser session parser replica summary export latency queue webhook timeout replica parser.\n\nParser session retry billing schema migration migration replica cache render upload migration render migration quota.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 4,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/10",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000170,
+    "node_id": "sbuyloDQa1aFcvzH",
+    "number": 10,
+    "title": "Schema parser fails after migration change #10",
+    "user": {
+      "login": "fixture-user-10",
+      "id": 110,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-10",
+      "id": 941,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/941?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-10",
+        "id": 941,
+        "node_id": "DubIG2Bkqfh2bQSx",
+        "avatar_url": "https://avatars.example.test/u/941?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-10",
+        "html_url": "https://example.test/fixture-user-10",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-06-28T15:29:00Z",
+    "updated_at": "2026-09-27T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Parser retry render export parser metrics render index shard parser timeout index latency token webhook login session latency retry summary session login.\n\nIndex timeout schema session webhook login upload billing.\n\nMetrics queue replica export billing cache metrics login billing.\n\nCache latency summary retry replica session summary token session replica session.",
+    "reactions": {
+      "total_count": 5,
+      "+1": 4,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/11",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000187,
+    "node_id": "5c09s5/8g/RskOZF",
+    "number": 11,
+    "title": "Quota shard fails after replica change #11",
+    "user": {
+      "login": "fixture-user-16",
+      "id": 116,
+      "node_id": "MsTQm017aCFRBYtX",
+      "avatar_url": "https://avatars.example.test/u/116?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-16",
+      "html_url": "https://example.test/fixture-user-16",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-10",
+      "id": 653,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/653?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-10",
+        "id": 653,
+        "node_id": "DubIG2Bkqfh2bQSx",
+        "avatar_url": "https://avatars.example.test/u/653?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-10",
+        "html_url": "https://example.test/fixture-user-10",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-09-24T04:08:00Z",
+    "updated_at": "2026-09-17T12:00:00Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Timeout upload timeout render queue billing shard render cache token webhook migration session metrics summary index index billing schema queue quota cache latency timeout shard queue summary login.\n\nCache login render queue index billing billing summary summary schema.",
+    "reactions": {
+      "total_count": 1,
+      "+1": 2,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/12",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000204,
+    "node_id": "wxreC309aDpoTafy",
+    "number": 12,
+    "title": "Parser timeout fails after latency change #12",
+    "user": {
+      "login": "fixture-user-17",
+      "id": 117,
+      "node_id": "gFAAAd0aL2V/WpJB",
+      "avatar_url": "https://avatars.example.test/u/117?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-17",
+      "html_url": "https://example.test/fixture-user-17",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1002,
+        "node_id": "JmSlFD1aQToEmXA9",
+        "name": "documentation",
+        "color": "0075ca",
+        "default": false,
+        "description": "Improvements or additions to documentation"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-04",
+      "id": 314,
+      "node_id": "3PgVcHoAli8twt8i",
+      "avatar_url": "https://avatars.example.test/u/314?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-04",
+      "html_url": "https://example.test/fixture-user-04",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-04",
+        "id": 314,
+        "node_id": "3PgVcHoAli8twt8i",
+        "avatar_url": "https://avatars.example.test/u/314?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-04",
+        "html_url": "https://example.test/fixture-user-04",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 4,
+    "created_at": "2026-07-11T00:34:00Z",
+    "updated_at": "2026-09-13T12:00:00Z",
+    "closed_at": "2026-09-30T08:15:00Z",
+    "author_association": "MEMBER",
+    "body": "Render queue cache billing render latency upload replica index quota upload parser.\n\nSession timeout queue retry parser login schema retry timeout cache token token webhook schema retry export replica cache quota queue metrics metrics index index upload shard webhook upload queue quota.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 1,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": "completed"
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/13",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000221,
+    "node_id": "2f7Z24J1FFEQGUMS",
+    "number": 13,
+    "title": "Latency cache fails after parser change #13",
+    "user": {
+      "login": "fixture-user-07",
+      "id": 107,
+      "node_id": "GvuJGns6U8Sm+xrp",
+      "avatar_url": "https://avatars.example.test/u/107?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-07",
+      "html_url": "https://example.test/fixture-user-07",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 1,
+    "created_at": "2026-06-21T08:53:00Z",
+    "updated_at": "2026-09-12T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Timeout shard login shard retry login render login.\n\nBilling billing metrics token quota migration login token shard render.\n\nSession metrics quota quota session queue retry latency billing billing webhook.\n\nExport timeout queue replica summary schema session index session billing render metrics billing webhook timeout summary queue replica summary retry shard render index.",
+    "reactions": {
+      "total_count": 5,
+      "+1": 5,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/14",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000238,
+    "node_id": "PpAesoN52UeAPulh",
+    "number": 14,
+    "title": "Index quota fails after session change #14",
+    "user": {
+      "login": "fixture-user-17",
+      "id": 117,
+      "node_id": "gFAAAd0aL2V/WpJB",
+      "avatar_url": "https://avatars.example.test/u/117?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-17",
+      "html_url": "https://example.test/fixture-user-17",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1002,
+        "node_id": "JmSlFD1aQToEmXA9",
+        "name": "documentation",
+        "color": "0075ca",
+        "default": false,
+        "description": "Improvements or additions to documentation"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-16",
+      "id": 946,
+      "node_id": "MsTQm017aCFRBYtX",
+      "avatar_url": "https://avatars.example.test/u/946?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-16",
+      "html_url": "https://example.test/fixture-user-16",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-16",
+        "id": 946,
+        "node_id": "MsTQm017aCFRBYtX",
+        "avatar_url": "https://avatars.example.test/u/946?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-16",
+        "html_url": "https://example.test/fixture-user-16",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 9,
+    "created_at": "2026-07-27T20:19:00Z",
+    "updated_at": "2026-09-15T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Webhook cache billing render replica schema billing export summary webhook login schema schema.\n\nTimeout latency quota cache latency session export upload schema token metrics upload parser queue shard login latency migration login session metrics latency parser quota.\n\nUpload summary latency upload render cache schema login upload cache schema render cache metrics webhook retry summary upload token parser upload token quota.",
+    "reactions": {
+      "total_count": 4,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/15",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000255,
+    "node_id": "DDDgKsVBKpw3OUkJ",
+    "number": 15,
+    "title": "Shard billing fails after migration change #15",
+    "user": {
+      "login": "fixture-user-01",
+      "id": 101,
+      "node_id": "2f2wIassTmpmR4o7",
+      "avatar_url": "https://avatars.example.test/u/101?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-01",
+      "html_url": "https://example.test/fixture-user-01",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-10",
+      "id": 791,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/791?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-10",
+        "id": 791,
+        "node_id": "DubIG2Bkqfh2bQSx",
+        "avatar_url": "https://avatars.example.test/u/791?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-10",
+        "html_url": "https://example.test/fixture-user-10",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-08-16T12:58:00Z",
+    "updated_at": "2026-09-14T12:00:00Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Queue session shard schema shard quota shard webhook cache latency cache replica migration summary timeout metrics webhook latency migration cache.\n\nUpload token migration upload token export timeout latency.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 2,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/16",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000272,
+    "node_id": "No3M2ZruULvgCCsO",
+    "number": 16,
+    "title": "Summary index fails after cache change #16",
+    "user": {
+      "login": "fixture-user-05",
+      "id": 105,
+      "node_id": "hzsHfkLwNurDd/H2",
+      "avatar_url": "https://avatars.example.test/u/105?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-05",
+      "html_url": "https://example.test/fixture-user-05",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-01",
+      "id": 393,
+      "node_id": "2f2wIassTmpmR4o7",
+      "avatar_url": "https://avatars.example.test/u/393?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-01",
+      "html_url": "https://example.test/fixture-user-01",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-01",
+        "id": 393,
+        "node_id": "2f2wIassTmpmR4o7",
+        "avatar_url": "https://avatars.example.test/u/393?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-01",
+        "html_url": "https://example.test/fixture-user-01",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 7,
+    "created_at": "2026-07-19T03:13:00Z",
+    "updated_at": "2026-09-19T12:00:00Z",
+    "closed_at": "2026-09-30T08:15:00Z",
+    "author_association": "CONTRIBUTOR",
+    "body": "Render render migration billing render metrics replica parser export token.\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 1,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": "completed"
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/17",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000289,
+    "node_id": "wEIH1sR8fXEZDhxN",
+    "number": 17,
+    "title": "Schema quota fails after parser change #17",
+    "user": {
+      "login": "fixture-user-16",
+      "id": 116,
+      "node_id": "MsTQm017aCFRBYtX",
+      "avatar_url": "https://avatars.example.test/u/116?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-16",
+      "html_url": "https://example.test/fixture-user-16",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1002,
+        "node_id": "JmSlFD1aQToEmXA9",
+        "name": "documentation",
+        "color": "0075ca",
+        "default": false,
+        "description": "Improvements or additions to documentation"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 3,
+    "created_at": "2026-06-10T06:13:00Z",
+    "updated_at": "2026-09-20T12:00:00Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Billing session cache render session metrics session latency login upload cache timeout render.",
+    "reactions": {
+      "total_count": 3,
+      "+1": 5,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/18",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000306,
+    "node_id": "ZHD93caDvzkkMTBH",
+    "number": 18,
+    "title": "Session summary fails after upload change #18",
+    "user": {
+      "login": "fixture-user-02",
+      "id": 102,
+      "node_id": "Xjd8OPIBUGl2vk8j",
+      "avatar_url": "https://avatars.example.test/u/102?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-02",
+      "html_url": "https://example.test/fixture-user-02",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-12",
+      "id": 779,
+      "node_id": "2zwrvERcUb35gFvV",
+      "avatar_url": "https://avatars.example.test/u/779?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-12",
+      "html_url": "https://example.test/fixture-user-12",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-12",
+        "id": 779,
+        "node_id": "2zwrvERcUb35gFvV",
+        "avatar_url": "https://avatars.example.test/u/779?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-12",
+        "html_url": "https://example.test/fixture-user-12",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 7,
+    "created_at": "2026-08-12T14:31:00Z",
+    "updated_at": "2026-09-24T12:00:00Z",
+    "closed_at": "2026-09-30T08:15:00Z",
+    "author_association": "CONTRIBUTOR",
+    "body": "Replica session index quota timeout queue index export export metrics parser billing latency queue.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 0,
+      "+1": 4,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": "completed"
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/19",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000323,
+    "node_id": "YqYSRrODO7ZIvlAt",
+    "number": 19,
+    "title": "Login cache fails after migration change #19",
+    "user": {
+      "login": "fixture-user-10",
+      "id": 110,
+      "node_id": "DubIG2Bkqfh2bQSx",
+      "avatar_url": "https://avatars.example.test/u/110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-10",
+      "html_url": "https://example.test/fixture-user-10",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1002,
+        "node_id": "JmSlFD1aQToEmXA9",
+        "name": "documentation",
+        "color": "0075ca",
+        "default": false,
+        "description": "Improvements or additions to documentation"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-06",
+      "id": 115,
+      "node_id": "pmd/gEiNecDWAKRO",
+      "avatar_url": "https://avatars.example.test/u/115?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-06",
+      "html_url": "https://example.test/fixture-user-06",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-06",
+        "id": 115,
+        "node_id": "pmd/gEiNecDWAKRO",
+        "avatar_url": "https://avatars.example.test/u/115?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-06",
+        "html_url": "https://example.test/fixture-user-06",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 2,
+    "created_at": "2026-09-10T09:18:00Z",
+    "updated_at": "2026-09-22T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Replica metrics token replica retry export replica upload latency migration latency parser schema migration summary render latency.",
+    "reactions": {
+      "total_count": 4,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/20",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000340,
+    "node_id": "1TTfDQM/Rqk8ivJi",
+    "number": 20,
+    "title": "Export index fails after login change #20",
+    "user": {
+      "login": "fixture-user-01",
+      "id": 101,
+      "node_id": "2f2wIassTmpmR4o7",
+      "avatar_url": "https://avatars.example.test/u/101?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-01",
+      "html_url": "https://example.test/fixture-user-01",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1001,
+        "node_id": "pArfzRv68QwJ/EiC",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-01",
+      "id": 318,
+      "node_id": "2f2wIassTmpmR4o7",
+      "avatar_url": "https://avatars.example.test/u/318?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-01",
+      "html_url": "https://example.test/fixture-user-01",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-01",
+        "id": 318,
+        "node_id": "2f2wIassTmpmR4o7",
+        "avatar_url": "https://avatars.example.test/u/318?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-01",
+        "html_url": "https://example.test/fixture-user-01",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 2,
+    "created_at": "2026-09-18T21:27:00Z",
+    "updated_at": "2026-09-30T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Replica timeout billing queue quota migration index timeout billing migration timeout upload token latency billing index migration metrics schema schema summary replica parser.\n\nShard latency timeout timeout render quota summary summary migration replica shard timeout session summary latency metrics index replica upload upload quota token login parser summary migration login.\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 0,
+      "+1": 3,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/21",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000357,
+    "node_id": "ucRqeD0uAvfFruMS",
+    "number": 21,
+    "title": "Login migration fails after retry change #21",
+    "user": {
+      "login": "fixture-user-05",
+      "id": 105,
+      "node_id": "hzsHfkLwNurDd/H2",
+      "avatar_url": "https://avatars.example.test/u/105?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-05",
+      "html_url": "https://example.test/fixture-user-05",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      },
+      {
+        "id": 1004,
+        "node_id": "RrebrsUOD0FEyD9W",
+        "name": "needs-triage",
+        "color": "fbca04",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 1,
+    "created_at": "2026-08-19T00:21:00Z",
+    "updated_at": "2026-09-27T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Cache billing replica retry quota queue metrics login queue cache token upload cache parser export billing retry token metrics webhook latency session webhook migration billing session billing.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```",
+    "reactions": {
+      "total_count": 0,
+      "+1": 4,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/22",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000374,
+    "node_id": "C6lnU8XVHRRdEQxR",
+    "number": 22,
+    "title": "Shard render fails after cache change #22",
+    "user": {
+      "login": "fixture-user-07",
+      "id": 107,
+      "node_id": "GvuJGns6U8Sm+xrp",
+      "avatar_url": "https://avatars.example.test/u/107?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-07",
+      "html_url": "https://example.test/fixture-user-07",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 8,
+    "created_at": "2026-08-24T22:49:00Z",
+    "updated_at": "2026-09-30T12:00:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "body": "Login migration summary parser cache metrics cache queue queue retry metrics quota parser latency shard queue billing timeout index timeout timeout cache render timeout webhook latency quota.\n\nMetrics quota token timeout export retry schema token upload render export.\n\nUpload render summary login login latency queue retry session.\n\nBilling summary index token upload shard billing webhook latency webhook latency login migration billing.",
+    "reactions": {
+      "total_count": 2,
+      "+1": 1,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/23",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000391,
+    "node_id": "ExFiDOWhaKQBKcdr",
+    "number": 23,
+    "title": "Render upload fails after token change #23",
+    "user": {
+      "login": "fixture-user-06",
+      "id": 106,
+      "node_id": "pmd/gEiNecDWAKRO",
+      "avatar_url": "https://avatars.example.test/u/106?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-06",
+      "html_url": "https://example.test/fixture-user-06",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1003,
+        "node_id": "VskawX1UjM7sxyQ4",
+        "name": "good first issue",
+        "color": "7057ff",
+        "default": false,
+        "description": "Good for newcomers"
+      },
+      {
+        "id": 1005,
+        "node_id": "W/3Tx0Hpzszc/kuA",
+        "name": "performance",
+        "color": "c5def5",
+        "default": false,
+        "description": "Speed or memory"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": {
+      "url": "https://api.example.test/repos/example-org/sample-service/milestones/3",
+      "number": 3,
+      "title": "Q4 hardening",
+      "state": "open",
+      "description": null,
+      "due_on": null
+    },
+    "comments": 6,
+    "created_at": "2026-06-10T03:08:00Z",
+    "updated_at": "2026-09-25T12:00:00Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Retry schema metrics quota webhook queue render index cache timeout token queue login login retry migration retry retry.\n\nMetrics quota migration index schema summary webhook cache cache metrics parser export migration.",
+    "reactions": {
+      "total_count": 4,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/24",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000408,
+    "node_id": "i/myB2KMDYtBxAFT",
+    "number": 24,
+    "title": "Replica latency fails after queue change #24",
+    "user": {
+      "login": "fixture-user-09",
+      "id": 109,
+      "node_id": "TNumScXV/+M9ZbsO",
+      "avatar_url": "https://avatars.example.test/u/109?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-09",
+      "html_url": "https://example.test/fixture-user-09",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [],
+    "state": "closed",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-11",
+      "id": 655,
+      "node_id": "3vGHX5jwsvUtDw4r",
+      "avatar_url": "https://avatars.example.test/u/655?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-11",
+      "html_url": "https://example.test/fixture-user-11",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-11",
+        "id": 655,
+        "node_id": "3vGHX5jwsvUtDw4r",
+        "avatar_url": "https://avatars.example.test/u/655?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-11",
+        "html_url": "https://example.test/fixture-user-11",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 7,
+    "created_at": "2026-07-11T18:40:00Z",
+    "updated_at": "2026-09-13T12:00:00Z",
+    "closed_at": "2026-09-30T08:15:00Z",
+    "author_association": "NONE",
+    "body": "Token migration export schema migration export upload session login queue quota queue session retry metrics cache quota latency summary quota migration cache cache retry cache latency.\n\nWebhook retry migration queue summary token shard queue migration shard session.\n\nLatency export index queue shard export render session replica token metrics cache latency queue login.\n\nRetry retry metrics summary export retry token shard token replica shard token replica metrics timeout webhook login schema retry retry token cache.\n\n```\nGET /v1/items?limit=50 HTTP/1.1\nHost: api.example.test\n```\n\n- [x] reproduced\n- [ ] fix merged\n- [ ] changelog updated",
+    "reactions": {
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": "completed"
+  },
+  {
+    "url": "https://api.example.test/repos/example-org/sample-service/issues/25",
+    "repository_url": "https://api.example.test/repos/example-org/sample-service",
+    "id": 5000425,
+    "node_id": "M9BH6VGY85q6CEhe",
+    "number": 25,
+    "title": "Export retry fails after token change #25",
+    "user": {
+      "login": "fixture-user-12",
+      "id": 112,
+      "node_id": "2zwrvERcUb35gFvV",
+      "avatar_url": "https://avatars.example.test/u/112?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-12",
+      "html_url": "https://example.test/fixture-user-12",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 1000,
+        "node_id": "Az1pJhfPErg6DBfC",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something is not working"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": {
+      "login": "fixture-user-05",
+      "id": 406,
+      "node_id": "hzsHfkLwNurDd/H2",
+      "avatar_url": "https://avatars.example.test/u/406?v=4",
+      "gravatar_id": "",
+      "url": "https://api.example.test/users/fixture-user-05",
+      "html_url": "https://example.test/fixture-user-05",
+      "type": "User",
+      "site_admin": false
+    },
+    "assignees": [
+      {
+        "login": "fixture-user-05",
+        "id": 406,
+        "node_id": "hzsHfkLwNurDd/H2",
+        "avatar_url": "https://avatars.example.test/u/406?v=4",
+        "gravatar_id": "",
+        "url": "https://api.example.test/users/fixture-user-05",
+        "html_url": "https://example.test/fixture-user-05",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "milestone": null,
+    "comments": 9,
+    "created_at": "2026-07-10T21:48:00Z",
+    "updated_at": "2026-09-27T12:00:00Z",
+    "closed_at": null,
+    "author_association": "NONE",
+    "body": "Token queue metrics migration session session render login webhook token login session webhook retry render timeout summary latency.\n\nIndex parser session replica queue shard export login index metrics queue queue render parser.\n\nCache queue shard upload webhook retry latency token index retry cache metrics retry timeout token upload parser cache billing quota render.\n\nUpload queue webhook shard session queue upload token summary login.",
+    "reactions": {
+      "total_count": 1,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "state_reason": null
+  }
+]

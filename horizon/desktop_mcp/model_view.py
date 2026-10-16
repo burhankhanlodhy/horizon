@@ -1,4 +1,4 @@
-"""Model-facing projection of open and retrieve results (0.1.6).
+"""Model-facing projection of open and retrieve results (0.1.6; compression_ratio since 0.1.7).
 
 ``model_view`` turns a full presentation payload into what Claude receives as
 the MCP tool result. The broker, the worker and the stats ledger keep the full
@@ -25,6 +25,7 @@ KEPT: tuple[str, ...] = (
     "compression_transform",
     "compression_encoding_version",
     "compression_decoding_hint",
+    "compression_ratio",
     "line_count",
     "selected_lines",
     "selector",
@@ -69,6 +70,7 @@ _COMPRESSION_KEYS = frozenset(
         "compression_transform",
         "compression_encoding_version",
         "compression_decoding_hint",
+        "compression_ratio",
     }
 )
 _PAGING_KEYS = frozenset({"more_available", "next_cursor"})

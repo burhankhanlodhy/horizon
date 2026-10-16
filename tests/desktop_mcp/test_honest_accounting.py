@@ -188,6 +188,40 @@ def test_compact_that_applies_a_fold_still_reports_positive_savings() -> None:
     assert accounting["source"]["raw_utf8_bytes"] == len(text.encode("utf-8"))
 
 
+def test_applied_compact_states_the_ratio_its_accounting_reports() -> None:
+    text = "".join(f"unique line {number:04d} with stable detail\n" for number in range(300))
+    text += "status ok\n" * 60
+    result = present_snapshot(
+        _snapshot(text, "log"),
+        mode="compact",
+        estimator=_FakeEstimator(),  # type: ignore[arg-type]
+        result_token_budget=8000,
+        max_result_bytes=262_144,
+        min_compaction_gain_tokens=1,
+        min_compaction_gain_percent=0,
+    )
+
+    counted = result["accounting"]["result"]
+    expected = round(
+        counted["delivered_token_estimate"] / counted["raw_equivalent_token_estimate"], 2
+    )
+    assert result["compression_ratio"] == expected
+    assert 0 < result["compression_ratio"] < 1
+
+
+def test_compact_that_is_not_applied_carries_no_ratio() -> None:
+    result = present_snapshot(
+        _snapshot("plain prose with nothing to fold\n"),
+        mode="compact",
+        estimator=_FakeEstimator(),  # type: ignore[arg-type]
+        result_token_budget=8000,
+        max_result_bytes=262_144,
+    )
+
+    assert result["compression_applied"] is False
+    assert "compression_ratio" not in result
+
+
 def test_focused_still_compares_against_the_full_document() -> None:
     lines = [f"ordinary entry {number:04d} with routine detail" for number in range(1500)]
     lines[700] = "ZZFOCUSMARK the one line that matters"
@@ -361,7 +395,7 @@ async def test_other_broker_codes_keep_the_generic_message() -> None:
 
 
 def test_server_version_comes_from_the_version_module() -> None:
-    assert VERSION == "0.1.6"
+    assert VERSION == "0.1.7"
     assert SERVER_VERSION == VERSION
     # The MCP initialize response reports the server's version through its
     # initialization options.

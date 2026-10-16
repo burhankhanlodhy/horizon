@@ -13,10 +13,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
+from horizon.desktop_mcp import json_table
+from horizon.desktop_mcp.log_templates import (
+    encode_log_templates,
+    expand_log_templates,
+    looks_like_log,
+)
+
 Fidelity = Literal[
     "byte_exact",
     "reversible_fold",
     "normalized_json_whitespace",
+    "normalized_json_table",
     "normalized_log_ansi",
     "normalized_diff_metadata",
 ]
@@ -30,9 +38,26 @@ _DECODING_HINTS = {
         "JSON whitespace between tokens was removed; string and number lexemes are retained. "
         "This is semantic JSON normalization, not byte recovery; use the original snapshot for exact text."
     ),
+    "json_table": (
+        "Lossless JSON table: values, key order and number spelling are exact; whitespace and string escapes "
+        "are not kept, so use the original snapshot for exact text. Indent 2 spaces per level. "
+        "`k: v` is a field; `k:` opens an object one level deeper; `k: {}` is empty. `k[N]: a,b` is an array "
+        "of N values; `k[N]:` with `- item` lines one level deeper is a list. `k[N]{c1,c2}:` is a table of N "
+        "rows one level deeper, cells in column order; an empty cell is an object or array, written as a field "
+        "named by its column one level below the row. Top-level `[N]:` is an unnamed array. Bare text and keys "
+        "are literal strings, double-quoted ones are JSON strings; null, true, false and numbers are literals."
+    ),
     "log_runs": (
         "For each `... (repeated N times)` marker, emit N total copies of the immediately "
         "preceding line (N includes the visible line). ANSI color was removed only when fidelity says normalized_log_ansi."
+    ),
+    "log_templates": (
+        "Lines `@k = <text>` at the top are a legend: entry k is <text>. `## date D` sets the date "
+        "for the lines after it (D ends in T); a line `HH:MM:SS...` after it is the full timestamp D + "
+        "that line, with no space added. A line ending ` @k` is its timestamp, one space, then entry k. "
+        "Other lines are complete. Expand dates, then the legend; then, for each `... (repeated N times)` "
+        "marker, emit N total copies of the preceding line. ANSI color, if any, was removed from the source "
+        "before compaction; fidelity says normalized_log_ansi when that happened."
     ),
     "repeated_lines": (
         "For each `... (repeated N times)` marker, emit N total copies of the immediately "
@@ -126,11 +151,14 @@ def _minify_json_whitespace(text: str) -> str:
 
 
 def compact_json(text: str) -> CompactOutcome:
-    """Minify JSON whitespace while preserving every string/number lexeme.
+    """Prefer the lossless table form; otherwise minify JSON whitespace.
 
-    Duplicate keys and non-standard numeric constants are rejected.  The
-    compact representation is labeled normalized because its original
-    whitespace is not carried in the model-facing text.
+    The table form (``json_table``) is used only when decoding it reproduces the
+    parsed source exactly (types, key order and number spelling included) and it
+    is at least 15% smaller in UTF-8 bytes than the whitespace-minified text.
+    Duplicate keys and non-standard numeric constants are rejected.  Both compact
+    forms are labeled normalized because the original whitespace is not carried
+    in the model-facing text.
     """
     try:
         before = _parse_json(text)
@@ -138,7 +166,19 @@ def compact_json(text: str) -> CompactOutcome:
         after = _parse_json(candidate)
     except (ValueError, TypeError, json.JSONDecodeError, RecursionError):
         return CompactOutcome(text, False, "byte_exact")
-    if before != after or len(candidate.encode("utf-8")) >= len(text.encode("utf-8")):
+    if before != after:
+        return CompactOutcome(text, False, "byte_exact")
+    table: str | None
+    try:
+        table = json_table.encode(json_table.parse_lexical(text))
+        if not json_table.same_json(json_table.decode(table), before):
+            table = None
+    except (ValueError, TypeError, RecursionError):
+        table = None
+    candidate_bytes = len(candidate.encode("utf-8"))
+    if table is not None and len(table.encode("utf-8")) * 100 <= candidate_bytes * 85:
+        return CompactOutcome(table, True, "normalized_json_table", "json_table")
+    if candidate_bytes >= len(text.encode("utf-8")):
         return CompactOutcome(text, False, "byte_exact")
     return CompactOutcome(candidate, True, "normalized_json_whitespace", "json_whitespace")
 
@@ -174,14 +214,33 @@ def compact_text(text: str, kind: str) -> CompactOutcome:
         return CompactOutcome(text, False, "byte_exact")
 
     candidate = compact_lossless(text, kind)
-    if candidate == text:
-        return CompactOutcome(text, False, "byte_exact")
 
     if kind == "log":
+        # Candidates: log_runs, and log_templates applied to the run result or
+        # to the plain text. Each must reproduce the ANSI-normalized source
+        # exactly; a template candidate must also save at least 15% of the raw
+        # bytes. The smallest verified candidate wins.
         normalized = strip_ansi(text)
-        if candidate == normalized or expand_runs(candidate) == normalized:
-            fidelity: Fidelity = "normalized_log_ansi" if normalized != text else "reversible_fold"
-            return CompactOutcome(candidate, True, fidelity, "log_runs")
+        fidelity: Fidelity = "normalized_log_ansi" if normalized != text else "reversible_fold"
+        options: list[tuple[str, str]] = []
+        runs_ok = candidate != text and (
+            candidate == normalized or expand_runs(candidate) == normalized
+        )
+        if runs_ok:
+            options.append((candidate, "log_runs"))
+        template_limit = len(text.encode("utf-8")) * 85 // 100
+        for base in ([candidate] if runs_ok else []) + [normalized]:
+            encoded = encode_log_templates(base)
+            if encoded is None or expand_runs(expand_log_templates(encoded)) != normalized:
+                continue
+            if len(encoded.encode("utf-8")) <= template_limit:
+                options.append((encoded, "log_templates"))
+        if not options:
+            return CompactOutcome(text, False, "byte_exact")
+        best, transform = min(options, key=lambda option: len(option[0].encode("utf-8")))
+        return CompactOutcome(best, True, fidelity, transform)
+
+    if candidate == text:
         return CompactOutcome(text, False, "byte_exact")
 
     if kind == "search":
@@ -229,6 +288,10 @@ def infer_compaction_kind(kind: str, text: str) -> str | None:
         "diff": "diff",
         "patch": "diff",
     }
+    # A .txt file is a log only when most of its non-blank lines start with a
+    # timestamp; other .txt files keep the prose/text transform.
+    if normalized == "txt" and looks_like_log(text):
+        return "log"
     selected = aliases.get(normalized)
     if selected == "json" and not text.lstrip().startswith(("{", "[")):
         return None
@@ -242,5 +305,6 @@ __all__ = [
     "compact_json",
     "compact_text",
     "compression_decoding_hint",
+    "expand_log_templates",
     "infer_compaction_kind",
 ]

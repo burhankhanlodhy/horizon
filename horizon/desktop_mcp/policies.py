@@ -314,6 +314,60 @@ def _finalize(
         return payload
 
 
+def _delivered_ratio(result: dict[str, Any]) -> float | None:
+    """Delivered over raw-equivalent estimated tokens, two decimals, from accounting."""
+    accounting = result.get("accounting", {}).get("result", {})
+    raw_count = accounting.get("raw_equivalent_token_estimate")
+    delivered_count = accounting.get("delivered_token_estimate")
+    if (
+        not isinstance(raw_count, int)
+        or isinstance(raw_count, bool)
+        or raw_count <= 0
+        or not isinstance(delivered_count, int)
+        or isinstance(delivered_count, bool)
+    ):
+        return None
+    return round(delivered_count / raw_count, 2)
+
+
+def _finalize_compact(
+    payload: dict[str, Any],
+    raw_payload: dict[str, Any],
+    *,
+    raw_text: str,
+    rendered_text: str,
+    estimator: Any | None,
+) -> dict[str, Any]:
+    """Finalize a compact result; when compression was applied, state its ratio.
+
+    ``compression_ratio`` is part of the delivered result, so its own tokens are
+    counted. The accounting is recomputed (at most four passes, which settle in
+    practice) until the reported value matches it. A result that was not
+    compressed carries no ratio.
+    """
+    result = _finalize(
+        payload,
+        raw_payload,
+        raw_text=raw_text,
+        rendered_text=rendered_text,
+        estimator=estimator,
+    )
+    if payload.get("compression_applied") is not True:
+        return result
+    for _ in range(4):
+        ratio = _delivered_ratio(result)
+        if ratio is None or result.get("compression_ratio") == ratio:
+            break
+        result = _finalize(
+            {**payload, "compression_ratio": ratio},
+            raw_payload,
+            raw_text=raw_text,
+            rendered_text=rendered_text,
+            estimator=estimator,
+        )
+    return result
+
+
 _EXACT_RAW_EXCLUDED_KEYS = frozenset({"accounting", "next_cursor", "result_token_budget_applied"})
 
 
@@ -803,7 +857,7 @@ def present_snapshot(
         )
         raw_payload["compression_applied"] = False
         raw_payload["compression_transform"] = None
-        result = _finalize(
+        result = _finalize_compact(
             payload,
             raw_payload,
             raw_text=raw_scope,

@@ -91,6 +91,7 @@ def _full_payload() -> dict[str, Any]:
             "compression_transform": "json_whitespace",
             "compression_encoding_version": "contextshrink-compact-v1",
             "compression_decoding_hint": "hint",
+            "compression_ratio": 0.35,
             "line_count": 3,
             "selected_lines": {"start": 1, "end": 3},
             "match_count": 2,
@@ -119,6 +120,7 @@ def test_projection_keeps_listed_fields_in_order() -> None:
         "compression_transform",
         "compression_encoding_version",
         "compression_decoding_hint",
+        "compression_ratio",
         "line_count",
         "selected_lines",
         "selector",
@@ -133,6 +135,7 @@ def test_projection_keeps_listed_fields_in_order() -> None:
         "more_available",
         "next_cursor",
     ]
+    assert view["compression_ratio"] == 0.35
     assert view["warnings"] == ["ocr skipped"]
     assert view["block_counts"] == {"page": 1}
 
@@ -177,6 +180,18 @@ def test_conditional_fields_appear_only_when_informative() -> None:
     assert view["requested_mode"] == "compact"
     assert view["fidelity"] == "partial_exact_excerpt"
     assert view["next_cursor"] == "c"
+
+
+def test_compression_ratio_is_dropped_when_compression_was_not_applied() -> None:
+    not_compressed = {
+        "source_id": "cs1",
+        "mode": "exact",
+        "compression_applied": False,
+        "compression_ratio": 0.9,
+        "text": "t",
+    }
+
+    assert "compression_ratio" not in model_view(not_compressed)
 
 
 def test_paging_fields_are_absent_when_no_more_is_available() -> None:
