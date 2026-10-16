@@ -6,6 +6,7 @@ import pytest
 
 from horizon.desktop_mcp.local_backend import LocalBackend, LocalBackendError
 from horizon.desktop_mcp.measurement import measure_payload
+from horizon.desktop_mcp.model_view import model_view
 from horizon.desktop_mcp.selectors import select_exact
 from horizon.desktop_mcp.source_access import OpenedSource, SourceAccessError
 
@@ -325,7 +326,7 @@ def test_stats_report_counter_provenance_and_only_observed_compact_responses() -
     assert "original snapshot" in compacted["compression_decoding_hint"]
     assert (
         compacted["accounting"]["result"]["delivered_token_estimate"]
-        == measure_payload(compacted, backend.estimator)["token_estimate"]
+        == measure_payload(model_view(compacted), backend.estimator)["token_estimate"]
     )
     after = backend.stats()
     assert after["compression_applied"] is True

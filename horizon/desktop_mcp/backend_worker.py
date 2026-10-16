@@ -11,6 +11,7 @@ from typing import Any
 
 from .broker import BrokerError, _load_local_settings
 from .broker_transport import MAX_FRAME_BYTES, BrokerTransportError, _validate_operation_args
+from .model_view import model_view
 from .settings import ConfigurationError, DesktopSettings
 
 
@@ -218,8 +219,12 @@ class Runtime:
             raise BrokerError("source_unavailable")
         result = dict(result)
         if operation in {"open", "retrieve"} and "text" in result:
-            encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            if len(encoded) > self.settings.max_result_bytes:
+            # Check the bytes the model receives (the projection), the same bytes
+            # that policy fitting measures. The full frame is bounded by MAX_FRAME_BYTES.
+            sent = json.dumps(
+                model_view(result), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+            if len(sent) > self.settings.max_result_bytes:
                 metadata = {
                     key: result[key]
                     for key in ("source_id", "version", "line_count")

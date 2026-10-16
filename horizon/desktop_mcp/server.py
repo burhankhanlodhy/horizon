@@ -14,6 +14,7 @@ from mcp.types import CallToolResult, TextContent, Tool
 from .backend import FixtureBackend, FixtureRangeError
 from .broker import BrokerClient, BrokerError
 from .contracts import ToolInputError, json_text, tool_specs, validate_tool_arguments
+from .model_view import model_view
 from .settings import DesktopSettings
 from .version import VERSION as SERVER_VERSION
 
@@ -48,8 +49,16 @@ def _error(
     return CallToolResult(content=[TextContent(type="text", text=json_text(payload))], isError=True)
 
 
-def _result(payload: dict[str, Any], settings: DesktopSettings) -> CallToolResult:
-    encoded = json_text(payload)
+def _result(
+    payload: dict[str, Any], settings: DesktopSettings, *, model_facing: bool = False
+) -> CallToolResult:
+    """Serialize a tool result; ``model_facing`` sends the model view of a presentation.
+
+    The byte limit applies to what is actually sent. Error metadata still comes
+    from the full payload.
+    """
+    sent = model_view(payload) if model_facing else payload
+    encoded = json_text(sent)
     if len(encoded.encode("utf-8")) > settings.max_result_bytes:
         metadata = {
             key: payload[key]
@@ -220,7 +229,7 @@ def create_server(
                 )
             if payload is None:
                 return _error("source_unavailable", "The requested source is not available.")
-            return _result(payload, effective_settings)
+            return _result(payload, effective_settings, model_facing=local_profile)
 
         if name == "contextshrink_retrieve":
             source_id = values["source_id"]
@@ -260,7 +269,7 @@ def create_server(
                 return _error("source_unavailable", "The requested source is not available.")
             if not local_profile:
                 payload["coverage"] = "exact selected lines at immutable fixture version"
-            return _result(payload, effective_settings)
+            return _result(payload, effective_settings, model_facing=local_profile)
 
         if name == "contextshrink_stats":
             try:

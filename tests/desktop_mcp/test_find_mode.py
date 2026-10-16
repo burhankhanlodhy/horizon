@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 import pytest
@@ -390,7 +391,12 @@ async def test_find_through_the_in_process_server_returns_the_count_and_blocks()
         payload = json.loads(response.content[0].text)
         assert payload["mode"] == "find"
         assert payload["match_count"] == 3
-        assert _matched_lines(payload)[:2] == [9, 10]
+        # The model view drops the matches list; the block headers in text carry the lines.
+        first_start, first_end = (
+            int(value)
+            for value in re.search(r"\[\[lines (\d+)-(\d+)\]\]", payload["text"]).groups()
+        )
+        assert first_start <= 9 and first_end >= 10
 
         empty = await client.call_tool(
             "contextshrink_open",

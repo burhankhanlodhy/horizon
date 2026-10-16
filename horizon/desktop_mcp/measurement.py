@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .model_view import model_view
+
 _O200K_URL = "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
 _O200K_SHA256 = "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d"
 _TOKENIZER_NAME = "o200k_base"
@@ -214,11 +216,20 @@ def _payload_with_accounting(payload: dict[str, Any], accounting: dict[str, Any]
     return result
 
 
+def _as_sent(payload: dict[str, Any], project: bool) -> dict[str, Any]:
+    """The object whose bytes are measured: the model view, or the full payload."""
+    return model_view(payload) if project else payload
+
+
 def _count_pair(
-    payload: dict[str, Any], raw_payload: dict[str, Any], estimator: TokenEstimator
+    payload: dict[str, Any],
+    raw_payload: dict[str, Any],
+    estimator: TokenEstimator,
+    project: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    delivered = measure_payload(payload, estimator)
-    raw = measure_payload(raw_payload, estimator)
+    """Measure both sides as they are delivered (see ``model_view``)."""
+    delivered = measure_payload(_as_sent(payload, project), estimator)
+    raw = measure_payload(_as_sent(raw_payload, project), estimator)
     return raw, delivered
 
 
@@ -232,13 +243,15 @@ def finalize_accounting(
     retrieval_call_count: int = 0,
     retrieval_bytes: int = 0,
     retrieval_token_estimate: int = 0,
+    project: bool = True,
 ) -> dict[str, Any]:
     """Attach bounded, self-inclusive accounting to a complete result.
 
     The raw baseline must be the same metadata/scope with ``raw_text`` in the
     same text-bearing field as ``rendered_text`` in ``payload``.  Counting is
-    performed on the full inner JSON result, including its metadata and the
-    final accounting object.  Three passes bound self-counting overhead.
+    performed on the model view of the inner JSON result (``model_view``), which
+    drops the accounting object itself, so the figures describe what the model
+    receives.  The passes bound the fixed point of the byte fields.
     """
     if not isinstance(payload, dict) or not isinstance(raw_payload, dict):
         raise TypeError("payload and raw_payload must be dictionaries")
@@ -290,6 +303,7 @@ def finalize_accounting(
             _payload_with_accounting(clean_payload, accounting),
             _payload_with_accounting(clean_raw, accounting),
             active,
+            project,
         )
         raw_source_bytes = len(raw_text.encode("utf-8"))
         delivered_source_bytes = len(rendered_text.encode("utf-8"))
@@ -325,8 +339,8 @@ def finalize_accounting(
     for _ in range(8):
         final_payload = _payload_with_accounting(clean_payload, accounting)
         final_raw_payload = _payload_with_accounting(clean_raw, accounting)
-        actual_delivered = measure_payload(final_payload, active)
-        actual_raw = measure_payload(final_raw_payload, active)
+        actual_delivered = measure_payload(_as_sent(final_payload, project), active)
+        actual_raw = measure_payload(_as_sent(final_raw_payload, project), active)
         result_accounting = accounting["result"]
         if (
             result_accounting.get("delivered_utf8_bytes") == actual_delivered["utf8_bytes"]
