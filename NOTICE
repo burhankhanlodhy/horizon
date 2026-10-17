@@ -1,3 +1,12 @@
+ContextShrink Horizon
+Copyright 2026 ContextShrink
+
+ContextShrink Horizon is a modified version of Headroom
+(https://github.com/headroomlabs-ai/headroom). ContextShrink has changed and
+extended many of its files; those changes and additions are Copyright 2026
+ContextShrink and are distributed under the Apache License, Version 2.0
+(see LICENSE).
+
 Headroom
 Copyright 2025 Headroom Contributors
 

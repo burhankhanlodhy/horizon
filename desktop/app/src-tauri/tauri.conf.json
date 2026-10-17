@@ -30,7 +30,9 @@
     "publisher": "ContextShrink",
     "shortDescription": "Run your coding tools through ContextShrink",
     "resources": {
-      "../../client/dist/horizon/": "horizon/"
+      "../../client/dist/horizon/": "horizon/",
+      "../../../LICENSE": "LICENSE",
+      "../../../NOTICE": "NOTICE"
     },
     "windows": {
       "nsis": {
