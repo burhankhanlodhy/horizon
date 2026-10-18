@@ -109,9 +109,9 @@ on visible savings and on real savings.
      read, 5-minute and 1-hour writes, input and output.
    - The forwarder sums this per Claude Code session (the
      `x-claude-code-session-id` header) and per day.
-   - Shown immediately, with no 4-hour wait: dollars saved, the percentage of
-     what the session would have cost, and the **tokens trimmed %**, which can
-     be compared with Vachi's figure.
+   - Shown immediately, with no 4-hour wait: the three figures (see Risks and
+     decisions), which are tokens trimmed %, the list-price value of the
+     trimmed tokens, and the verified saving.
    - A "verified" mark when the session's usage comes from Anthropic's own
      `usage` fields, which is always the case for proxied requests.
 4. **The tray and dashboard** show the same numbers, with a per-session list.
@@ -163,9 +163,16 @@ default:
   through a proxy that changes requests may conflict with Anthropic's terms.
   Vachi does it commercially; it is the owner's risk decision. Pass-through is
   the least concerning step.
-- **Displayed numbers will look smaller than Vachi's.** Our dollars are honest,
-  and Vachi's are priced as if uncached. Show tokens trimmed % (comparable) and
-  real dollars (verified) side by side, with a one-line explanation.
+- **The savings display (decided 2026-10-18): three figures.**
+  1. **Tokens trimmed %:** the same kind of metric as Vachi's percentage.
+  2. **"$X of tokens trimmed at API list price":** tokens removed × the API
+     input price, the same method as Vachi's dollar figure, and labelled as
+     such wherever it is shown.
+  3. **"You saved $Y (verified)":** the real difference at actual cache rates.
+  - Only figure 3 feeds the Pro fee (5% of savings), the Free cap and any
+    "you saved" claim in marketing.
+  - The bottom bar may lead with figure 1 or 2, but the label must state the
+    basis.
 - **Privacy is the same as Vachi's.** Traffic goes through our hosted proxy. A
   later option is a local-only mode, running the proxy on the user's PC, as a
   differentiator.
