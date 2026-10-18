@@ -1,0 +1,11 @@
+{
+  "name": "inventory",
+  "version": "1.0.0",
+  "description": "A small stock-keeping library.",
+  "private": true,
+  "main": "src/inventory.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "UNLICENSED"
+}
