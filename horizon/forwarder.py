@@ -30,15 +30,30 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
+import os
 import re
+import threading
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response, StreamingResponse
+
+from horizon.forwarder_stats import (
+    HEARTBEAT_SECONDS,
+    ClaudeCodeStats,
+    RequestRecorder,
+    claude_code_dir,
+    default_state_dir,
+    heartbeat,
+)
+from horizon.verified_savings import FORWARDER_CLAUDE_CODE, FORWARDER_HEADER
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +71,17 @@ _HOP_BY_HOP = {
 
 #: The proxy security gate reads the credential from this header.
 CREDENTIAL_HEADER = "x-horizon-proxy-token"
+
+#: Answered by the relay itself, never forwarded: a liveness and identity probe.
+HEALTH_PATH = "/__cs/health"
+
+#: Request header the proxy reads to pass a request through untouched (paused).
+BYPASS_HEADER = "x-horizon-bypass"
+
+#: Relayed Anthropic messages calls: the path suffix that gets the Claude Code tag.
+_MESSAGES_SUFFIX = "/v1/messages"
+_KEEPALIVE_PATH = re.compile(r"^/k/([^/]+)/")
+_SESSION_HEADER = "x-claude-code-session-id"
 
 #: Set by transport plugins: the real destination's origin, and the original
 #: path when the plugin normalized it for the proxy.
@@ -148,12 +174,23 @@ async def _connect_upstream_ws(url: str, headers: dict[str, str], subprotocols: 
     )
 
 
+def _forwarder_version() -> str:
+    from horizon import __version__
+
+    return str(__version__)
+
+
 def build_app(
     remote_url: str,
     credential_provider: Callable[[], str],
     transport: httpx.AsyncBaseTransport | None = None,
     ws_connect: WsConnect | None = None,
     upstream: str | None = None,
+    *,
+    port: int = 0,
+    stats: ClaudeCodeStats | None = None,
+    pause_file: Path | None = None,
+    started_at: str | None = None,
 ) -> FastAPI:
     """Build the relay app.
 
@@ -165,10 +202,17 @@ def build_app(
     rotated key stored mid-session is picked up without a restart. It should
     return the raw ``hz_...`` key and may raise :class:`horizon.vault.VaultError`.
     ``transport`` and ``ws_connect`` exist for tests (inject fakes).
+
+    ``stats`` turns on the Claude Code path: ``/v1/messages`` calls are tagged
+    ``x-horizon-forwarder: claude-code``, their verified-savings comment is
+    stripped, and the counters are written. ``pause_file`` makes model calls
+    bypass Horizon while the file exists.
     """
 
     base = remote_url.rstrip("/")
     fixed = parse_upstream(upstream) if upstream else None
+    started = started_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    forwarder_info = {"pid": os.getpid(), "version": _forwarder_version(), "port": port}
     app = FastAPI(title="Horizon Forwarder", docs_url=None, redoc_url=None, openapi_url=None)
     client = httpx.AsyncClient(
         base_url=base,
@@ -183,7 +227,12 @@ def build_app(
     )
 
     async def send(
-        http: httpx.AsyncClient, request: Request, url: str, headers: dict, path: str
+        http: httpx.AsyncClient,
+        request: Request,
+        url: str,
+        headers: dict,
+        path: str,
+        recorder: RequestRecorder | None = None,
     ) -> Response:
         body = await request.body()
         try:
@@ -209,17 +258,36 @@ def build_app(
             if name.lower() not in _HOP_BY_HOP
         }
 
+        if recorder is not None:
+            recorder.start(upstream_resp.headers.get("content-type", ""))
+
         async def stream_iter():
             try:
                 if upstream_resp.is_stream_consumed:
                     # Fully-buffered upstream (test transports, some gateways
                     # hand back a materialized response): relay the buffer.
-                    yield upstream_resp.content
+                    source = upstream_resp.content
+                    relayed = recorder.feed(source) if recorder is not None else source
+                    if relayed:
+                        yield relayed
                 else:
                     async for chunk in upstream_resp.aiter_raw():
-                        yield chunk
+                        relayed = recorder.feed(chunk) if recorder is not None else chunk
+                        if relayed:
+                            yield relayed
+                if recorder is not None:
+                    tail = recorder.finish_bytes()
+                    if tail:
+                        yield tail
             finally:
                 await upstream_resp.aclose()
+                if recorder is not None:
+                    # Counted and written on the writer thread after the body
+                    # ends: nothing here waits on pricing or disk.
+                    recorder.schedule_complete(
+                        {k.lower(): v for k, v in upstream_resp.headers.items()},
+                        upstream_resp.status_code,
+                    )
 
         return StreamingResponse(
             stream_iter(),
@@ -335,6 +403,18 @@ def build_app(
             except RuntimeError:
                 pass  # the client already closed
 
+    @app.get(HEALTH_PATH)
+    async def health() -> dict[str, Any]:
+        # Registered before the catch-all relay, and never relayed.
+        return {
+            "ok": True,
+            "version": forwarder_info["version"],
+            "pid": forwarder_info["pid"],
+            "port": port,
+            "remote": base,
+            "started_at": started,
+        }
+
     @app.api_route(
         "/{path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
@@ -382,9 +462,47 @@ def build_app(
         }
         headers.update(tags)
         headers[CREDENTIAL_HEADER] = credential_provider()
-        return await send(client, request, url, headers, path)
+        # The tag is the forwarder's to add: a client cannot claim it for itself.
+        headers.pop(FORWARDER_HEADER, None)
+        if pause_file is not None and pause_file.exists():
+            headers[BYPASS_HEADER] = "true"
+        recorder = None
+        if url.endswith(_MESSAGES_SUFFIX):
+            headers[FORWARDER_HEADER] = FORWARDER_CLAUDE_CODE
+            if stats is not None:
+                recorder = await _messages_recorder(stats, request, url, forwarder_info)
+        return await send(client, request, url, headers, path, recorder=recorder)
 
     return app
+
+
+async def _messages_recorder(
+    stats: ClaudeCodeStats,
+    request: Request,
+    url: str,
+    forwarder_info: dict[str, Any],
+) -> RequestRecorder:
+    """Describe one ``/v1/messages`` call for the stats: session, model, keep-alive.
+
+    Only the ``model`` field is read from the body. The body is not kept.
+    """
+    model = ""
+    try:
+        payload = json.loads(await request.body())  # Starlette caches it for send()
+        if isinstance(payload, dict):
+            model = str(payload.get("model") or "")
+    except (ValueError, TypeError):
+        model = ""
+    keepalive_match = _KEEPALIVE_PATH.match(url)
+    keepalive_id = keepalive_match.group(1) if keepalive_match else ""
+    session_id = request.headers.get(_SESSION_HEADER, "").strip() or keepalive_id or "unknown"
+    return RequestRecorder(
+        stats,
+        session_id=session_id[:128],
+        model=model[:128],
+        keepalive=bool(keepalive_id),
+        forwarder_info=forwarder_info,
+    )
 
 
 def run_forwarder(
@@ -393,11 +511,17 @@ def run_forwarder(
     host: str = "127.0.0.1",
     credential_provider: Callable[[], str] | None = None,
     upstream: str | None = None,
+    state_dir: Path | None = None,
+    pause_file: Path | None = None,
 ) -> None:
     """Run the relay (blocking). Binds loopback only.
 
     ``credential_provider`` defaults to reading the per-user key from the OS
     credential store. Startup fails fast when no credential is stored.
+
+    The Claude Code stats (``status.json``, ``status.txt``) are written under
+    ``state_dir`` (default ``%LOCALAPPDATA%\\ContextShrink``) with a heartbeat
+    every ``HEARTBEAT_SECONDS``.
     """
 
     if upstream:
@@ -421,7 +545,28 @@ def run_forwarder(
 
     import uvicorn
 
+    root = Path(state_dir) if state_dir else default_state_dir()
+    stats = ClaudeCodeStats(claude_code_dir(root), pause_file=pause_file)
+    info = {"pid": os.getpid(), "version": _forwarder_version(), "port": port}
+    stats.flush(forwarder=info)
+    stop = threading.Event()
+    threading.Thread(
+        target=heartbeat,
+        args=(stop, lambda: stats.flush(forwarder=info), HEARTBEAT_SECONDS),
+        name="cs-heartbeat",
+        daemon=True,
+    ).start()
+
     app = build_app(
-        remote_url=remote_url, credential_provider=credential_provider, upstream=upstream
+        remote_url=remote_url,
+        credential_provider=credential_provider,
+        upstream=upstream,
+        port=port,
+        stats=stats,
+        pause_file=stats.pause_file,
     )
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    finally:
+        stop.set()
+        stats.close()

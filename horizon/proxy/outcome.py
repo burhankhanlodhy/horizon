@@ -472,8 +472,14 @@ def _warn_estimated_input(provider: str, model: str) -> None:
     )
 
 
-async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
+async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
     """Single funnel for per-request bookkeeping. The contract.
+
+    Returns the request's verified saving in USD: the cache-aware figure the
+    savings ledger records for it (see
+    :func:`horizon.savings_ledger.verified_saving_usd`), or ``0.0`` when the
+    request saved nothing or was rejected. The stream finalizer and the
+    non-streaming handler use it to stamp ``x-horizon-verified-savings-usd``.
 
     Owns the downstream effects in canonical order:
 
@@ -583,7 +589,7 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
             await handler.metrics.record_rate_limited(provider=outcome.provider, source="upstream")
         else:
             await handler.metrics.record_failed(provider=outcome.provider)
-        return
+        return 0.0
 
     # Outcome stage: hand the meter's reading to any pipeline extension that
     # adapts to it — a ceiling that was hit, an effort setting that did or did
@@ -736,6 +742,29 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     if not input_provider_reported and billed_input_tokens > 0:
         _warn_estimated_input(outcome.provider, outcome.model)
 
+    # The verified saving: the same cache-aware figure the ledger line written by
+    # record_request carries. Mapped from the same inputs record_request uses
+    # (clamped tokens_saved, deferral as a separate layer, and the local count
+    # as the ledger's "before" basis), so the two cannot drift.
+    from horizon.savings_ledger import verified_saving_usd
+
+    _ledger_compression = max(int(novel_tokens_saved), 0)
+    _ledger_deferral = max(int(tool_search_saved), 0)
+    verified_usd = verified_saving_usd(
+        tokens_before=int(outcome.optimized_tokens) + _ledger_compression + _ledger_deferral,
+        tokens_after=int(outcome.optimized_tokens),
+        model=outcome.model,
+        saved_compression=_ledger_compression,
+        saved_tool_schema=_ledger_deferral,
+        cache_read_tokens=outcome.cache_read_tokens,
+        cache_write_tokens=outcome.cache_write_tokens,
+        cache_write_5m_tokens=outcome.cache_write_5m_tokens,
+        cache_write_1h_tokens=outcome.cache_write_1h_tokens,
+        uncached_input_tokens=outcome.uncached_input_tokens,
+        cache_inferred=outcome.cache_inferred,
+        provider=outcome.provider,
+    )
+
     # 1. Prometheus / SavingsTracker.
     await handler.metrics.record_request(
         provider=outcome.provider,
@@ -880,3 +909,4 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
         f"{client_part}"
         f"{cached_part}"
     )
+    return verified_usd

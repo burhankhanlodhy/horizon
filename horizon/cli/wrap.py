@@ -1086,20 +1086,50 @@ _HORIZON_ENV_KEYS = ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH")
 _WRAP_SELFHEAL_HOOK_MARKER = "horizon-wrap-selfheal"
 
 
+def _live_connect_keys(settings_path: Path) -> set[str]:
+    """Env keys a Claude Code Connect state (desktop app) currently owns.
+
+    ``horizon desktop connect`` writes the user-level route and records it in a
+    state file beside the settings. While that state exists, ``unwrap claude``
+    must leave those keys alone: the desktop app runs unwrap whenever a console
+    closes, and it must not cut a live route. An unreadable state protects every
+    key, since guessing wrong would strip a route Horizon still owns.
+    """
+    from horizon.providers.claude.vscode import _state_path
+
+    state_path = _state_path(settings_path)
+    if not state_path.exists():
+        return set()
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        managed = state["managed"]
+        return {key for key in _HORIZON_ENV_KEYS if isinstance(managed.get(key), str)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return set(_HORIZON_ENV_KEYS)
+
+
 def _remove_claude_managed_hooks(settings_path: Path | None = None) -> bool:
     """Remove Horizon-managed entries from Claude settings.json.
 
     Reverses what ``horizon init claude`` adds:
       * PreToolUse / SessionStart hooks whose command contains a Horizon marker
         (``horizon-init-claude``), and
-      * the ``ANTHROPIC_BASE_URL`` proxy-routing env var.
-    Unrelated settings and user-authored hooks are left untouched.
+      * the ``ANTHROPIC_BASE_URL`` proxy-routing env var, unless a live Connect
+        state owns it (see :func:`_live_connect_keys`).
+    Unrelated settings and user-authored hooks are left untouched. The user-level
+    settings follow ``CLAUDE_CONFIG_DIR`` and are edited under the settings lock.
     """
+    from horizon.providers.claude.vscode import claude_user_settings_path
 
-    path = settings_path or (Path.home() / ".claude" / "settings.json")
+    path = settings_path or claude_user_settings_path()
     if not path.exists():
         return False
+    with _wrap_settings_lock(path):
+        return _strip_claude_managed_hooks(path)
 
+
+def _strip_claude_managed_hooks(path: Path) -> bool:
+    """Body of :func:`_remove_claude_managed_hooks`; the caller holds the settings lock."""
     try:
         payload = json.loads(_read_text(path))
     except (OSError, json.JSONDecodeError):
@@ -1158,7 +1188,11 @@ def _remove_claude_managed_hooks(settings_path: Path | None = None) -> bool:
     # this). List-comp, not any(), so every key is popped (no short-circuit).
     env = payload.get("env")
     if isinstance(env, dict):
-        removed_keys = [k for k in _HORIZON_ENV_KEYS if env.pop(k, None) is not None]
+        # Keys a live Connect state owns stay (see _live_connect_keys).
+        owned = _live_connect_keys(path)
+        removed_keys = [
+            k for k in _HORIZON_ENV_KEYS if k not in owned and env.pop(k, None) is not None
+        ]
         if removed_keys:
             changed = True
             if env:

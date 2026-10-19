@@ -72,6 +72,11 @@ from horizon.proxy.semantic_cache_key_policy import compute_request_cache_partit
 from horizon.proxy.tenant_key import resolve_tenant_key, set_request_tenant_key
 from horizon.proxy.thinking_tokens import ThinkingTokens, extract_thinking_tokens
 from horizon.utils import format_exception_message
+from horizon.verified_savings import (
+    VERIFIED_SAVINGS_HEADER,
+    format_verified_usd,
+    is_claude_code_forwarder,
+)
 
 logger = logging.getLogger("horizon.proxy")
 
@@ -1279,6 +1284,9 @@ class AnthropicHandlerMixin:
             # any Horizon-owned state.
             client_anthropic_version = request.headers.get("anthropic-version")
             client_anthropic_beta = request.headers.get("anthropic-beta")
+            # Set by the local Claude Code forwarder: the only callers that get
+            # the verified-savings figure (SSE comment or response header).
+            forwarder_tagged = is_claude_code_forwarder(request.headers)
             safeguard_capable_request = is_safeguard_capable_request(body, client_anthropic_beta)
             raw_model = body.get("model") or model_override or "unknown"
             model = (
@@ -4386,6 +4394,7 @@ class AnthropicHandlerMixin:
                         conversation_key=_savings_key,
                         conversation_tokens_saved=tokens_saved if _savings_key else None,
                         client_beta=client_anthropic_beta or "",
+                        forwarder_tagged=forwarder_tagged,
                     )
                 else:
                     # Whatever set it — the client's own ``stream: false`` or
@@ -5155,7 +5164,7 @@ class AnthropicHandlerMixin:
                         # that were showing 0% active-savings on non-
                         # streaming Anthropic traffic will now show the
                         # correct ratio.
-                        await self._record_request_outcome(
+                        verified_usd = await self._record_request_outcome(
                             RequestOutcome(
                                 request_id=request_id,
                                 provider=provider_name,
@@ -5226,6 +5235,10 @@ class AnthropicHandlerMixin:
                         response_headers["x-horizon-tokens-after"] = str(optimized_tokens)
                         response_headers["x-horizon-tokens-saved"] = str(tokens_saved)
                         response_headers["x-horizon-model"] = model
+                        if forwarder_tagged and isinstance(verified_usd, (int, float)):
+                            response_headers[VERIFIED_SAVINGS_HEADER] = format_verified_usd(
+                                verified_usd
+                            )
                         if transforms_applied:
                             from horizon.proxy.cost import header_safe_transforms
 
