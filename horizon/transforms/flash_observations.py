@@ -68,6 +68,10 @@ STUB_LINE_CHARS = 200
 _NEVER_PREFIXES = ("mcp__",)
 _NEVER_TOOLS = frozenset({"WebFetch", "WebSearch", "web_fetch", "web_search", "google_web_search"})
 _CLOSE_TAG = "</tool_output"
+#: First words of a permanent flash stub (see ``build_stub``).
+FLASH_MARKER = "[Horizon flash:"
+#: First words of a fold stub (horizon.proxy.fold_at_rewrite). Flash never re-stubs these.
+FOLD_MARKER = "[Horizon folded:"
 
 
 @dataclass(frozen=True)
@@ -350,12 +354,52 @@ def _stub_block(
     original = _text_of(block.get("content"))
     if original is None or len(original) < policy.min_chars:
         return None
+    if original.startswith((FOLD_MARKER, FLASH_MARKER)):
+        # Already a fold or flash stub: flash decides from the raw output only.
+        return None
     return (
         {**block, "content": build_stub(tool_name, original)},
         tool_name,
         tool_use_id,
         original,
     )
+
+
+def fold_exclusions(
+    messages: list[Any], *, horizon: int, policy: FlashPolicy
+) -> tuple[frozenset[str], frozenset[str]]:
+    """What the fold must leave alone so flash behaves exactly as it would without it.
+
+    Returns ``(flash_ids, signatures)``: the tool_use ids flash stubs at ``horizon``
+    (from the raw messages, ignoring pause state, so this is conservative), and the
+    call signatures of those calls. A result whose call shares a signature with a
+    stubbed call is a possible re-run partner in :func:`first_rerun`; folding it
+    would change flash's pause decision, so the fold skips it too.
+    """
+    names = _tool_names(messages)
+    flash_ids: set[str] = set()
+    for index, msg in enumerate(messages):
+        if (
+            index < horizon
+            or not isinstance(msg, dict)
+            or msg.get("role") != "user"
+            or not isinstance(msg.get("content"), list)
+        ):
+            continue
+        for block in msg["content"]:
+            if _stub_block(block, names, policy) is not None:
+                flash_ids.add(block["tool_use_id"])
+    signatures: set[str] = set()
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        if not isinstance(msg.get("content"), list):
+            continue
+        for block in msg["content"]:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                if block.get("id") in flash_ids:
+                    signatures.add(call_signature(str(block.get("name")), block.get("input")))
+    return frozenset(flash_ids), frozenset(signatures)
 
 
 def flash_enabled() -> bool:

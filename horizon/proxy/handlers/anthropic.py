@@ -922,6 +922,41 @@ class AnthropicHandlerMixin:
             "content": copy.deepcopy(resp_json.get("content", "")),
         }
 
+    def _flash_live(self, model: str) -> bool:
+        """Whether Flash Observations acts on a request for ``model`` on this upstream.
+
+        The one gate: ``_maybe_flash_observations`` and the fold's coexistence check
+        both use it, so the two can never disagree about whether flash is active.
+        """
+        from urllib.parse import urlparse
+
+        from horizon.proxy import flash_guard
+        from horizon.proxy.helpers import _MID_CONVERSATION_SYSTEM_FAMILIES, _model_in_families
+        from horizon.transforms import flash_observations as flash
+
+        if not flash.flash_enabled() or getattr(self, "anthropic_backend", None) is not None:
+            return False
+        if not flash.upstream_supports_flash(self.ANTHROPIC_API_URL):
+            # A gateway that rewrites system messages or drops caching would
+            # bill the flashed text on every turn: a cost increase.
+            return False
+        host = urlparse(self.ANTHROPIC_API_URL).hostname or ""
+        if flash_guard.is_disabled(host, str(model)):
+            return False
+        return _model_in_families(str(model).lower(), _MID_CONVERSATION_SYSTEM_FAMILIES)
+
+    def _flash_horizon_store(self):
+        """The per-conversation flash horizons, created on first use."""
+        from horizon.transforms import flash_observations as flash
+
+        horizons = getattr(self, "_flash_horizons", None)
+        if horizons is None:
+            from horizon.paths import workspace_dir
+
+            horizons = flash.FlashHorizons(workspace_dir() / "flash_horizons.json")
+            self._flash_horizons = horizons
+        return horizons
+
     def _maybe_flash_observations(
         self,
         body: dict[str, Any],
@@ -943,35 +978,17 @@ class AnthropicHandlerMixin:
 
         from horizon.transforms import flash_observations as flash
 
-        if not flash.flash_enabled() or getattr(self, "anthropic_backend", None) is not None:
-            return False, None
-        if not flash.upstream_supports_flash(self.ANTHROPIC_API_URL):
-            # A gateway that rewrites system messages or drops caching would
-            # bill the flashed text on every turn: a cost increase.
+        if not self._flash_live(model):
             return False, None
         from urllib.parse import urlparse
 
         from horizon.proxy import flash_guard
 
         host = urlparse(self.ANTHROPIC_API_URL).hostname or ""
-        if flash_guard.is_disabled(host, str(model)):
-            return False, None
-        from horizon.proxy.helpers import (
-            _MID_CONVERSATION_SYSTEM_FAMILIES,
-            _model_in_families,
-        )
-
-        if not _model_in_families(str(model).lower(), _MID_CONVERSATION_SYSTEM_FAMILIES):
-            return False, None
         messages = body.get("messages")
         if not isinstance(messages, list):
             return False, None
-        horizons = getattr(self, "_flash_horizons", None)
-        if horizons is None:
-            from horizon.paths import workspace_dir
-
-            horizons = flash.FlashHorizons(workspace_dir() / "flash_horizons.json")
-            self._flash_horizons = horizons
+        horizons = self._flash_horizon_store()
         horizon = horizons.horizon(messages)
         policy = flash.flash_policy()
         result = flash.apply_flash(messages, horizon=horizon, policy=policy)
@@ -1884,6 +1901,35 @@ class AnthropicHandlerMixin:
                     if is_token_mode(self.config.mode):
                         frozen_message_count = 0
 
+            # Fold-at-rewrite (HORIZON_FOLD_AT_REWRITE, Phase 3 step 2). Old tool output
+            # is folded to stubs only when this turn's prompt-cache prefix is being
+            # rewritten anyway (cold). A warm turn only re-applies the stubs the session
+            # already carries, so the cached prefix never changes under it.
+            from horizon.proxy import fold_at_rewrite as _fold
+
+            _fold_mode = _fold.fold_mode() if not _bypass else "off"
+            _fold_cold = False
+            _fold_reason = "off"
+            _fold_store = None
+            if _fold_mode != "off":
+                if not self.config.ccr_inject_tool:
+                    # A stub's retrieval marker is only redeemable when the retrieve tool
+                    # is injected; folding without it would lose the original.
+                    _fold_mode, _fold_reason = "off", "ccr_tool_off"
+            if _fold_mode != "off":
+                _fold_store = _fold.get_fold_store()
+                _fold_cold, _fold_reason = _fold.classify_cold(
+                    cache_ttl_seconds=_cc_ttl,
+                    last_seen_age=_fold_store.last_seen_age(session_id),
+                    tracker_has_history=bool(previous_original_messages),
+                    tracker_idle_seconds=idle_seconds,
+                    has_prior_turns=any(
+                        isinstance(m, dict) and m.get("role") == "assistant"
+                        for m in original_client_messages
+                    ),
+                )
+                _fold_store.touch(session_id)
+
             # PR-A6 (P5-50, preps P0-6): session-sticky `anthropic-beta` merge.
             # Read the client's beta value (note: anthropic-beta is NOT
             # an x-horizon-* header so it survived the A5 strip), union
@@ -2709,6 +2755,45 @@ class AnthropicHandlerMixin:
                     )
                 except Exception as e:
                     logger.debug(f"[{request_id}] post_compress hook error: {e}")
+
+            # Fold-at-rewrite: a cold turn folds old, eligible results (recorded per
+            # session); every turn re-applies the stubs already recorded. Runs before the
+            # CCR scan below, so a stub's retrieval marker injects the retrieve tool on
+            # this same request.
+            if _fold_mode != "off" and _fold_store is not None:
+                # Flash (fresh results at its horizon) and fold (old results) coexist:
+                # the fold skips every result flash stubs or could share a re-run
+                # signature with, so flash's output is what it would be without the fold.
+                _fold_excl_ids: frozenset[str] = frozenset()
+                _fold_excl_sigs: frozenset[str] = frozenset()
+                if self._flash_live(model):
+                    from horizon.transforms import flash_observations as _flash_obs
+
+                    _fold_excl_ids, _fold_excl_sigs = _flash_obs.fold_exclusions(
+                        optimized_messages,
+                        horizon=self._flash_horizon_store().horizon(optimized_messages),
+                        policy=_flash_obs.flash_policy(),
+                    )
+                _fold_out = _fold.run_fold(
+                    optimized_messages,
+                    mode=_fold_mode,
+                    cold=_fold_cold,
+                    session_id=session_id,
+                    store=_fold_store,
+                    original_messages=original_client_messages,
+                    count_text=getattr(tokenizer, "count_text", None),
+                    exclude_ids=_fold_excl_ids,
+                    exclude_signatures=_fold_excl_sigs,
+                )
+                if _fold_out.changed:
+                    optimized_messages = _fold_out.messages
+                    body_mutation_tracker.mark_mutated("fold_at_rewrite")
+                _fold.record_outcome(
+                    _fold_out,
+                    reason=_fold_reason,
+                    tags=tags,
+                    transforms_applied=transforms_applied,
+                )
 
             # CCR Tool Injection: Inject retrieval tool if compression occurred
             # OR if this session has previously done CCR (PR-B7 sticky-on).
@@ -3589,6 +3674,30 @@ class AnthropicHandlerMixin:
                     _ccr_neutralized,
                 )
 
+            # Fold-at-rewrite, final pass: re-apply the session's recorded stubs over the
+            # messages as they now stand (a later stage may have rebuilt them from the raw
+            # transcript), so the forwarded prefix stays byte-identical to what the cold
+            # turn forwarded. No new folds happen here, and the recount below prices it.
+            if _fold_mode != "off" and _fold_store is not None:
+                _fold_out = _fold.run_fold(
+                    optimized_messages,
+                    mode=_fold_mode,
+                    cold=False,
+                    session_id=session_id,
+                    store=_fold_store,
+                    count_text=getattr(tokenizer, "count_text", None),
+                )
+                if _fold_out.changed:
+                    optimized_messages = _fold_out.messages
+                    body["messages"] = optimized_messages
+                    body_mutation_tracker.mark_mutated("fold_at_rewrite")
+                    _fold.record_outcome(
+                        _fold_out,
+                        reason=_fold_reason,
+                        tags=tags,
+                        transforms_applied=transforms_applied,
+                    )
+
             # Consistency: report tok_before/tok_after with ONE tokenizer. The pipeline
             # and the handler use different token estimators, and cache-mode branches
             # can leave original_tokens (handler, line ~1049) and optimized_tokens
@@ -4335,7 +4444,10 @@ class AnthropicHandlerMixin:
                         meta={"project": get_current_project(), "agent": client},
                         forwarder=forwarder_tagged,
                         # Each ping keeps this session's frozen prefix alive too.
-                        touch=getattr(prefix_tracker, "keep_alive_touch", None),
+                        # ...and the fold's last-seen clock, so a kept-warm session is not cold.
+                        touch=_fold.keep_alive_touch_for(
+                            getattr(prefix_tracker, "keep_alive_touch", None), session_id
+                        ),
                     )
 
                 if stream and not buffered_stream_ccr:

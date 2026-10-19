@@ -22,7 +22,6 @@ from typing import Any
 from ..cache.compression_store import (
     CompressionStore,
     format_retrieval_miss_detail,
-    get_compression_store,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,14 @@ logger = logging.getLogger(__name__)
 # HASH is 12-24 hex chars; see horizon/ccr/tool_injection.py for the same
 # constant used on the injection side.
 _MARKER_RE = re.compile(r"<<ccr:([a-f0-9]{12,24})[^>]*>>")
+
+
+
+def _lookup_store() -> Any:
+    """CCR retrieval store with fold originals behind it (see horizon.cache.fold_originals)."""
+    from ..cache.fold_originals import ccr_lookup_store
+
+    return ccr_lookup_store()
 
 
 def resolve_markers_in_text(text: str, *, store: CompressionStore | None = None) -> str:
@@ -44,7 +51,7 @@ def resolve_markers_in_text(text: str, *, store: CompressionStore | None = None)
     if "<<ccr:" not in text:
         return text
 
-    resolved_store = store or get_compression_store()
+    resolved_store = store or _lookup_store()
 
     def _replace(match: re.Match[str]) -> str:
         hash_key = match.group(1)
@@ -70,7 +77,7 @@ def resolve_markers_in_response(response: Any, *, store: CompressionStore | None
     Responses-API ``output`` items, ...) so it stays correct regardless of
     where a marker ends up, and doesn't need per-provider maintenance.
     """
-    resolved_store = store or get_compression_store()
+    resolved_store = store or _lookup_store()
     if isinstance(response, str):
         return resolve_markers_in_text(response, store=resolved_store)
     if isinstance(response, list):

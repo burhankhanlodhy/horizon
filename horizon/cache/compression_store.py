@@ -100,6 +100,8 @@ def _get_env_default_ttl_seconds() -> int:
 
 def format_retrieval_miss_detail(status: dict[str, Any]) -> str:
     """Return an operator-facing miss reason for CCR retrieval failures."""
+    if status.get("detail"):
+        return str(status["detail"])
     default_ttl = status.get("default_ttl_seconds", DEFAULT_CCR_TTL_SECONDS)
     ttl_seconds = status.get("ttl_seconds", default_ttl)
 

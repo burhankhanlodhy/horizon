@@ -486,8 +486,10 @@ class HorizonMCPServer:
 
         Retrieval is by hash and always returns the full original content.
         """
-        # Check local store first
-        store = self._get_local_store()
+        # Check local store first (the CCR store, with folded originals behind it)
+        from horizon.cache.fold_originals import CcrLookupStore, get_fold_originals
+
+        store = CcrLookupStore(self._get_local_store(), get_fold_originals())
         entry_status = store.get_entry_status(hash_key, clean_expired=False)
         entry = store.retrieve(hash_key)
         expired_entry_status = None

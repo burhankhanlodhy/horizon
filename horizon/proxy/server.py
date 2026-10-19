@@ -5471,7 +5471,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         if not hash_key:
             raise HTTPException(status_code=400, detail="hash required")
 
-        store = get_compression_store()
+        from horizon.cache.fold_originals import ccr_lookup_store
+
+        store = ccr_lookup_store()
 
         entry_status = store.get_entry_status(hash_key, clean_expired=True)
         if entry_status["status"] != "available":

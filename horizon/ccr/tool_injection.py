@@ -392,9 +392,9 @@ class CCRToolInjector:
         if store is None:
             store = self.compression_store
         if store is None:
-            from horizon.cache.compression_store import get_compression_store
+            from horizon.cache.fold_originals import ccr_lookup_store
 
-            store = get_compression_store()
+            store = ccr_lookup_store()
 
         def _safe_exists(hash_key: str) -> bool:
             try:
