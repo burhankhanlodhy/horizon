@@ -2,8 +2,8 @@
 //!
 //! It reports what it received so the launcher tests can check it exactly:
 //! - `ARG <hex>` per argument, hex of the UTF-8 bytes (argv[1..]);
-//! - `ENV <name>=<hex>` for environment variables starting with `ANTHROPIC_`
-//!   or `ENABLE_TOOL_`;
+//! - `ENV <name>=<hex>` for environment variables starting with `ANTHROPIC_`,
+//!   `ENABLE_TOOL_` or `CLAUDE_CODE_`;
 //! - `CWD <hex>` for the working directory.
 //!
 //! Behaviour switches (environment): `CS_TEST_EXIT=<i32>` sets the exit code,
@@ -29,7 +29,11 @@ fn main() {
     }
 
     let mut env: Vec<(String, String)> = std::env::vars()
-        .filter(|(key, _)| key.starts_with("ANTHROPIC_") || key.starts_with("ENABLE_TOOL_"))
+        .filter(|(key, _)| {
+            key.starts_with("ANTHROPIC_")
+                || key.starts_with("ENABLE_TOOL_")
+                || key.starts_with("CLAUDE_CODE_")
+        })
         .collect();
     env.sort();
     for (key, value) in env {

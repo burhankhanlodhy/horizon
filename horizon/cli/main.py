@@ -64,6 +64,7 @@ def _register_commands() -> None:
         inspect,  # noqa: F401
         install,  # noqa: F401
         keys,  # noqa: F401
+        lean,  # noqa: F401
         learn,  # noqa: F401
         mcp,  # noqa: F401
         output_savings,  # noqa: F401

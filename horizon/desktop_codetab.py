@@ -68,6 +68,10 @@ FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 ENV_ROOTS = "CONTEXTSHRINK_CODETAB_ROOTS"
 ENV_DATA_DIR = "CONTEXTSHRINK_DATA_DIR"
 ENV_LAUNCHER = "CONTEXTSHRINK_CODETAB_LAUNCHER"
+#: Keep-sessions-lean: the compaction window the launcher may pass through ``env``.
+LEAN_WINDOW_KEY = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+LEAN_WINDOW_MIN = 100_000
+LEAN_WINDOW_MAX = 1_000_000
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BASE_URL_RE = re.compile(r"^http://127\.0\.0\.1:(\d{1,5})(/[A-Za-z0-9/_.~%-]*)?$")
@@ -398,12 +402,16 @@ def build_config(
     health_port: int,
     tool_search: bool,
     enabled: bool = True,
+    lean_window: int | None = None,
 ) -> dict[str, Any]:
-    """The ``codetab.json`` the launcher reads. Only ``ENABLE_TOOL_SEARCH`` can
-    be set in ``env``, and only to ``"true"`` or ``"false"``."""
+    """The ``codetab.json`` the launcher reads. ``env`` holds only
+    ``ENABLE_TOOL_SEARCH`` (``"true"`` or ``"false"``) and, when lean is on,
+    ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` (a digits-only string, see the launcher)."""
     env: dict[str, str] = {}
     if tool_search:
         env["ENABLE_TOOL_SEARCH"] = "true"
+    if lean_window is not None:
+        env[LEAN_WINDOW_KEY] = str(lean_window)
     return {
         "v": CONFIG_VERSION,
         "enabled": enabled,
@@ -411,6 +419,88 @@ def build_config(
         "env": env,
         "health_port": health_port,
     }
+
+
+def _lean_from_env(env: Mapping[str, Any]) -> int | None:
+    """The compaction window in ``env`` when it is valid, else ``None``.
+
+    Mirrors the launcher's rule: ASCII digits, no leading zero, 100000..1000000.
+    """
+    text = env.get(LEAN_WINDOW_KEY)
+    if not isinstance(text, str) or not re.fullmatch(r"[1-9][0-9]*", text):
+        return None
+    value = int(text)
+    return value if LEAN_WINDOW_MIN <= value <= LEAN_WINDOW_MAX else None
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    """The saved ``codetab.json`` as a dict. Raises when it cannot be read or is not an object."""
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CodetabError(f"{path} is unreadable ({exc}); fix or remove it first") from exc
+    if not isinstance(config, dict):
+        raise CodetabError(f"{path} has an unsupported shape; refusing to change it")
+    return config
+
+
+def code_tab_lean(
+    *, data: Path | None = None, environ: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """Keep-sessions-lean state of the Code tab: ``state`` and ``window``.
+
+    ``state`` is ``on`` (installed, enabled, valid window), ``off`` (installed and
+    enabled, no window) or ``not-installed`` (no config, or it is disabled).
+    """
+    data_folder = data if data is not None else claude_code_dir(environ)
+    config_path = data_folder / CONFIG_NAME
+    if not config_path.is_file():
+        return {"state": "not-installed", "window": None}
+    try:
+        config = _read_config(config_path)
+    except CodetabError:
+        return {"state": "not-installed", "window": None}
+    env = config.get("env") if isinstance(config.get("env"), dict) else {}
+    if config.get("enabled") is not True:
+        return {"state": "not-installed", "window": None}
+    window = _lean_from_env(env)
+    return {"state": "on" if window is not None else "off", "window": window}
+
+
+def set_code_tab_lean(
+    window: int | None,
+    *,
+    data: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Set the Code tab's compaction window in ``codetab.json``, or clear it with ``None``.
+
+    Only an installed, enabled config is changed; otherwise the result is
+    ``not-installed`` and nothing is written. The rest of the config is kept.
+    """
+    if window is not None and not (LEAN_WINDOW_MIN <= window <= LEAN_WINDOW_MAX):
+        raise CodetabError(f"compaction window out of range: {window}")
+    data_folder = data if data is not None else claude_code_dir(environ)
+    config_path = data_folder / CONFIG_NAME
+    if not config_path.is_file():
+        return {"state": "not-installed", "window": None}
+    with exclusive_lock(data_folder, lock_timeout):
+        config = _read_config(config_path)
+        if config.get("enabled") is not True:
+            return {"state": "not-installed", "window": None}
+        env = config.get("env")
+        if env is None:
+            env = {}
+        if not isinstance(env, dict):
+            raise CodetabError(f"{config_path} has a non-object 'env'; refusing to change it")
+        if window is None:
+            env.pop(LEAN_WINDOW_KEY, None)
+        else:
+            env[LEAN_WINDOW_KEY] = str(window)
+        config["env"] = env
+        _write_config(config_path, config)
+    return {"state": "off" if window is None else "on", "window": window}
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +853,18 @@ def _write_config(path: Path, config: dict[str, Any]) -> None:
     _write_json_atomic(path, config)
 
 
+def _saved_lean_window(config_path: Path) -> int | None:
+    """The valid lean window already in ``codetab.json``, or ``None``."""
+    if not config_path.is_file():
+        return None
+    try:
+        config = _read_config(config_path)
+    except CodetabError:
+        return None
+    env = config.get("env")
+    return _lean_from_env(env) if isinstance(env, dict) else None
+
+
 def install(
     *,
     roots: list[Path] | None = None,
@@ -821,10 +923,14 @@ def install(
                     state["launcher_sha256"].append(launcher_sha)
             result.folders.append(report)
         if not dry_run:
+            # A valid keep-sessions-lean window survives a re-install or a --watch pass.
             _write_config(
                 result.config_path,
                 build_config(
-                    base_url=resolved_url, health_port=health_port, tool_search=tool_search
+                    base_url=resolved_url,
+                    health_port=health_port,
+                    tool_search=tool_search,
+                    lean_window=_saved_lean_window(result.config_path),
                 ),
             )
             result.config_written = True

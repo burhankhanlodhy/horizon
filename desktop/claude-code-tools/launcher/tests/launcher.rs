@@ -57,6 +57,7 @@ impl Fixture {
         command.env("CONTEXTSHRINK_DATA_DIR", self.root.join("data"));
         command.env_remove("ANTHROPIC_BASE_URL");
         command.env_remove("ENABLE_TOOL_SEARCH");
+        command.env_remove("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
         command.env_remove("CS_TEST_EXIT");
         command.env_remove("CS_TEST_ECHO_STDIN");
         command.env_remove("CS_TEST_PIDFILE");
@@ -472,4 +473,86 @@ fn child_runs_normally_when_the_job_is_not_used() {
     let fixture = Fixture::new("job-normal");
     let output = fixture.command().env("CS_TEST_EXIT", "7").output().unwrap();
     assert_eq!(output.status.code(), Some(7));
+}
+
+// ---------------------------------------------------------------------------
+// Keep sessions lean: CLAUDE_CODE_AUTO_COMPACT_WINDOW passes through only as a
+// digits-only token count from 100000 to 1000000, with no leading zero.
+// ---------------------------------------------------------------------------
+
+fn lean_env(value: &str) -> String {
+    format!("\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":\"{value}\"")
+}
+
+#[test]
+fn lean_window_passes_through_inside_the_range() {
+    let fixture = Fixture::new("lean-valid");
+    for window in ["100000", "200000", "999999", "1000000"] {
+        let port = serve_health(ok_response(), Duration::ZERO);
+        fixture.write_config(&config(
+            port,
+            "http://127.0.0.1:18788/k/machine-id",
+            true,
+            &lean_env(window),
+        ));
+        let output = fixture.run(&["x"]);
+        assert_eq!(output.status.code(), Some(0));
+        let stdout = stdout_of(&output);
+        assert_eq!(
+            env_value(&stdout, "CLAUDE_CODE_AUTO_COMPACT_WINDOW").as_deref(),
+            Some(window),
+            "window {window}"
+        );
+        assert!(env_value(&stdout, "ANTHROPIC_BASE_URL").is_some());
+    }
+}
+
+#[test]
+fn lean_window_outside_the_allowed_form_is_ignored() {
+    let fixture = Fixture::new("lean-bad");
+    for bad in [
+        "200k",
+        "99999",
+        "1000001",
+        "10000000",
+        "0",
+        "0200000",
+        "",
+        " 200000",
+        "200000 ",
+        "+200000",
+        "-200000",
+        "2e5",
+        "200.0",
+        "\u{0661}\u{0660}\u{0660}\u{0660}\u{0660}\u{0660}",
+    ] {
+        let port = serve_health(ok_response(), Duration::ZERO);
+        fixture.write_config(&config(
+            port,
+            "http://127.0.0.1:18788/k/machine-id",
+            true,
+            &lean_env(bad),
+        ));
+        let output = fixture.run(&["x"]);
+        assert_eq!(output.status.code(), Some(0), "{bad:?}");
+        let stdout = stdout_of(&output);
+        assert_eq!(env_value(&stdout, "CLAUDE_CODE_AUTO_COMPACT_WINDOW"), None, "{bad:?}");
+        // Only the lean key is dropped; routing still applies.
+        assert!(env_value(&stdout, "ANTHROPIC_BASE_URL").is_some(), "{bad:?}");
+    }
+}
+
+#[test]
+fn lean_window_non_string_is_ignored() {
+    let fixture = Fixture::new("lean-type");
+    let port = serve_health(ok_response(), Duration::ZERO);
+    fixture.write_config(&config(
+        port,
+        "http://127.0.0.1:18788/k/machine-id",
+        true,
+        "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\":200000",
+    ));
+    let output = fixture.run(&["x"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(env_value(&stdout_of(&output), "CLAUDE_CODE_AUTO_COMPACT_WINDOW"), None);
 }

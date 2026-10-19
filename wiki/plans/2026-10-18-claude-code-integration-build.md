@@ -242,6 +242,52 @@ folder, the patched paths and the real binary's sha256.
      `https://code.claude.com/docs/en/plugins/mods/reference`. Use only
      documented APIs, and test it in the terminal Claude Code at least.
 
+## Keep sessions lean (opt-in, off by default)
+
+Claude Code on 1M-context models auto-compacts only near 967k tokens, so long
+sessions resend very large contexts every turn. Keep sessions lean sets the
+compaction point to 200k tokens. It is opt-in and off by default, and it is
+set in the desktop app's Claude Code card (and the tray), or with the CLI.
+
+- **Env var:** `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, a plain integer token count
+  from `100000` to `1000000` (for example `"200000"`; `"200k"` is not valid).
+  Claude Code's own `/autocompact` and `autoCompactWindow` setting are
+  overridden by it while it is set.
+- **Terminal:** written to the `env` block of `~/.claude/settings.json`, shared
+  with `vscode-claude` under the same state file. Only while the Claude Code
+  connector is connected (`horizon desktop connect claude-code`).
+- **Desktop Code tab:** written to `env` in `%LOCALAPPDATA%\ContextShrink\claude-code\codetab.json`
+  when the Code tab is installed and enabled. A re-install or `--watch` pass
+  keeps a valid window and drops an invalid one.
+- **Stored in:** the Claude Code connector's `claude_code.lean` record in
+  `.horizon-vscode-claude.json` (`{"window": N, "previous": {"present": bool,
+  "value": str|null}}`). `previous` is captured the first time lean goes on,
+  and kept when the window changes. The state file stays version 1 and the
+  field is optional.
+- **Restore rules:** `off` (and disconnecting the Claude Code connector) put
+  back `previous`: the key is removed when it was absent, or restored to the
+  value it had. Only while the value still equals the one Horizon wrote. If the
+  user changed it, it is left as the user set it and the record is dropped
+  (`user-edited`). Turning lean on again while the value is user-edited changes
+  nothing.
+- **Launcher allow-list:** `claude-code-launcher.exe` passes
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` through only when it is digits only, has no
+  leading zero, and parses to 100000 to 1000000. Anything else is dropped, and
+  the rest of the allow-list is unchanged (`ENABLE_TOOL_SEARCH`, and
+  `ANTHROPIC_BASE_URL` from `base_url`). The launcher only adds env while routing
+  is active (the forwarder answers its health check). So on the Code tab the
+  window takes effect only while the forwarder is up. When it is down the real
+  binary runs unchanged, and the terminal setting is not affected.
+- **CLI:** `horizon lean on [--window N] [--json]`, `horizon lean off [--json]`,
+  `horizon lean status [--json]`. `on` and `off` report per target:
+  `"terminal": "on|off|not-connected|unchanged|user-edited"`,
+  `"code_tab": "on|off|not-installed"`. `status --json` gives
+  `{"enabled", "window", "terminal", "terminal_value", "code_tab"}`. `on` fails
+  only when neither target can change.
+- **Status line:** `contextshrink-status.exe --detail` reads the window from its
+  own process environment, so it shows what the current session uses. A session
+  started before the switch was turned on still reads `off`.
+
 ## Out of scope here
 
 The savings engine (phase 3), the measurement (phase 4), macOS, and deploying
