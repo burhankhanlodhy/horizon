@@ -378,3 +378,46 @@ footer {
   gap: 8px;
 }
 
+
+.targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.targets li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.target-label {
+  font-weight: 600;
+}
+
+.pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+.pill.done {
+  color: var(--sage);
+  border-color: var(--sage);
+}
+
+.pill.failed {
+  color: var(--ember);
+  border-color: var(--ember);
+}
+
+.pill.waiting,
+.pill.skipped {
+  color: var(--ink-3);
+}

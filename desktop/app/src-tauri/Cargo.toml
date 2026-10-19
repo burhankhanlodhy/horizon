@@ -1,6 +1,6 @@
 [package]
 name = "contextshrink-desktop"
-version = "0.6.2"
+version = "0.7.0"
 description = "ContextShrink desktop launcher: run coding tools through the ContextShrink proxy"
 authors = ["ContextShrink"]
 edition = "2021"
@@ -28,6 +28,7 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 which = "7"
 dunce = "1"
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
