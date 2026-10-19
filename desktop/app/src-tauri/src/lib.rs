@@ -244,7 +244,7 @@ fn connect_claude_code(state: &AppState) -> Result<Vec<claude_code::Target>, Str
     state.client.set_wanted_editor(spec.id, true);
     let code_tab = match state
         .client
-        .run_horizon(&["codetab", "install", "--tool-search"])
+        .run_horizon(&client::codetab_install_args(false))
         .and_then(|_| state.client.start_codetab_watch())
     {
         Err(e) => claude_code::CodeTab::Failed(e),
@@ -290,8 +290,9 @@ fn after_disconnect(state: &AppState) {
     }
 }
 
-/// Re-applies the editors the user connected (they were restored on quit or
-/// update). Caller holds `ops`.
+/// Re-applies the editors the user connected. They are restored on sign-out and
+/// on update, not on quit (quitting restores nothing, by design), so this mostly
+/// finds them in place. Caller holds `ops`.
 fn reconnect_editors(state: &AppState) {
     for id in state.client.wanted_editors() {
         if id == claude_code::ID {
@@ -468,8 +469,9 @@ fn list_tools() -> Vec<client::ToolInfo> {
 
 /// Called by the update banner after the new version has downloaded and just
 /// before it installs: on Windows the installer closes the app without a normal
-/// exit, so let go of the forwarders and editor settings first, as quitting does.
-/// The next start reconnects them.
+/// exit, so the forwarders and editor settings are let go of first. Quitting
+/// itself restores nothing; this is the update path only. The next start
+/// reconnects them.
 #[tauri::command]
 fn prepare_for_update(state: State<'_, AppState>) {
     let _ops = state.ops.lock().unwrap();

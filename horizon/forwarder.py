@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from horizon.forwarder_stats import (
     HEARTBEAT_SECONDS,
@@ -87,6 +87,10 @@ _SESSION_HEADER = "x-claude-code-session-id"
 #: path when the plugin normalized it for the proxy.
 BASE_URL_HEADER = "x-horizon-base-url"
 ORIGINAL_PATH_HEADER = "x-horizon-original-path"
+
+#: The routing tags a transport plugin sends to name the real destination. They
+#: are the one client x-horizon-* pair the relay passes on to the proxy.
+_ROUTING_TAGS = (BASE_URL_HEADER, ORIGINAL_PATH_HEADER)
 
 _DEFAULT_TIMEOUT = httpx.Timeout(300.0, connect=15.0)
 
@@ -172,6 +176,30 @@ async def _connect_upstream_ws(url: str, headers: dict[str, str], subprotocols: 
         # Large single frames (e.g. inline images) must pass through.
         max_size=None,
     )
+
+
+def request_allowed(headers: Any, port: int) -> bool:
+    """Whether a request may reach the relay, which holds the user's credential.
+
+    A web page can make a cross-origin request to this loopback port, and a
+    DNS-rebinding page can make a name it controls resolve to 127.0.0.1. Both
+    would spend the user's key, so:
+
+    * any request carrying an ``Origin`` header is refused. Native CLIs (Claude
+      Code, Codex, the VS Code extension host) do not send one; browsers always
+      do on cross-origin requests;
+    * when ``port`` is known, the ``Host`` must be ``127.0.0.1:<port>`` or
+      ``localhost:<port>``, so a rebinding name is refused.
+
+    ``port=0`` (programmatic use, tests without a bound port) skips only the
+    Host check; the Origin refusal always applies.
+    """
+    if headers.get("origin") is not None:
+        return False
+    if not port:
+        return True
+    host = str(headers.get("host") or "").strip().lower()
+    return host in {f"127.0.0.1:{port}", f"localhost:{port}"}
 
 
 def _forwarder_version() -> str:
@@ -340,6 +368,10 @@ def build_app(
 
         from horizon.proxy.ws_headers import WS_HOP_BY_HOP_HEADERS
 
+        if not request_allowed(websocket.headers, port):
+            # Refused before accept, so no credential is attached and no relay opens.
+            await websocket.close(code=1008, reason="origin or host not allowed")
+            return
         headers = {
             name: value
             for name, value in websocket.headers.items()
@@ -352,7 +384,9 @@ def build_app(
             upstream = await (ws_connect or _connect_upstream_ws)(url, headers, subprotocols)
         except Exception as exc:  # noqa: BLE001 - refuse the handshake, log why
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            logger.warning("forwarder websocket upstream refused path=%s status=%s: %s", path, status, exc)
+            logger.warning(
+                "forwarder websocket upstream refused path=%s status=%s: %s", path, status, exc
+            )
             # Closing before accept answers the client's handshake with 403.
             await websocket.close(code=1008 if status in (401, 403) else 1011)
             return
@@ -404,22 +438,30 @@ def build_app(
                 pass  # the client already closed
 
     @app.get(HEALTH_PATH)
-    async def health() -> dict[str, Any]:
-        # Registered before the catch-all relay, and never relayed.
-        return {
-            "ok": True,
-            "version": forwarder_info["version"],
-            "pid": forwarder_info["pid"],
-            "port": port,
-            "remote": base,
-            "started_at": started,
-        }
+    async def health(request: Request) -> Response:
+        # Registered before the catch-all relay, and never relayed. It holds no
+        # secret, but a rebinding page must not be able to probe it either.
+        if not request_allowed(request.headers, port):
+            return Response(content="forbidden\n", status_code=403, media_type="text/plain")
+        return JSONResponse(
+            {
+                "ok": True,
+                "version": forwarder_info["version"],
+                "pid": forwarder_info["pid"],
+                "port": port,
+                "remote": base,
+                "started_at": started,
+            }
+        )
 
     @app.api_route(
         "/{path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
     async def relay(path: str, request: Request) -> Response:
+        if not request_allowed(request.headers, port):
+            # Refused before the body is read, and before any credential is used.
+            return Response(content="forbidden\n", status_code=403, media_type="text/plain")
         url = f"/{path}" if path else "/"
         tags: dict[str, str] = {}
         if fixed is not None and BASE_URL_HEADER not in request.headers:
@@ -453,17 +495,25 @@ def build_app(
             }
             return await send(direct, request, target, headers, path)
 
+        # Client-sent x-horizon-* headers are internal control flags, so they stop
+        # here (as the direct paths above already do). Only the forwarder's own
+        # headers are added after this filter.
         headers = {
             name: value
             for name, value in request.headers.items()
             if name.lower() not in _HOP_BY_HOP
             and name.lower() != "host"
             and name.lower() != CREDENTIAL_HEADER
+            and not name.lower().startswith("x-horizon-")
         }
+        # Transport plugins name the real destination with these two routing tags,
+        # and the proxy reads them. They are the only client x-horizon-* headers that
+        # pass; every other one was dropped above.
+        headers.update(
+            {name: request.headers[name] for name in _ROUTING_TAGS if name in request.headers}
+        )
         headers.update(tags)
         headers[CREDENTIAL_HEADER] = credential_provider()
-        # The tag is the forwarder's to add: a client cannot claim it for itself.
-        headers.pop(FORWARDER_HEADER, None)
         if pause_file is not None and pause_file.exists():
             headers[BYPASS_HEADER] = "true"
         recorder = None

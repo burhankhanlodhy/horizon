@@ -1595,9 +1595,9 @@ class StreamingMixin:
             full_sse_bytes = bytearray()
             parsed_response = None  # Set by memory block; used by CCR + prefix tracker
             completed_normally = False
-            # True only once the relay loop ran to its end without raising. The
-            # verified-savings comment is written only then: yielding from a
-            # generator closed by a client disconnect would raise.
+            # True only for a clean completion. The verified-savings comment is
+            # written only then: yielding from a generator closed by a client
+            # disconnect would raise, and a failed stream must not claim a saving.
             reached_end = False
             pending_messages: list[dict] = []
 
@@ -1787,7 +1787,10 @@ class StreamingMixin:
                 completed_normally = (
                     stream_state["stream_terminal"] and not stream_state["stream_failed"]
                 )
-                reached_end = True
+                # Only a clean completion (a terminal event and no failure) may
+                # close with the verified figure: a failed or truncated stream
+                # carries no saving the client should be told about.
+                reached_end = completed_normally
 
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
                 logger.error(f"[{request_id}] Connection error to upstream API: {e}")

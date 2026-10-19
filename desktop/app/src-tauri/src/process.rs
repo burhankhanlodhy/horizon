@@ -135,6 +135,54 @@ pub fn is_client(pid: u32) -> bool {
     image_name(pid).is_some_and(|n| n.eq_ignore_ascii_case(CLIENT_IMAGE))
 }
 
+/// The full command line of process `pid`, if it is running.
+pub fn command_line(pid: u32) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let script = format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine");
+        let out = hidden(Command::new("powershell"))
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+    #[cfg(not(windows))]
+    {
+        let out = Command::new("ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+/// True when `cmdline` is the bundled client's `forward start ... --port <port>`.
+pub fn cmdline_is_forwarder(cmdline: &str, port: u16) -> bool {
+    let tokens: Vec<&str> = cmdline.split_whitespace().collect();
+    let port = port.to_string();
+    tokens.windows(2).any(|w| w[0] == "forward" && w[1] == "start")
+        && tokens.windows(2).any(|w| w[0] == "--port" && w[1] == port)
+}
+
+/// True when `cmdline` is the bundled client's `codetab install ... --watch`.
+pub fn cmdline_is_codetab_watch(cmdline: &str) -> bool {
+    let tokens: Vec<&str> = cmdline.split_whitespace().collect();
+    tokens.windows(2).any(|w| w[0] == "codetab" && w[1] == "install") && tokens.contains(&"--watch")
+}
+
+/// True when `pid` is OUR forwarder on `port`: the bundled client, running
+/// `forward start ... --port <port>`. Anything else holding the port is foreign.
+pub fn is_our_forwarder(pid: u32, port: u16) -> bool {
+    is_client(pid) && command_line(pid).is_some_and(|c| cmdline_is_forwarder(&c, port))
+}
+
+/// True when `pid` is OUR Code-tab watcher (the bundled client's `codetab install --watch`).
+pub fn is_our_codetab_watch(pid: u32) -> bool {
+    is_client(pid) && command_line(pid).is_some_and(|c| cmdline_is_codetab_watch(&c))
+}
+
 /// Force-stops `pid`. Returns whether the OS accepted the request.
 pub fn kill_pid(pid: u32) -> bool {
     #[cfg(windows)]
@@ -163,6 +211,24 @@ mod tests {
     fn current_process_is_not_the_client() {
         // The test binary is never the bundled client.
         assert!(!is_client(std::process::id()));
+    }
+
+    #[test]
+    fn forwarder_command_line_must_match_our_port() {
+        let ours = r#""C:\Program Files\ContextShrink\horizon\horizon.exe" forward start --remote https://proxy.contextshrink.com --port 18788 --host 127.0.0.1 --pause-file C:\x\paused"#;
+        assert!(cmdline_is_forwarder(ours, 18788));
+        // Another port, a prefix of the port, or a different command is not ours.
+        assert!(!cmdline_is_forwarder(ours, 1878));
+        assert!(!cmdline_is_forwarder(ours, 18789));
+        assert!(!cmdline_is_forwarder("node server.js --port 18788", 18788));
+        assert!(!cmdline_is_forwarder("horizon.exe codetab install --watch", 18788));
+    }
+
+    #[test]
+    fn codetab_watch_command_line_is_recognised() {
+        assert!(cmdline_is_codetab_watch("horizon.exe codetab install --watch"));
+        assert!(!cmdline_is_codetab_watch("horizon.exe codetab install"));
+        assert!(!cmdline_is_codetab_watch("horizon.exe forward start --port 18788"));
     }
 
     #[test]

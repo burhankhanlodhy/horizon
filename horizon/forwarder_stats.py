@@ -18,6 +18,7 @@ written beyond the Claude Code session id the client already sends.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -28,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from horizon.verified_savings import SSE_COMMENT_PREFIX, parse_sse_comment_value
+
+logger = logging.getLogger(__name__)
 
 STATUS_VERSION = 1
 CACHE_TTL_SECONDS = 300
@@ -286,6 +289,8 @@ def render_status_line(status: dict[str, Any], now: float) -> str:
     before = _as_int(latest.get("tokens_before"))
     after = _as_int(latest.get("tokens_after"))
     pct = round(100 * (1 - after / before)) if before > 0 else 0
+    # Clamped like the Rust status helper: a request that grew reads 0%, never negative.
+    pct = max(0, min(100, pct))
     if latest.get("unpriced"):
         money = "list price unknown"
     else:
@@ -331,19 +336,18 @@ class ClaudeCodeStats:
     # ---- persistence -------------------------------------------------------
 
     def _load(self) -> None:
-        history = _read_json(self.history_path)
+        history = _read_history(self.history_path)
         if isinstance(history, dict):
             daily = history.get("daily")
             if isinstance(daily, dict):
-                self._daily = {str(k): v for k, v in daily.items() if isinstance(v, dict)}
+                self._daily = {str(k): v for k, v in daily.items() if _counters_ok(v)}
             all_time = history.get("all_time")
-            if isinstance(all_time, dict):
+            if _counters_ok(all_time):
                 self._all_time = {**_empty_counters(), **all_time}
         status = _read_json(self.status_path)
         if isinstance(status, dict) and isinstance(status.get("sessions"), dict):
-            self._sessions = {
-                str(k): v for k, v in status["sessions"].items() if isinstance(v, dict)
-            }
+            # A malformed entry is dropped here; record() would reset it anyway.
+            self._sessions = {str(k): v for k, v in status["sessions"].items() if _session_ok(v)}
 
     def is_paused(self) -> bool:
         return self.pause_file.exists()
@@ -376,6 +380,9 @@ class ClaudeCodeStats:
         stamp = _iso(now)
         with self._lock:
             session = self._sessions.get(session_id)
+            if session is not None and not _session_ok(session):
+                logger.warning("claude-code stats: resetting malformed session entry")
+                session = None
             if session is None:
                 session = {
                     **_empty_counters(),
@@ -472,6 +479,54 @@ def _read_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return None
+
+
+def _is_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return value == value and value not in (float("inf"), float("-inf"))
+
+
+def _counters_ok(entry: Any) -> bool:
+    """True when every counter field is present and numeric."""
+    return isinstance(entry, dict) and all(_is_number(entry.get(name)) for name in COUNTER_FIELDS)
+
+
+def _session_ok(entry: Any) -> bool:
+    return _counters_ok(entry) and isinstance(entry.get("cache", {}), dict)
+
+
+def _read_history(path: Path) -> Any:
+    """Read the usage history. A file that does not parse is moved aside, not overwritten.
+
+    Overwriting it would silently discard the all-time totals, so the corrupt
+    copy is kept as ``usage-history.json.corrupt-<unix time>`` and counting
+    starts fresh.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning("claude-code stats: could not read %s: %s", path, exc)
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        try:
+            os.replace(path, aside)
+        except OSError as exc:
+            logger.warning(
+                "claude-code stats: %s is unreadable and could not be moved: %s", path, exc
+            )
+        else:
+            logger.warning(
+                "claude-code stats: %s is unreadable; moved it to %s and starting fresh",
+                path,
+                aside,
+            )
         return None
 
 

@@ -103,16 +103,31 @@ def codetab_install(
             return
 
         last: list[tuple[str, str]] | None = None
+        last_error: str | None = None
 
         def show(result: dc.InstallResult) -> None:
-            nonlocal last
+            nonlocal last, last_error
+            last_error = None
             current = [(r.action, r.status, str(r.folder)) for r in result.folders]
             if current != last:
                 _print_folders(result.folders)
                 last = current
 
+        def show_error(exc: Exception) -> None:
+            # Reported and retried on the next pass; the watcher keeps running.
+            nonlocal last_error
+            message = str(exc)
+            if message != last_error:
+                click.echo(f"waiting: {message}", err=True)
+                last_error = message
+
         click.echo(f"Watching every {interval:g} s. Press Ctrl+C to stop.")
-        dc.watch(lambda: dc.install(**kwargs), interval=interval, on_result=show)
+        dc.watch(
+            lambda: dc.install(**kwargs),
+            interval=interval,
+            on_result=show,
+            on_error=show_error,
+        )
     except KeyboardInterrupt:
         click.echo("Stopped.")
     except dc.CodetabError as exc:
@@ -132,6 +147,10 @@ def codetab_remove(roots: tuple[Path, ...], data_dir: Path | None, dry_run: bool
     _print_folders(result.folders)
     if result.config_removed:
         click.echo("Removed codetab.json")
+    elif result.config_disabled:
+        click.echo(
+            "Kept codetab.json with enabled=false: some folders are still patched or locked."
+        )
 
 
 @codetab.command("status")

@@ -316,8 +316,9 @@ pub const TOOLS: &[Tool] = &[
         commands: &[],
         install_url: "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code",
         // Sets ANTHROPIC_BASE_URL in the user-level ~/.claude/settings.json
-        // (key by key, previous values saved). The app restores it on quit and
-        // sign-out and re-applies it at the next sign-in.
+        // (key by key, previous values saved). The app restores it on sign-out
+        // and on update, not on quit: quitting leaves it in place, so the tool
+        // keeps working. It re-applies it at the next sign-in.
         wrap: &[],
         unwrap: &[],
         port: FORWARDER_PORT,
@@ -433,6 +434,23 @@ pub fn tools() -> Vec<ToolInfo> {
                 .collect(),
         })
         .collect()
+}
+
+/// Whether Code-tab installs turn on tool search (`--tool-search`). Off until a
+/// live check of the hosted proxy's tool-search betas is recorded; flip this
+/// one constant to enable it.
+pub const CODE_TAB_TOOL_SEARCH: bool = false;
+
+/// Arguments for `horizon codetab install`, with `--watch` when `watch` is set.
+pub fn codetab_install_args(watch: bool) -> Vec<&'static str> {
+    let mut args = vec!["codetab", "install"];
+    if CODE_TAB_TOOL_SEARCH {
+        args.push("--tool-search");
+    }
+    if watch {
+        args.push("--watch");
+    }
+    args
 }
 
 /// Every loopback port a tool uses for its forwarder, once each.
@@ -595,9 +613,11 @@ impl Client {
         let Some(pid) = Self::listener_pid(port) else {
             return Ok(());
         };
-        if !process::is_client(pid) {
+        // The pid came from a health answer or the socket table. It is stopped
+        // only if it is our own forwarder on this port, not any other program.
+        if !process::is_our_forwarder(pid, port) {
             return Err(format!(
-                "Port {port} is used by another program. Close it, then try again."
+                "foreign program on port {port}: it is not ContextShrink's forwarder, so it was left running. Close it and try again."
             ));
         }
         if !process::kill_pid(pid) {
@@ -640,18 +660,18 @@ impl Client {
         })
     }
 
-    /// Starts the Code-tab watcher (`horizon codetab --watch`) unless one is
-    /// already running. It is windowless and outlives the app, like the forwarder.
+    /// Starts the Code-tab watcher (`horizon codetab install --watch`) unless one
+    /// is already running. It is windowless and outlives the app, like the forwarder.
     pub fn start_codetab_watch(&self) -> Result<(), String> {
         let pid_file = self.codetab_watch_pid_file();
-        if read_pid(&pid_file).is_some_and(process::is_client) {
+        if read_pid(&pid_file).is_some_and(process::is_our_codetab_watch) {
             return Ok(());
         }
         fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
         let log = File::create(self.data_dir.join("codetab-watch.log")).ok();
         let child = process::spawn_detached(|| {
             let mut cmd = Command::new(&self.exe);
-            cmd.args(["codetab", "install", "--tool-search", "--watch"]).stdin(Stdio::null());
+            cmd.args(codetab_install_args(true)).stdin(Stdio::null());
             match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
                 Some((out, err)) => cmd.stdout(out).stderr(err),
                 None => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
@@ -666,7 +686,7 @@ impl Client {
     /// Stops the Code-tab watcher this app started, if it is still running.
     pub fn stop_codetab_watch(&self) {
         let pid_file = self.codetab_watch_pid_file();
-        if let Some(pid) = read_pid(&pid_file).filter(|p| process::is_client(*p)) {
+        if let Some(pid) = read_pid(&pid_file).filter(|p| process::is_our_codetab_watch(*p)) {
             process::kill_pid(pid);
         }
         let _ = fs::remove_file(&pid_file);
@@ -753,6 +773,8 @@ impl Client {
             let mut cmd = Command::new(&self.exe);
             cmd.args(["forward", "start", "--remote", remote, "--port"])
                 .arg(port.to_string())
+                // Loopback only: the forwarder must never be reachable from the network.
+                .args(["--host", "127.0.0.1"])
                 .stdin(Stdio::null());
             if let Some(upstream) = upstream {
                 cmd.args(["--upstream", upstream]);
@@ -1014,5 +1036,19 @@ mod health_tests {
         assert!(!Client::forwarder_healthy(port, "0.42.0"), "a mismatched version must not be adopted");
         let port = serve_health("0.42.0");
         assert!(Client::forwarder_healthy(port, "0.42.0"));
+    }
+}
+
+#[cfg(test)]
+mod codetab_args_tests {
+    use super::*;
+
+    /// Pins the install arguments while tool search is off. Flipping
+    /// `CODE_TAB_TOOL_SEARCH` must come with a recorded live check and an update here.
+    #[test]
+    fn tool_search_stays_off_until_recorded() {
+        assert!(!CODE_TAB_TOOL_SEARCH);
+        assert_eq!(codetab_install_args(false), vec!["codetab", "install"]);
+        assert_eq!(codetab_install_args(true), vec!["codetab", "install", "--watch"]);
     }
 }

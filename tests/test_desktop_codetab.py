@@ -274,8 +274,10 @@ def test_failed_placement_rolls_back_to_real_binary(layout: Layout, monkeypatch)
         raise OSError("disk full")
 
     monkeypatch.setattr(dc, "_place_launcher", boom)
-    with pytest.raises(OSError, match="disk full"):
-        layout.install()
+    result = layout.install()
+    # The failure is reported for this folder, and the real binary runs again at once.
+    assert _states(result) == [("skipped", "error")]
+    assert "disk full" in result.folders[0].detail
     assert (folder / "claude.exe").read_bytes() == REAL_BYTES
     assert not (folder / "claude.cs-real.exe").exists()
 
@@ -479,13 +481,30 @@ def test_built_launcher_routes_a_patched_folder(layout: Layout) -> None:
     layout.install(launcher=layout.launcher)
     assert (folder / "claude.exe").read_bytes() != child_bytes
 
-    # Health answers, so the launcher routes the child to the base URL.
+    # The health route answers 200 with {"ok": true}, so the launcher routes the child.
     import socket
+    import threading
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = listener.getsockname()[1]
+
+    def serve_health() -> None:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        with conn:
+            conn.recv(4096)
+            body = b'{"ok":true}'
+            head = (
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n"
+            )
+            conn.sendall(head + body)
+
+    threading.Thread(target=serve_health, daemon=True).start()
     try:
         config_path = layout.data / "codetab.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))

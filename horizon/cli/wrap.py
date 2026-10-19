@@ -1335,12 +1335,16 @@ def _locked_file(lock_file: Any) -> Any:
             lock_file.seek(0)
             # LK_LOCK has implementation-dependent retry limits, and a holder
             # may legitimately take longer than that (a proxy loading ML
-            # components), so use the non-blocking primitive in a loop.
+            # components), so use the non-blocking primitive in a loop. The loop
+            # has a deadline: a lock nobody releases must not hang the command.
+            deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
             while True:
                 try:
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
                     break
                 except OSError:
+                    if time.monotonic() >= deadline:
+                        raise _lock_timeout_error(lock_file) from None
                     time.sleep(0.05)
             try:
                 yield
@@ -1350,11 +1354,32 @@ def _locked_file(lock_file: Any) -> Any:
         else:
             import fcntl
 
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise _lock_timeout_error(lock_file) from None
+                    time.sleep(0.05)
             try:
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+#: How long a settings or start lock may be held by another process before the
+#: command gives up with a message instead of hanging.
+_LOCK_TIMEOUT_SECONDS = 10.0
+
+
+def _lock_timeout_error(lock_file: Any) -> click.ClickException:
+    return click.ClickException(
+        f"Timed out after {_LOCK_TIMEOUT_SECONDS:g}s waiting for another Horizon process to "
+        f"release {getattr(lock_file, 'name', 'the lock file')}. Retry once it finishes; if no "
+        "Horizon command is running, delete that lock file."
+    )
 
 
 def _read_wrap_owners(settings_path: Path) -> dict[str, Any]:

@@ -125,29 +125,28 @@ def _proxy() -> HorizonProxy:
     proxy._config.retry_base_delay_ms = 0
     proxy._config.retry_max_delay_ms = 0
     proxy.config = proxy._config
-    proxy._parse_sse_usage_from_buffer = MagicMock(return_value=None)
     proxy.memory_handler = None
     # The funnel's figure, as emit_request_outcome returns it.
     proxy._record_request_outcome = AsyncMock(return_value=0.4321)
     return proxy
 
 
-def _upstream_response() -> AsyncMock:
+def _upstream_response(payload: bytes = UPSTREAM) -> AsyncMock:
     response = AsyncMock()
     response.headers = httpx.Headers({"content-type": "text/event-stream"})
     response.status_code = 200
 
     async def aiter_bytes():
-        yield UPSTREAM
+        yield payload
 
     response.aiter_bytes = aiter_bytes
     response.aclose = AsyncMock()
     return response
 
 
-async def _stream(tagged: bool) -> bytes:
+async def _stream(tagged: bool, payload: bytes = UPSTREAM) -> bytes:
     proxy = _proxy()
-    response = _upstream_response()
+    response = _upstream_response(payload)
     proxy.http_client.build_request = MagicMock(return_value=MagicMock())
     proxy.http_client.send = AsyncMock(return_value=response)
     result = await proxy._stream_response(
@@ -213,3 +212,14 @@ async def test_untagged_stream_has_no_comment_at_all() -> None:
     body = await _stream(tagged=False)
     assert body == UPSTREAM
     assert VERIFIED_SAVINGS_HEADER.encode() not in body
+
+
+TRUNCATED = b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1"}}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_closes_without_the_verified_comment() -> None:
+    """A stream that never reaches message_stop claims no saving to the client."""
+    body = await _stream(tagged=True, payload=TRUNCATED)
+    assert body == TRUNCATED
+    assert b"x-horizon-verified-savings-usd" not in body

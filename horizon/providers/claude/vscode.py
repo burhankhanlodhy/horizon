@@ -228,18 +228,65 @@ def _restore_model(payload: dict[str, Any], model_state: dict[str, Any]) -> None
         payload.pop("model", None)
 
 
+def _write_pair(
+    path: Path, payload: dict[str, Any], state_path: Path, state: dict[str, Any]
+) -> None:
+    """Write the settings and their state so a crash between the two is recoverable.
+
+    The state goes first, marked ``pending``, and records the values about to be
+    written. A crash before the settings write leaves a recorded intent, not an
+    unrecorded route. The settings follow, then the state is rewritten without
+    the marker. A pending state accepts the values Horizon intended *or* the
+    ones it replaced (see ``_key_conflict``), so disconnect can restore from
+    any point.
+    """
+    _write_json(state_path, {**state, "pending": True})
+    _write_json(path, payload)
+    _write_json(state_path, {key: value for key, value in state.items() if key != "pending"})
+
+
+def _value_accepted(env: dict[str, Any], key: str, state: dict[str, Any]) -> bool:
+    if env.get(key) == state["managed"][key]:
+        return True
+    if not state.get("pending"):
+        return False
+    saved = state["previous"][key]
+    if saved["present"]:
+        return env.get(key) == saved.get("value")
+    return key not in env
+
+
+def _key_conflict(env: dict[str, Any], state: dict[str, Any]) -> bool:
+    """True when a managed env value differs from what Horizon recorded."""
+    return any(not _value_accepted(env, key, state) for key in _MANAGED_KEYS)
+
+
+def _model_conflict(payload: dict[str, Any], state: dict[str, Any]) -> bool:
+    """True when the managed model differs from what Horizon recorded."""
+    model_state = state.get("model")
+    if not isinstance(model_state, dict):
+        return False
+    if _model_is_managed(payload, model_state["managed"]):
+        return False
+    if not state.get("pending"):
+        return True
+    previous = model_state["previous"]
+    if previous["present"]:
+        return payload.get("model") != previous["value"]
+    return "model" in payload
+
+
 def _check_managed(
     payload: dict[str, Any], env: dict[str, Any], state: dict[str, Any], path: Path
 ) -> None:
     """Refuse to overwrite a value the user changed since Horizon wrote it."""
-    managed = state["managed"]
-    model_state = _validate_model_record(state, _state_path(path))
-    if any(env.get(key) != managed[key] for key in _MANAGED_KEYS):
+    _validate_model_record(state, _state_path(path))
+    if _key_conflict(env, state):
         raise click.ClickException(
             "Claude settings changed one of Horizon's managed values; refusing to overwrite "
             f"the user's change. Resolve the conflict in {path}, then retry."
         )
-    if model_state is not None and not _model_is_managed(payload, model_state["managed"]):
+    if _model_conflict(payload, state):
         raise click.ClickException(
             "Claude settings changed Horizon's managed model; refusing to overwrite the user's "
             f"change. Resolve the conflict in {path}, then retry."
@@ -263,12 +310,12 @@ def configure_vscode_claude_settings(
         state = _read_object(state_path, label="Horizon state")
         model_state = _validate_state(state, state_path)
         old_managed = state["managed"]
-        if any(env.get(key) != old_managed[key] for key in _MANAGED_KEYS):
+        if _key_conflict(env, state):
             raise click.ClickException(
                 "Claude settings changed one of Horizon's managed values. Run "
                 "`horizon unwrap vscode-claude` or resolve the conflict before retrying."
             )
-        if model_state is not None and not _model_is_managed(payload, model_state["managed"]):
+        if _model_conflict(payload, state):
             raise click.ClickException(
                 "Claude settings changed Horizon's managed model. Run "
                 "`horizon unwrap vscode-claude` or resolve the conflict before retrying."
@@ -324,8 +371,7 @@ def configure_vscode_claude_settings(
     payload["env"] = env
     state["managed"] = managed
     state[_OWNERS_KEY] = [VSCODE_CLAUDE]
-    _write_json(path, payload)
-    _write_json(state_path, state)
+    _write_pair(path, payload, state_path, state)
     return action
 
 
@@ -340,6 +386,9 @@ def _restore_all(
     previous = state["previous"]
     env = _env_map(payload, path)
     _check_managed(payload, env, state, path)
+    # Marked pending before the settings change: if the restore is interrupted,
+    # the state still describes the route and the next disconnect finishes it.
+    _write_json(state_path, {**state, "pending": True})
 
     for key in _MANAGED_KEYS:
         saved = previous.get(key)
@@ -561,8 +610,7 @@ def connect_claude_code_settings(
     state["managed"][_BASE_URL_KEY] = base_url
     state[_OWNERS_KEY] = owners
     state[_CLAUDE_CODE_KEY] = record
-    _write_json(path, payload)
-    _write_json(state_path, state)
+    _write_pair(path, payload, state_path, state)
     return {
         "terminal": terminal,
         "status_line": status_line,
@@ -628,8 +676,7 @@ def remove_claude_code_settings(path: Path, *, port: int) -> str:
         _restore_extras(payload, record)
         state.pop(_CLAUDE_CODE_KEY, None)
         state[_OWNERS_KEY] = others
-        _write_json(path, payload)
-        _write_json(state_path, state)
+        _write_pair(path, payload, state_path, state)
         return "kept"
 
     _restore_extras(payload, record)

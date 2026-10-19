@@ -118,7 +118,7 @@ def test_health_is_answered_locally_and_never_relayed() -> None:
         return httpx.Response(200)
 
     client = TestClient(_app(handler, port=18788, started_at="2026-10-18T00:00:00+00:00"))
-    resp = client.get(HEALTH_PATH)
+    resp = client.get(HEALTH_PATH, headers={"host": "127.0.0.1:18788"})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -334,3 +334,226 @@ def test_status_line_says_pending_until_a_verified_figure_exists() -> None:
     status = _status(stamp)
     status["sessions"]["s"]["verified_requests"] = 0
     assert "saved pending verified" in render_status_line(status, now)
+
+
+# ----------------------------------------------------------------- origin and host (H2)
+
+BOUND = {"host": "127.0.0.1:18788"}
+
+
+def test_cross_origin_request_is_refused_and_no_credential_is_used() -> None:
+    """A web page cannot spend the user's key through the loopback relay."""
+    seen: dict = {}
+    client = TestClient(
+        _app(
+            _stream_handler(seen, body=b"{}", extra={"content-type": "application/json"}),
+            port=18788,
+        )
+    )
+
+    resp = client.post(
+        "/v1/messages",
+        content=b'{"model":"m"}',
+        headers={**BOUND, "origin": "https://evil.example", "content-type": "text/plain"},
+    )
+
+    assert resp.status_code == 403
+    assert "calls" not in seen  # never relayed, so no credential left the process
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["evil.example.com:18788", "127.0.0.1:9999", "attacker.test", "127.0.0.1"],
+)
+def test_host_that_is_not_the_bound_loopback_is_refused(host: str) -> None:
+    """DNS rebinding: a name that resolves to 127.0.0.1 is still a foreign Host."""
+    seen: dict = {}
+    client = TestClient(
+        _app(
+            _stream_handler(seen, body=b"{}", extra={"content-type": "application/json"}),
+            port=18788,
+        )
+    )
+
+    resp = client.post("/v1/messages", json={"model": "m"}, headers={"host": host})
+
+    assert resp.status_code == 403
+    assert "calls" not in seen
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:18788", "localhost:18788"])
+def test_bound_loopback_hosts_are_served(host: str) -> None:
+    seen: dict = {}
+    client = TestClient(
+        _app(
+            _stream_handler(seen, body=b"{}", extra={"content-type": "application/json"}),
+            port=18788,
+        )
+    )
+
+    resp = client.post("/v1/messages", json={"model": "m"}, headers={"host": host})
+
+    assert resp.status_code == 200
+    assert len(seen["calls"]) == 1
+
+
+def test_health_refuses_a_rebinding_host_and_serves_the_bound_one() -> None:
+    client = TestClient(_app(lambda request: httpx.Response(200), port=18788))
+    assert client.get(HEALTH_PATH, headers={"host": "evil.example:18788"}).status_code == 403
+    assert client.get(HEALTH_PATH, headers=BOUND).status_code == 200
+    assert client.get(HEALTH_PATH, headers={**BOUND, "origin": "https://x.test"}).status_code == 403
+
+
+def test_websocket_with_an_origin_is_refused_before_any_credential_or_connection() -> None:
+    from fastapi.websockets import WebSocketDisconnect
+
+    seen: dict = {}
+
+    async def ws_connect(url, headers, subprotocols):  # pragma: no cover - must not run
+        seen["called"] = True
+        raise AssertionError("upstream must not be reached")
+
+    app = build_app(REMOTE, lambda: "hz_secret", ws_connect=ws_connect, port=18788)
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with client.websocket_connect(
+            "/v1/responses", headers={**BOUND, "origin": "https://evil.example"}
+        ):
+            pass
+    assert refused.value.code == 1008
+    assert "called" not in seen
+
+
+def test_client_x_horizon_control_headers_never_reach_the_proxy() -> None:
+    """Only the forwarder's own headers and the two plugin routing tags pass the relay."""
+    seen: dict = {}
+    client = TestClient(
+        _app(_stream_handler(seen, body=b"{}", extra={"content-type": "application/json"}))
+    )
+
+    client.post(
+        "/v1/messages",
+        json={"model": "m"},
+        headers={
+            "x-horizon-bypass": "true",
+            "x-horizon-mode": "passthrough",
+            "x-horizon-session-id": "spoofed",
+            "x-horizon-forwarder": "spoofed",
+            "x-horizon-base-url": "https://api.example.test",
+        },
+    )
+
+    req = seen["calls"][-1]
+    assert "x-horizon-bypass" not in req.headers
+    assert "x-horizon-mode" not in req.headers
+    assert "x-horizon-session-id" not in req.headers
+    assert req.headers["x-horizon-forwarder"] == "claude-code"
+    assert req.headers["x-horizon-base-url"] == "https://api.example.test"
+
+
+# ----------------------------------------------------------------- stats robustness (M4, L6, L7)
+
+
+def test_unreadable_usage_history_is_moved_aside_and_never_overwritten(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    directory = tmp_path / "claude-code"
+    directory.mkdir()
+    history = directory / "usage-history.json"
+    history.write_text("{not json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="horizon.forwarder_stats"):
+        stats = ClaudeCodeStats(directory)
+
+    kept = list(directory.glob("usage-history.json.corrupt-*"))
+    assert len(kept) == 1
+    assert kept[0].read_text(encoding="utf-8") == "{not json"
+    assert not history.exists()  # nothing was rewritten over the evidence
+    assert "moved it to" in caplog.text
+    assert (
+        stats.snapshot(now=time.time(), forwarder={"pid": 1, "version": "t", "port": 1})[
+            "all_time"
+        ]["requests"]
+        == 0
+    )
+    stats.close()
+
+
+def test_percentage_is_clamped_to_0_100() -> None:
+    from datetime import datetime, timezone
+
+    stamp = datetime.fromtimestamp(time.time(), timezone.utc).isoformat(timespec="seconds")
+
+    def line(before: int, after: int) -> str:
+        session = {
+            "last_at": stamp,
+            "tokens_before": before,
+            "tokens_after": after,
+            "trimmed_list_usd": 0.0,
+            "verified_saved_usd": 0.0,
+            "verified_requests": 0,
+            "requests": 1,
+            "unpriced": False,
+        }
+        return render_status_line(_status(stamp, sessions={"s": session}), time.time())
+
+    assert "trimmed 0%" in line(100, 150)  # the request grew: not a negative figure
+    assert "trimmed 100%" in line(100, 0)
+
+
+def test_malformed_session_entry_is_reset_not_fatal(tmp_path: Path) -> None:
+    stats = ClaudeCodeStats(tmp_path / "claude-code")
+    stats._sessions["bad"] = {"requests": "many", "tokens_before": None}
+    stats.record(
+        session_id="bad",
+        model="",
+        tokens_before=10,
+        tokens_after=5,
+        tokens_saved=5,
+        list_usd=0.0,
+        unpriced=False,
+        verified_usd=None,
+        cache_written=False,
+        keepalive=False,
+        now=time.time(),
+    )
+    assert stats._sessions["bad"]["requests"] == 1
+    assert stats._sessions["bad"]["tokens_before"] == 10
+    stats.close()
+
+
+def test_malformed_entries_on_disk_are_dropped_at_load(tmp_path: Path) -> None:
+    directory = tmp_path / "claude-code"
+    directory.mkdir()
+    (directory / "status.json").write_text(
+        json.dumps(
+            {
+                "sessions": {
+                    "bad": {"requests": "x"},
+                    "fine": {
+                        "requests": 2,
+                        "tokens_before": 9,
+                        "tokens_after": 4,
+                        "trimmed_list_usd": 0.1,
+                        "verified_saved_usd": 0.0,
+                        "verified_requests": 0,
+                        "first_at": "",
+                        "last_at": "",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (directory / "usage-history.json").write_text(
+        json.dumps({"daily": {"2026-10-18": {"requests": "bad"}}, "all_time": {"requests": None}}),
+        encoding="utf-8",
+    )
+    stats = ClaudeCodeStats(directory)
+    snap = stats.snapshot(now=time.time(), forwarder={"pid": 1, "version": "t", "port": 1})
+    stats.close()
+    assert "bad" not in snap["sessions"]
+    assert snap["sessions"]["fine"]["requests"] == 2
+    assert snap["all_time"]["requests"] == 0

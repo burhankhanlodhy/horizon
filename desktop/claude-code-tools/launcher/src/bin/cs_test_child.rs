@@ -48,6 +48,15 @@ fn main() {
     }
 
     out.flush().unwrap();
+
+    // Kill test support: publish our pid, then stay alive for a while.
+    if let Some(path) = std::env::var_os("CS_TEST_PIDFILE") {
+        std::fs::write(path, std::process::id().to_string()).unwrap();
+    }
+    if let Some(millis) = std::env::var("CS_TEST_SLEEP_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+
     let code: i32 = std::env::var("CS_TEST_EXIT")
         .ok()
         .and_then(|value| value.parse().ok())

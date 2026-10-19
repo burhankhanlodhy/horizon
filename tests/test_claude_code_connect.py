@@ -15,6 +15,7 @@ from click.testing import CliRunner
 
 from horizon.cli import wrap as wrap_cli
 from horizon.cli.main import main
+from horizon.providers.claude import vscode as vscode_mod
 from horizon.providers.claude.vscode import claude_user_settings_path
 
 USER_SETTINGS = {
@@ -242,3 +243,75 @@ def test_unwrap_claude_still_strips_a_route_no_connect_state_owns(
 
     assert unwrap.exit_code == 0, unwrap.output
     assert _read(path)["env"] == {"FOO": "1"}
+
+
+def _connect_args(editor: str, path: Path, tmp_path: Path) -> list[str]:
+    args = ["connect", editor, "--port", "18788", "--settings-file", str(path)]
+    if editor == "claude-code":
+        args += [
+            "--status-exe",
+            str(_status_exe(tmp_path)),
+            "--plugin-dir",
+            str(_marketplace(tmp_path)),
+        ]
+    return args
+
+
+@pytest.mark.parametrize("editor", ["claude-code", "vscode-claude"])
+@pytest.mark.parametrize("failing_write", ["settings", "final-state"])
+def test_failed_write_leaves_a_recorded_intent_that_disconnect_clears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    editor: str,
+    failing_write: str,
+) -> None:
+    """A crash between the state and the settings must not leave an unrecorded route.
+
+    ``settings``: the second write (the settings) fails, so no route was written.
+    ``final-state``: the settings are written and the closing state write fails,
+    so the route exists while the state still reads pending. Either way the
+    state is on disk first, and disconnect restores the original settings.
+    """
+    path = _settings(tmp_path)
+    before = _read(path)
+    state_path = path.with_name(".horizon-vscode-claude.json")
+    real_write = vscode_mod._write_json
+
+    def failing(target: Path, payload: dict) -> None:
+        if failing_write == "settings" and target == path:
+            raise OSError("simulated disk failure")
+        if failing_write == "final-state" and target == state_path and "pending" not in payload:
+            raise OSError("simulated disk failure")
+        real_write(target, payload)
+
+    monkeypatch.setattr(vscode_mod, "_write_json", failing)
+    result = CliRunner().invoke(main, ["desktop", *_connect_args(editor, path, tmp_path)])
+    monkeypatch.setattr(vscode_mod, "_write_json", real_write)
+
+    assert result.exit_code != 0
+    recorded = json.loads(state_path.read_text(encoding="utf-8"))
+    assert recorded["pending"] is True
+    assert recorded["managed"]["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:18788")
+    if failing_write == "final-state":
+        assert _read(path)["env"]["ANTHROPIC_BASE_URL"] == recorded["managed"]["ANTHROPIC_BASE_URL"]
+
+    code, out = _run("disconnect", editor, "--port", "18788", "--settings-file", str(path))
+    assert code == 0, out
+    assert _read(path) == before
+    assert not state_path.exists()
+
+
+def test_a_held_settings_lock_times_out_with_a_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock nobody releases must fail the command, not hang it (L8)."""
+    import click
+
+    monkeypatch.setattr(wrap_cli, "_LOCK_TIMEOUT_SECONDS", 0.3)
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+
+    with wrap_cli._wrap_settings_lock(settings):
+        with pytest.raises(click.ClickException, match="Timed out after"):
+            with wrap_cli._wrap_settings_lock(settings):
+                pass  # pragma: no cover - the lock is held, so this must not run
