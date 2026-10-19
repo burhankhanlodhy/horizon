@@ -193,7 +193,9 @@ class CCRResponseHandler:
         Returns:
             CCRToolResult with the retrieved content.
         """
-        store = get_compression_store()
+        from ..cache.fold_originals import CcrLookupStore, get_fold_originals
+
+        store = CcrLookupStore(get_compression_store(), get_fold_originals())
 
         try:
             get_status = getattr(store, "get_entry_status", None)
