@@ -404,9 +404,12 @@ def test_wrap_exit_ends_its_session() -> None:
     keeper = _keeper(up, clock)
     _turn(keeper, "r1", _body("1h"), liveness="L1")
     assert keeper.end("L1") is True
-    _turn(keeper, "r2", _body("1h"), liveness="L1")  # a late request after exit is ignored
     clock.t += 3400
-    assert _run(keeper.tick()) == 0
+    assert _run(keeper.tick()) == 0  # ended: nothing is pinged
+    # The same id coming back (``claude --resume``) is a new real request: a fresh group.
+    _turn(keeper, "r2", _body("1h"), liveness="L1")
+    clock.t += 3400
+    assert _run(keeper.tick()) == 1
 
 
 def test_a_request_still_in_flight_at_exit_cannot_revive_the_session() -> None:

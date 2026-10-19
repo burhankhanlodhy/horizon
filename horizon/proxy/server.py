@@ -2026,6 +2026,11 @@ class HorizonProxy(
             # Hosted proxy: each ping is billed to the account that owns the session.
             reporter=record_keepalive_ping,
             max_idle_seconds=float(os.environ.get("HORIZON_CACHE_KEEPALIVE_MAX_IDLE_S", 8 * 3600)),
+            # Claude Code forwarder sessions end through the forwarder; this cap only
+            # matters when a session's end never arrives (crash, sleep, a lost hook).
+            forwarder_max_idle_seconds=float(
+                os.environ.get("HORIZON_KEEPALIVE_FORWARDER_IDLE_CAP_S", 2 * 3600)
+            ),
             min_context=int(os.environ.get("HORIZON_CACHE_KEEPALIVE_MIN_CONTEXT", 20_000)),
             ledger_path=Path(workspace) / "cache_keeper.jsonl" if workspace else None,
         )

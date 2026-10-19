@@ -1,7 +1,10 @@
 """Wire contract for the "Saved $ (verified)" figure the Claude Code forwarder reads.
 
 The proxy stamps each Anthropic ``/v1/messages`` response with the request's
-cache-aware saving (the figure the savings ledger records). It does so only when
+cache-aware saving (the figure the savings ledger records), settled with its
+cache keep-alive: plus the rewrite a resumed session avoided, minus the pings
+its gap cost. That figure is signed, because pings that did not pay off are a
+real cost; the value is written with its sign. It does so only when
 the request carries ``x-horizon-forwarder: claude-code``, which the local
 forwarder adds. A streamed response has its headers sent before the saving is
 known, so the proxy appends one SSE comment just before the stream closes; a
@@ -41,8 +44,11 @@ def is_claude_code_forwarder(headers: Mapping[str, Any] | None) -> bool:
 
 
 def format_verified_usd(usd: float) -> str:
-    """The figure as the header/comment carries it: a plain decimal, 6 places."""
-    return f"{max(float(usd), 0.0):.6f}"
+    """The figure as the header/comment carries it: a plain signed decimal, 6 places."""
+    value = round(float(usd), 6)
+    if value == 0.0:
+        value = 0.0  # no "-0.000000" for a zero that came out negative
+    return f"{value:.6f}"
 
 
 def sse_comment_line(usd: float) -> bytes:
@@ -51,7 +57,7 @@ def sse_comment_line(usd: float) -> bytes:
 
 
 def parse_sse_comment_value(line: bytes) -> float | None:
-    """The value of a verified-savings comment line, or ``None`` if it is not one.
+    """The signed value of a verified-savings comment line, or ``None`` if it is not one.
 
     ``line`` is one complete line without its terminator (``\\r\\n`` or ``\\n``
     already removed or still present; both are accepted).
@@ -66,4 +72,4 @@ def parse_sse_comment_value(line: bytes) -> float | None:
         return None
     if value != value or value in (float("inf"), float("-inf")):  # NaN or infinite
         return None
-    return max(value, 0.0)
+    return value

@@ -30,7 +30,15 @@ if ($LASTEXITCODE -ne 0) { throw "Writing the build version failed" }
 # Run from the repo root so `horizon` resolves to the real package (its data
 # files are collected from there); outputs still land in desktop\client.
 Push-Location $root
+# The frozen client cannot import litellm (excluded below), so it cannot price
+# models from the package. Ship the rows the venv prices with instead, read only
+# when litellm is absent (horizon/pricing/litellm_pricing.py). Removed in finally.
+$pricing = Join-Path $PSScriptRoot "build_pricing.py"
 try {
+    $priceRows = & $python $pricing write
+    if ($LASTEXITCODE -ne 0) { throw "Writing the bundled price rows failed" }
+    "Bundled $priceRows LiteLLM price rows"
+
     # PyInstaller logs to stderr; judge success by the exit code instead.
     $ErrorActionPreference = "Continue"
     & $python -m PyInstaller (Join-Path $PSScriptRoot "horizon_client.py") `
@@ -51,6 +59,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 }
 finally {
+    & $python $pricing remove
     & $python $buildInfo remove
     Pop-Location
 }

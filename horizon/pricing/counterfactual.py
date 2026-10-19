@@ -360,19 +360,6 @@ class CacheRates:
         )
 
 
-def _litellm() -> Any | None:
-    """Import LiteLLM lazily; absent is a supported configuration, not an error.
-
-    Horizon's own dependency spec excludes litellm on Python 3.14, and gateway
-    deployments often run without it. Callers degrade to list pricing.
-    """
-    try:
-        import litellm
-    except Exception:  # pragma: no cover - environment-dependent
-        return None
-    return litellm
-
-
 #: ``resolve_rates`` runs on every priced request and ``model`` comes straight
 #: off a client-supplied request body, so the memo is a BOUNDED LRU, never a
 #: plain dict: a request-facing proxy must not let a caller grow a cache for
@@ -386,13 +373,12 @@ _RATE_CACHE_MAXSIZE = 256
 
 
 def _catalog_row(model: str) -> dict[str, Any]:
-    litellm = _litellm()
-    if litellm is None or not model:
+    if not model:
         return {}
     try:
-        from horizon.pricing.litellm_pricing import resolve_litellm_model
+        from horizon.pricing.litellm_pricing import model_cost_table, resolve_litellm_model
 
-        return litellm.model_cost.get(resolve_litellm_model(model), {}) or {}
+        return model_cost_table().get(resolve_litellm_model(model), {}) or {}
     except Exception:
         return {}
 
@@ -421,6 +407,13 @@ def long_context_suffix(model: str) -> str:
     """Catalog field suffix of ``model``'s long tier (``"_above_100k_tokens"``)."""
     threshold = long_context_threshold(model)
     return f"_above_{(threshold or LONG_CONTEXT_THRESHOLD_TOKENS) // 1000}k_tokens"
+
+
+def _billing_calculator() -> Any | None:
+    """The litellm module when it is importable, else ``None`` (absence is supported)."""
+    from horizon.pricing.litellm_pricing import LITELLM_AVAILABLE, litellm
+
+    return litellm if LITELLM_AVAILABLE and litellm is not None else None
 
 
 def _canonical_cache_rate(litellm: Any, model: str, field: str, *, long_context: bool) -> float:
@@ -480,15 +473,11 @@ def resolve_rates(
     catalog between cases must call ``resolve_rates.cache_clear()`` in between,
     or the previous case's rates leak into the next.
     """
-    litellm = _litellm()
-    if litellm is None:
-        return None
-
     try:
-        from horizon.pricing.litellm_pricing import resolve_litellm_model
+        from horizon.pricing.litellm_pricing import model_cost_table, resolve_litellm_model
 
         resolved_model = resolve_litellm_model(model)
-        info = litellm.model_cost.get(resolved_model, {}) or {}
+        info = model_cost_table().get(resolved_model, {}) or {}
     except Exception:
         return None
 
@@ -528,13 +517,19 @@ def resolve_rates(
     write_is_catalog = info.get("cache_creation_input_token_cost") is not None or (
         long_context and info.get(f"cache_creation_input_token_cost{suffix}") is not None
     )
-    if for_billing and not read_is_catalog:
+    # The billing calculator needs the package itself; a frozen client without it
+    # keeps the catalog's own rates (the savings path never asks for billing).
+    billing_calculator = _billing_calculator() if for_billing else None
+    if billing_calculator is not None and not read_is_catalog:
         read = _canonical_cache_rate(
-            litellm, resolved_model, "cache_read_input_tokens", long_context=long_context
+            billing_calculator, resolved_model, "cache_read_input_tokens", long_context=long_context
         )
-    if for_billing and not write_is_catalog:
+    if billing_calculator is not None and not write_is_catalog:
         write_5m = _canonical_cache_rate(
-            litellm, resolved_model, "cache_creation_input_tokens", long_context=long_context
+            billing_calculator,
+            resolved_model,
+            "cache_creation_input_tokens",
+            long_context=long_context,
         )
 
     basis = BASIS_CATALOG

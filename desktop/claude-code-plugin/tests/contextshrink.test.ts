@@ -86,3 +86,39 @@ test('the band refreshes every 30 seconds', async ($, on) => {
   expect(await band.find({ type: 'Text', text: LIVE })).toBeDefined()
   await band.unmount()
 })
+
+test('a session end hands its id to the helper on stdin and does nothing else', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { LOCALAPPDATA: LOCAL })
+  const runs: { argv: readonly string[]; stdin?: string }[] = []
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('process.run', (_, e) => {
+    runs.push({ argv: e.argv, stdin: e.init?.stdin })
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  runs.length = 0
+  await $.session.end({
+    reason: 'prompt_input_exit',
+    sessionId: 'sess-42',
+    resume: { id: 'sess-42' },
+  })
+
+  expect(runs.length).toBe(1)
+  expect(runs[0].argv[0]).toMatch(/contextshrink-status\.exe$/)
+  expect(runs[0].argv[1]).toBe('--session-end')
+  expect(JSON.parse(runs[0].stdin ?? '{}')).toEqual({ session_id: 'sess-42' })
+})
+
+test('a session end with no helper still ends cleanly', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { LOCALAPPDATA: LOCAL })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('process.run', () => ({ deny: 'helper missing' }))
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.session.end({ reason: 'clear', sessionId: 'sess-43', resume: { id: 'sess-43' } })
+})

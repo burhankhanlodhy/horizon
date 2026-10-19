@@ -47,6 +47,24 @@ export function register(on) {
     return next(e)
   })
 
+  // The session is over (exit, /clear, resume): tell the forwarder, which tells the
+  // proxy to stop keeping this session's cache warm. The helper prints nothing and
+  // a missed end is caught by the proxy's idle cap, so a failure here is silent.
+  on('session.end', async ($, e, next) => {
+    const root = await dataRoot($)
+    if (root && e.sessionId) {
+      try {
+        await $.process.run([root + '\\bin\\contextshrink-status.exe', '--session-end'], {
+          stdin: JSON.stringify({ session_id: e.sessionId }),
+          timeoutMs: 1200,
+        })
+      } catch (error) {
+        // No helper, or no forwarder listening: nothing to end here.
+      }
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const { Box, Text } = $.ui.resolve(e)
     // Keep whatever later mods draw in the band, under this line

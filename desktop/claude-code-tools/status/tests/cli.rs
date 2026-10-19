@@ -220,3 +220,65 @@ fn detail_without_status_explains_itself() {
     assert_eq!(code, 0);
     assert!(out.contains("no status yet"), "{out}");
 }
+
+#[test]
+fn session_end_posts_the_session_to_the_forwarder_and_prints_nothing() {
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let forwarder = std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        conn.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 1024];
+        // The JSON body ends the request; a closing brace is the last byte written.
+        while !received.ends_with(b"}") {
+            match conn.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => received.extend_from_slice(&buffer[..count]),
+            }
+        }
+        conn.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        String::from_utf8(received).unwrap()
+    });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_contextshrink-status"))
+        .arg("--session-end")
+        .env("CONTEXTSHRINK_FORWARDER_PORT", port.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(br#"{"session_id":"sess-42","reason":"prompt_input_exit"}"#).unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty(), "a hook's output would reach the person");
+    let request = forwarder.join().unwrap();
+    assert!(request.starts_with("POST /__cs/session-end HTTP/1.1\r\n"));
+    assert!(request.ends_with(r#"{"session_id":"sess-42"}"#));
+}
+
+#[test]
+fn session_end_with_no_forwarder_running_still_exits_cleanly() {
+    // Port 1 is never a forwarder: the hook must do nothing and exit 0 at once.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_contextshrink-status"))
+        .arg("--session-end")
+        .env("CONTEXTSHRINK_FORWARDER_PORT", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(br#"{"session_id":"sess-7"}"#).unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+}
