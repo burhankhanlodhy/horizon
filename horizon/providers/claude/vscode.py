@@ -10,7 +10,8 @@ Desktop Code tab). They share one state file, so they cannot fight over it:
 * ``managed`` holds the values Horizon wrote. A user edit to any of them makes
   both connectors refuse to overwrite it.
 * ``claude_code`` records what the Claude Code connector added beyond env (the
-  status line, the plugin marketplace) so disconnect removes only those.
+  status line, the plugin marketplace, the keep-sessions-lean window) so
+  disconnect removes only those.
 
 A state file written before ``owners`` existed belongs to ``vscode-claude``.
 """
@@ -29,6 +30,7 @@ from typing import Any
 import click
 
 from horizon import fsutil
+from horizon.desktop_codetab import LEAN_WINDOW_KEY, LEAN_WINDOW_MAX, LEAN_WINDOW_MIN
 from horizon.providers.claude.runtime import resolve_1m_model
 from horizon.proxy.project_context import with_project_prefix
 
@@ -669,6 +671,9 @@ def remove_claude_code_settings(path: Path, *, port: int) -> str:
 
     payload = _read_settings(path)
     record = _claude_code_record(state)
+    lean = _lean_record(state, state_path)
+    if lean is not None:
+        _restore_lean_env(payload, lean, path)
     others = [owner for owner in owners if owner != CLAUDE_CODE]
     if others:
         env = _env_map(payload, path)
@@ -683,3 +688,158 @@ def remove_claude_code_settings(path: Path, *, port: int) -> str:
     state.pop(_CLAUDE_CODE_KEY, None)
     _restore_all(path, state, state_path, model_state, payload)
     return "restored"
+
+
+# --------------------------------------------------------------------------- Keep sessions lean
+
+
+def check_lean_window(window: int) -> int:
+    """Return ``window`` when it is a valid compaction window, otherwise raise."""
+    if (
+        isinstance(window, bool)
+        or not isinstance(window, int)
+        or not (LEAN_WINDOW_MIN <= window <= LEAN_WINDOW_MAX)
+    ):
+        raise click.ClickException(
+            f"The compaction window must be a whole number of tokens from {LEAN_WINDOW_MIN:,} "
+            f"to {LEAN_WINDOW_MAX:,}; got {window}."
+        )
+    return window
+
+
+def _lean_record(state: dict[str, Any], state_path: Path) -> dict[str, Any] | None:
+    """The ``claude_code.lean`` record, or ``None`` when lean is not on."""
+    record = state.get(_CLAUDE_CODE_KEY)
+    if not isinstance(record, dict) or "lean" not in record:
+        return None
+    lean = record["lean"]
+    previous = lean.get("previous") if isinstance(lean, dict) else None
+    window = lean.get("window") if isinstance(lean, dict) else None
+    if (
+        not isinstance(lean, dict)
+        or isinstance(window, bool)
+        or not isinstance(window, int)
+        or not (LEAN_WINDOW_MIN <= window <= LEAN_WINDOW_MAX)
+        or not isinstance(previous, dict)
+        or not isinstance(previous.get("present"), bool)
+        or "value" not in previous
+        or (previous["present"] and not isinstance(previous.get("value"), str))
+        or (not previous["present"] and previous.get("value") is not None)
+    ):
+        raise click.ClickException(
+            f"Horizon state {state_path} has an incomplete lean record; refusing to edit."
+        )
+    return lean
+
+
+def claude_code_connected(path: Path) -> bool:
+    """True when the Claude Code connector holds the route for settings ``path``."""
+    state_path = _state_path(path)
+    if not state_path.exists():
+        return False
+    state = _read_object(state_path, label="Horizon state")
+    _validate_state(state, state_path)
+    return CLAUDE_CODE in _owners_of(state)
+
+
+def _restore_lean_env(payload: dict[str, Any], lean: dict[str, Any], path: Path) -> bool:
+    """Put the terminal's window back as Horizon found it.
+
+    Returns ``False`` and leaves the env alone when the value no longer matches
+    what Horizon wrote, so a user's own edit is never overwritten.
+    """
+    env = _env_map(payload, path)
+    if env.get(LEAN_WINDOW_KEY) != str(lean["window"]):
+        return False
+    previous = lean["previous"]
+    if previous["present"]:
+        env[LEAN_WINDOW_KEY] = previous["value"]
+    else:
+        env.pop(LEAN_WINDOW_KEY, None)
+    payload["env"] = env
+    return True
+
+
+def lean_status(path: Path) -> dict[str, Any]:
+    """``enabled``, the ``window`` Horizon set, and the terminal's current value."""
+    payload = _read_settings(path)
+    env = _env_map(payload, path)
+    current = env.get(LEAN_WINDOW_KEY)
+    lean = None
+    state_path = _state_path(path)
+    if state_path.exists():
+        state = _read_object(state_path, label="Horizon state")
+        _validate_state(state, state_path)
+        lean = _lean_record(state, state_path)
+    return {
+        "enabled": lean is not None,
+        "window": lean["window"] if lean is not None else None,
+        "terminal_value": None if current is None else str(current),
+    }
+
+
+def lean_on(path: Path, window: int) -> str:
+    """Set the terminal's compaction window, recording the value it replaces.
+
+    Returns ``on`` (written), ``unchanged`` (already at ``window``) or
+    ``user-edited`` (the value changed since Horizon set it, so nothing is
+    written). Raises when the Claude Code connector is not connected.
+    """
+    check_lean_window(window)
+    state_path = _state_path(path)
+    if not claude_code_connected(path):
+        raise click.ClickException(
+            "Claude Code is not connected through the ContextShrink desktop app. Connect it first."
+        )
+    state = _read_object(state_path, label="Horizon state")
+    _validate_state(state, state_path)
+    payload = _read_settings(path)
+    env = _env_map(payload, path)
+    _check_managed(payload, env, state, path)
+    record = _claude_code_record(state)
+    lean = _lean_record(state, state_path)
+    if lean is not None:
+        if env.get(LEAN_WINDOW_KEY) != str(lean["window"]):
+            return "user-edited"
+        if lean["window"] == window:
+            return "unchanged"
+        lean["window"] = window
+    else:
+        if LEAN_WINDOW_KEY in env and not isinstance(env[LEAN_WINDOW_KEY], str):
+            raise click.ClickException(
+                f"Claude settings {path} has a non-string {LEAN_WINDOW_KEY}; refusing to "
+                "overwrite it."
+            )
+        previous = {"present": LEAN_WINDOW_KEY in env, "value": env.get(LEAN_WINDOW_KEY)}
+        lean = {"window": window, "previous": previous}
+        record["lean"] = lean
+    env[LEAN_WINDOW_KEY] = str(window)
+    payload["env"] = env
+    state[_CLAUDE_CODE_KEY] = record
+    _write_pair(path, payload, state_path, state)
+    return "on"
+
+
+def lean_off(path: Path) -> str:
+    """Restore the terminal's compaction window if Horizon set it.
+
+    Returns ``off`` (restored or removed), ``user-edited`` (the value changed since
+    Horizon set it, so it is left as the user has it) or ``unchanged`` (lean was
+    not on). Either way the lean record is dropped.
+    """
+    state_path = _state_path(path)
+    if not state_path.exists():
+        return "unchanged"
+    state = _read_object(state_path, label="Horizon state")
+    _validate_state(state, state_path)
+    lean = _lean_record(state, state_path)
+    if lean is None:
+        return "unchanged"
+    payload = _read_settings(path)
+    _check_managed(payload, _env_map(payload, path), state, path)
+    restored = _restore_lean_env(payload, lean, path)
+    record = _claude_code_record(state)
+    record.pop("lean", None)
+    state[_CLAUDE_CODE_KEY] = record
+    _write_pair(path, payload, state_path, state)
+    return "off" if restored else "user-edited"

@@ -10,7 +10,10 @@
 //! - when it is enabled and `GET /__cs/health` on `127.0.0.1:<health_port>`
 //!   answers `200` with a JSON body whose `ok` is `true`, all within a 150 ms
 //!   budget, it adds `ANTHROPIC_BASE_URL` to the child's environment. The only
-//!   other key allowed is `ENABLE_TOOL_SEARCH`, set to `"true"` or `"false"`;
+//!   other keys allowed are `ENABLE_TOOL_SEARCH`, set to `"true"` or `"false"`,
+//!   and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (keep-sessions-lean), set to a
+//!   digits-only token count from 100000 to 1000000 with no leading zero. Any
+//!   other value of either key is ignored;
 //! - runs `claude.cs-real.exe` from its own folder with identical arguments,
 //!   inherited stdio and the same working directory, waits, and exits with the
 //!   child's exit code;
@@ -36,6 +39,9 @@ const HEALTH_PATH: &str = "/__cs/health";
 const HEALTH_CAP_BYTES: usize = 8 * 1024;
 const BASE_URL_KEY: &str = "ANTHROPIC_BASE_URL";
 const TOOL_SEARCH_KEY: &str = "ENABLE_TOOL_SEARCH";
+const LEAN_WINDOW_KEY: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+const LEAN_WINDOW_MIN: u64 = 100_000;
+const LEAN_WINDOW_MAX: u64 = 1_000_000;
 const DEBUG_ENV: &str = "CONTEXTSHRINK_LAUNCHER_DEBUG";
 
 fn main() {
@@ -133,15 +139,38 @@ fn routing_environment_checked() -> Option<Vec<(String, String)>> {
 
     let mut overrides = Vec::new();
     if let Some(env) = object.get("env").and_then(|value| value.as_object()) {
-        // Allow-list: ENABLE_TOOL_SEARCH to "true" or "false", nothing else.
+        // Allow-list: ENABLE_TOOL_SEARCH to "true" or "false", and the lean window
+        // when it is a valid token count. Nothing else.
         if let Some(text) = env.get(TOOL_SEARCH_KEY).and_then(|value| value.as_str()) {
             if text == "true" || text == "false" {
                 overrides.push((TOOL_SEARCH_KEY.to_string(), text.to_string()));
             }
         }
+        if let Some(text) = env.get(LEAN_WINDOW_KEY).and_then(|value| value.as_str()) {
+            if lean_window_ok(text) {
+                overrides.push((LEAN_WINDOW_KEY.to_string(), text.to_string()));
+            }
+        }
     }
     overrides.push((BASE_URL_KEY.to_string(), base_url.to_string()));
     Some(overrides)
+}
+
+/// True for a compaction window written as ASCII digits with no leading zero,
+/// whose value is in `LEAN_WINDOW_MIN..=LEAN_WINDOW_MAX`. Rejects signs,
+/// spaces, decimals and anything that is not a plain token count.
+fn lean_window_ok(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() || bytes.len() > 7 || bytes[0] == b'0' {
+        return false;
+    }
+    if !bytes.iter().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    match text.parse::<u64>() {
+        Ok(value) => (LEAN_WINDOW_MIN..=LEAN_WINDOW_MAX).contains(&value),
+        Err(_) => false,
+    }
 }
 
 fn codetab_config_path() -> Option<PathBuf> {

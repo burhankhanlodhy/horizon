@@ -29,7 +29,7 @@ use api::{Api, ApiError, User};
 use client::Client;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, WindowEvent, Wry};
 
@@ -54,7 +54,11 @@ struct TrayItems {
     status: MenuItem<Wry>,
     pause: MenuItem<Wry>,
     resume: MenuItem<Wry>,
+    lean: CheckMenuItem<Wry>,
 }
+
+/// The tray's Keep-sessions-lean check item.
+const LEAN_MENU_LABEL: &str = "Keep sessions lean (compact at 200k)";
 
 /// Shows the savings line and enables Pause or Resume to match the pause flag.
 fn refresh_tray(app: &AppHandle) {
@@ -67,23 +71,92 @@ fn refresh_tray(app: &AppHandle) {
     let _ = items.resume.set_enabled(paused);
 }
 
+/// Reads the lean state through `horizon lean status --json`.
+fn read_lean(client: &Client) -> Result<client::LeanStatus, String> {
+    let raw = client.run_horizon(&client::lean_status_args())?;
+    client::parse_lean_status(&raw)
+}
+
+/// Turns Keep sessions lean on or off through `horizon lean on|off --json`,
+/// then reads back what is now set.
+fn apply_lean(client: &Client, enabled: bool) -> Result<client::LeanStatus, String> {
+    let args = client::lean_args(enabled);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let raw = client.run_horizon(&refs)?;
+    if let Some(message) = client::lean_change_error(&raw) {
+        return Err(message);
+    }
+    read_lean(client)
+}
+
+/// Sets the tray lean item to match a status. A failed read leaves it off and disabled.
+fn show_lean(items: &TrayItems, status: Result<client::LeanStatus, String>) {
+    let (checked, enabled) = match status {
+        Ok(status) => (status.enabled, status.terminal_connected),
+        Err(_) => (false, false),
+    };
+    let _ = items.lean.set_checked(checked);
+    let _ = items.lean.set_enabled(enabled);
+}
+
+/// Re-reads the lean state on a worker thread, so the tray menu never waits on the client.
+fn refresh_lean_tray(app: &AppHandle) {
+    let Some(items) = app.try_state::<TrayItems>() else {
+        return;
+    };
+    let items = items.inner().clone();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let state = handle.state::<AppState>();
+        show_lean(&items, read_lean(&state.client));
+    });
+}
+
+/// Tray click on the lean item. The click has already flipped the check, so its
+/// new state is the target. The switch runs on a worker thread.
+fn toggle_lean_from_tray(app: &AppHandle) {
+    let Some(items) = app.try_state::<TrayItems>() else {
+        return;
+    };
+    let enabled = items.lean.is_checked().unwrap_or(false);
+    let items = items.inner().clone();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let state = handle.state::<AppState>();
+        let _ops = state.ops.lock().unwrap();
+        let status = match apply_lean(&state.client, enabled) {
+            Ok(status) => Ok(status),
+            Err(e) => {
+                eprintln!("keep sessions lean: {e}");
+                read_lean(&state.client)
+            }
+        };
+        show_lean(&items, status);
+    });
+}
+
 /// Tray icon: left-click restores the window. The menu shows the savings line,
-/// Pause and Resume, and can open or quit the app. Quitting leaves the
-/// forwarder and connected tools running, as closing the window does.
+/// Pause and Resume, the Keep-sessions-lean switch, and can open or quit the app.
+/// Quitting leaves the forwarder and connected tools running, as closing the window does.
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", claude_code::status_line(), false, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause ContextShrink", true, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Resume ContextShrink", true, None::<&str>)?;
+    let lean = CheckMenuItem::with_id(app, "lean", LEAN_MENU_LABEL, false, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open ContextShrink", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let sep_a = PredefinedMenuItem::separator(app)?;
     let sep_b = PredefinedMenuItem::separator(app)?;
-    let items: [&dyn IsMenuItem<Wry>; 7] = [&status, &sep_a, &pause, &resume, &sep_b, &open, &quit];
+    let sep_c = PredefinedMenuItem::separator(app)?;
+    let items: [&dyn IsMenuItem<Wry>; 9] = [
+        &status, &sep_a, &pause, &resume, &sep_b, &lean, &sep_c, &open, &quit,
+    ];
     let menu = Menu::with_items(app, &items)?;
     app.manage(TrayItems {
         status: status.clone(),
         pause: pause.clone(),
         resume: resume.clone(),
+        lean: lean.clone(),
     });
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("ContextShrink")
@@ -99,6 +172,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 let _ = claude_code::set_paused(false);
                 refresh_tray(app);
             }
+            "lean" => toggle_lean_from_tray(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -538,13 +612,33 @@ async fn set_editor_connected(
     state.client.editor_status(spec)
 }
 
+/// Keep sessions lean: the terminal and Code-tab state.
+#[tauri::command]
+async fn lean_status(state: State<'_, AppState>) -> Result<client::LeanStatus, String> {
+    read_lean(&state.client)
+}
+
+/// Keep sessions lean: turns the switch on (200k) or off, and returns the new state.
+#[tauri::command]
+async fn set_lean(state: State<'_, AppState>, enabled: bool) -> Result<client::LeanStatus, String> {
+    let _ops = state.ops.lock().unwrap();
+    apply_lean(&state.client, enabled)
+}
+
 /// Connects or disconnects Claude Code (terminal, Code tab, status line,
-/// plugin and the watcher) as one action.
+/// plugin and the watcher) as one action. The tray's lean item follows.
 #[tauri::command]
 async fn set_claude_code_connected(
+    app: AppHandle,
     state: State<'_, AppState>,
     connected: bool,
 ) -> Result<ClaudeCodeResult, String> {
+    let result = change_claude_code(&state, connected);
+    refresh_lean_tray(&app);
+    result
+}
+
+fn change_claude_code(state: &AppState, connected: bool) -> Result<ClaudeCodeResult, String> {
     let _ops = state.ops.lock().unwrap();
     if connected {
         let targets = connect_claude_code(&state)?;
@@ -632,6 +726,7 @@ pub fn run() {
             if let Err(e) = build_tray(app) {
                 eprintln!("tray icon unavailable: {e}");
             }
+            refresh_lean_tray(app.handle());
             // Started at sign-in while a tool is connected: stay in the tray.
             if !std::env::args().any(|a| a == "--background") {
                 show_main_window(app.handle());
@@ -667,7 +762,9 @@ pub fn run() {
             launch_tool,
             editor_status,
             set_editor_connected,
-            set_claude_code_connected
+            set_claude_code_connected,
+            lean_status,
+            set_lean
         ])
         .build(tauri::generate_context!())
         .expect("error while building the ContextShrink app");

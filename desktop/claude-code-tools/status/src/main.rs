@@ -324,6 +324,46 @@ fn render_counters_line(entry: &Value) -> String {
     )
 }
 
+/// The compaction window "Keep sessions lean" set for this Claude Code process,
+/// from the environment it was started with. `None` when lean is off or the
+/// value is not one the launcher would pass through.
+fn lean_window() -> Option<u64> {
+    lean_window_from(std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW").ok().as_deref())
+}
+
+/// Digits only, no leading zero, 100000 to 1000000. Same rule as the launcher.
+fn lean_window_from(text: Option<&str>) -> Option<u64> {
+    let text = text?;
+    if text.is_empty() || text.len() > 7 || text.starts_with('0') {
+        return None;
+    }
+    if !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let value: u64 = text.parse().ok()?;
+    (100_000..=1_000_000).contains(&value).then_some(value)
+}
+
+/// `200000` as `200,000`.
+fn with_commas(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn lean_line(window: Option<u64>) -> String {
+    match window {
+        Some(window) => format!("Lean sessions: on (compact at {} tokens)", with_commas(window)),
+        None => "Lean sessions: off".to_string(),
+    }
+}
+
 fn render_detail(session: Option<&str>) -> String {
     let dir = match claude_code_dir() {
         Some(dir) => dir,
@@ -364,6 +404,8 @@ fn render_detail(session: Option<&str>) -> String {
 
     let mut out = String::new();
     out.push_str(&format!("ContextShrink: {health}\n"));
+    out.push_str(&lean_line(lean_window()));
+    out.push('\n');
     match &chosen {
         Some(id) => out.push_str(&format!("Session: {id}\n")),
         None => out.push_str("Session: none yet\n"),
@@ -607,5 +649,27 @@ mod tests {
             parse_session_id(br#"{"session_id":"s-9","reason":"clear"}"#).as_deref(),
             Some("s-9")
         );
+    }
+
+    #[test]
+    fn lean_window_accepts_only_the_launcher_form_and_range() {
+        assert_eq!(lean_window_from(Some("200000")), Some(200_000));
+        assert_eq!(lean_window_from(Some("100000")), Some(100_000));
+        assert_eq!(lean_window_from(Some("1000000")), Some(1_000_000));
+        for bad in ["", "200k", "99999", "1000001", "0200000", " 200000", "-200000", "2e5"] {
+            assert_eq!(lean_window_from(Some(bad)), None, "{bad:?}");
+        }
+        assert_eq!(lean_window_from(None), None);
+    }
+
+    #[test]
+    fn lean_line_says_on_with_the_window_or_off() {
+        assert_eq!(
+            lean_line(Some(200_000)),
+            "Lean sessions: on (compact at 200,000 tokens)"
+        );
+        assert_eq!(lean_line(None), "Lean sessions: off");
+        assert_eq!(with_commas(100_000), "100,000");
+        assert_eq!(with_commas(999), "999");
     }
 }
