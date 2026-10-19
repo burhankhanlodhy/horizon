@@ -1,6 +1,6 @@
 [package]
 name = "contextshrink-desktop"
-version = "0.7.3"
+version = "0.7.4"
 description = "ContextShrink desktop launcher: run coding tools through the ContextShrink proxy"
 authors = ["ContextShrink"]
 edition = "2021"
@@ -32,6 +32,8 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# The HKCU Run entry, written through the registry API rather than by running reg.exe.
+windows-registry = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

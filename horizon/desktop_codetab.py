@@ -59,6 +59,9 @@ LOCK_NAME = "codetab.lock"
 DEFAULT_HEALTH_PORT = 18788
 DEFAULT_BASE_URL = f"http://127.0.0.1:{DEFAULT_HEALTH_PORT}"
 WATCH_INTERVAL_SECONDS = 10.0
+#: The watcher re-verifies everything at least this often, even when nothing
+#: it looks at has changed size or modification time.
+WATCH_FULL_PASS_SECONDS = 6 * 3600.0
 LOCK_TIMEOUT_SECONDS = 5.0
 STALE_LOCK_SECONDS = 120.0
 STATE_VERSION = 1
@@ -269,7 +272,18 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(payload, indent=2) + "\n")
+    """Write ``payload`` unless the file already holds exactly that text.
+
+    The watcher calls this on every pass, so a pass with nothing new writes
+    nothing (security tools watch for repeated file churn).
+    """
+    text = json.dumps(payload, indent=2) + "\n"
+    try:
+        if path.is_file() and path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    _write_text_atomic(path, text)
 
 
 def _lock_is_stale(lock: Path) -> bool:
@@ -1039,8 +1053,87 @@ def status(
     )
 
 
+Fingerprint = tuple[tuple[str, int | None, int | None], ...]
+
+
+def pass_fingerprint(
+    *,
+    roots: list[Path] | None = None,
+    data: Path | None = None,
+    launcher: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Fingerprint:
+    """A cheap snapshot of everything an install pass reads: the Claude Code
+    folders and, in each, the size and modification time of ``claude.exe``, the
+    stashed real binary and ``.payload``, plus the launcher and our own files.
+
+    Only directory listings and ``stat`` calls: no file is opened or hashed.
+    """
+    roots = discover_roots(environ) if roots is None else list(roots)
+    data_folder = data if data is not None else claude_code_dir(environ)
+    launcher_path = launcher if launcher is not None else default_launcher_path(environ)
+    folders, skipped = scan_folders(roots)
+    paths = [folder / name for folder in folders for name in (REAL_NAME, STASH_NAME, PAYLOAD_NAME)]
+    paths += [launcher_path, data_folder / STATE_NAME, data_folder / CONFIG_NAME]
+    entries: list[tuple[str, int | None, int | None]] = []
+    for path in paths:
+        try:
+            info = path.stat()
+        except OSError:
+            entries.append((str(path), None, None))
+        else:
+            entries.append((str(path), info.st_size, info.st_mtime_ns))
+    entries += [(f"skipped:{report.folder}", None, None) for report in skipped]
+    return tuple(entries)
+
+
+class QuietInstaller:
+    """``install`` for the watcher: a pass runs only when something it reads changed.
+
+    Without this the watcher hashed every ``claude.exe`` (hundreds of MB each)
+    and took the lock every few seconds. Now an idle pass is a directory listing
+    and a few ``stat`` calls. A pass that hit a locked or failing folder is
+    retried on the next tick, and everything is re-verified at least every
+    ``full_pass_seconds``. Returns ``None`` for a skipped pass.
+    """
+
+    def __init__(
+        self,
+        *,
+        full_pass_seconds: float = WATCH_FULL_PASS_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        **install_kwargs: Any,
+    ) -> None:
+        self._kwargs = install_kwargs
+        self._full_pass_seconds = full_pass_seconds
+        self._clock = clock
+        self._last: Fingerprint | None = None
+        self._last_full = 0.0
+
+    def _fingerprint(self) -> Fingerprint:
+        return pass_fingerprint(
+            roots=self._kwargs.get("roots"),
+            data=self._kwargs.get("data"),
+            launcher=self._kwargs.get("launcher"),
+            environ=self._kwargs.get("environ"),
+        )
+
+    def __call__(self) -> InstallResult | None:
+        now = self._clock()
+        due = self._last is None or now - self._last_full >= self._full_pass_seconds
+        if not due and self._fingerprint() == self._last:
+            return None
+        self._last = None  # stays unset unless this pass completes cleanly
+        result = install(**self._kwargs)
+        if not any(report.status in ("locked", "error") for report in result.folders):
+            # Taken after the pass, so the pass's own changes do not trigger another.
+            self._last = self._fingerprint()
+            self._last_full = now
+        return result
+
+
 def watch(
-    run: Callable[[], InstallResult],
+    run: Callable[[], InstallResult | None],
     *,
     interval: float = WATCH_INTERVAL_SECONDS,
     iterations: int | None = None,
@@ -1062,7 +1155,7 @@ def watch(
             if on_error is not None:
                 on_error(exc)
         else:
-            if on_result is not None:
+            if on_result is not None and result is not None:
                 on_result(result)
         count += 1
         if iterations is None or count < iterations:

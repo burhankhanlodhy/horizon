@@ -123,7 +123,7 @@ def codetab_install(
 
         click.echo(f"Watching every {interval:g} s. Press Ctrl+C to stop.")
         dc.watch(
-            lambda: dc.install(**kwargs),
+            dc.QuietInstaller(**kwargs),
             interval=interval,
             on_result=show,
             on_error=show_error,

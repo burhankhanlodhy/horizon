@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "contextshrink-desktop"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "dbus-secret-service",
  "dunce",
@@ -574,6 +574,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "which",
+ "windows-registry",
 ]
 
 [[package]]

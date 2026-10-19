@@ -17,7 +17,8 @@ pub const ID: &str = "claude-code";
 const PLUGIN_KEY: &str = "contextshrink@contextshrink";
 /// The status line command the Connect step installs (`contextshrink-status.exe`).
 const STATUS_LINE_MARK: &str = "contextshrink-status";
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+/// Under HKEY_CURRENT_USER.
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "ContextShrink";
 
 /// The helper executables the Connect step and the status line run from here.
@@ -291,29 +292,53 @@ pub fn current_view() -> SettingsView {
 
 /// Starts the app in the tray at sign-in while any tool is connected
 /// (`--background`), and removes that entry otherwise. Windows only.
+///
+/// Written through the registry API, and only when the value differs: the app
+/// calls this on every start and connect, and security tools flag programs that
+/// keep rewriting their Run entry (or run `reg.exe` to do it).
 #[cfg(windows)]
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
-    if enabled {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let command = format!("\"{}\" --background", exe.display());
-        run_reg(&["add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ", "/d", &command, "/f"])
-    } else {
-        // A missing entry is the state we want, so the result is ignored.
-        let _ = run_reg(&["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
-        Ok(())
-    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let wanted = enabled.then(|| autostart_command(&exe));
+    sync_run_value(windows_registry::CURRENT_USER, RUN_KEY, RUN_VALUE, wanted.as_deref())
 }
 
+/// The Run entry's command line for the app at `exe`.
 #[cfg(windows)]
-fn run_reg(args: &[&str]) -> Result<(), String> {
-    let out = crate::process::hidden(std::process::Command::new("reg"))
-        .args(args)
-        .output()
-        .map_err(|e| format!("Could not update Windows startup: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err("Could not update Windows startup.".into())
+fn autostart_command(exe: &Path) -> String {
+    format!("\"{}\" --background", exe.display())
+}
+
+/// Makes `name` under `parent\path` hold `wanted` (or be absent for `None`),
+/// writing only when it does not already.
+#[cfg(windows)]
+fn sync_run_value(
+    parent: &windows_registry::Key,
+    path: &str,
+    name: &str,
+    wanted: Option<&str>,
+) -> Result<(), String> {
+    let failed = |e: windows_registry::Result<()>| {
+        e.map_err(|e| format!("Could not update Windows startup: {e}"))
+    };
+    match wanted {
+        Some(value) => {
+            let current = parent.open(path).and_then(|key| key.get_string(name)).ok();
+            if current.as_deref() == Some(value) {
+                return Ok(());
+            }
+            failed(parent.create(path).and_then(|key| key.set_string(name, value)))
+        }
+        None => {
+            // A missing key or value is the state we want.
+            let Ok(key) = parent.options().read().write().open(path) else {
+                return Ok(());
+            };
+            if key.get_value(name).is_err() {
+                return Ok(());
+            }
+            failed(key.remove_value(name))
+        }
     }
 }
 
@@ -413,5 +438,39 @@ mod tests {
     fn status_line_has_a_placeholder_without_data() {
         // Only checks the fallback text shape; the live file is not read here.
         assert!(!status_line().is_empty());
+    }
+
+    /// A throwaway key under HKCU\Software, removed afterwards; the real Run key
+    /// is never touched.
+    #[cfg(windows)]
+    #[test]
+    fn run_value_is_written_only_when_it_differs_and_removed_cleanly() {
+        let hkcu = windows_registry::CURRENT_USER;
+        let path = format!(r"Software\ContextShrinkTest-{}", std::process::id());
+        let value = |hkcu: &windows_registry::Key| {
+            hkcu.open(&path).and_then(|k| k.get_string("App")).ok()
+        };
+
+        sync_run_value(hkcu, &path, "App", None).unwrap(); // absent key: nothing to do
+        sync_run_value(hkcu, &path, "App", Some("a --background")).unwrap();
+        assert_eq!(value(hkcu).as_deref(), Some("a --background"));
+        sync_run_value(hkcu, &path, "App", Some("a --background")).unwrap(); // unchanged
+        sync_run_value(hkcu, &path, "App", Some("b --background")).unwrap();
+        assert_eq!(value(hkcu).as_deref(), Some("b --background"));
+        sync_run_value(hkcu, &path, "App", None).unwrap();
+        assert_eq!(value(hkcu), None);
+        sync_run_value(hkcu, &path, "App", None).unwrap(); // absent value: still fine
+
+        hkcu.remove_tree(&path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn autostart_command_quotes_the_exe_and_starts_in_the_tray() {
+        let exe = Path::new(r"C:\Program Files\ContextShrink\contextshrink-desktop.exe");
+        assert_eq!(
+            autostart_command(exe),
+            r#""C:\Program Files\ContextShrink\contextshrink-desktop.exe" --background"#
+        );
     }
 }

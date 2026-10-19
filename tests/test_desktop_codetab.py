@@ -311,6 +311,96 @@ def test_watch_patches_folders_that_appear_later(layout: Layout) -> None:
     assert (layout.root / "1.1.0" / "bbb" / "claude.exe").read_bytes() == LAUNCHER_BYTES
 
 
+def _quiet(layout: Layout, clock=None, **kwargs) -> dc.QuietInstaller:
+    kwargs.setdefault("full_pass_seconds", 3600.0)
+    if clock is not None:
+        kwargs["clock"] = clock
+    return dc.QuietInstaller(
+        roots=[layout.root],
+        data=layout.data,
+        launcher=layout.launcher,
+        environ=layout.environ,
+        **kwargs,
+    )
+
+
+def test_quiet_watcher_skips_idle_passes_without_hashing_or_writing(
+    layout: Layout, monkeypatch
+) -> None:
+    """An idle watch pass reads no file contents and writes nothing (security tools
+    flagged the old watcher, which hashed claude.exe every 10 seconds)."""
+    layout.folder()
+    quiet = _quiet(layout)
+    assert _states(quiet()) == [("patched", "real")]
+
+    hashed: list[Path] = []
+    real_sha256_file = dc.sha256_file
+    monkeypatch.setattr(dc, "sha256_file", lambda p: hashed.append(Path(p)) or real_sha256_file(p))
+    written: list[Path] = []
+    real_write = dc._write_text_atomic
+    monkeypatch.setattr(
+        dc, "_write_text_atomic", lambda p, t: written.append(p) or real_write(p, t)
+    )
+    for _ in range(3):
+        assert quiet() is None
+    assert hashed == [] and written == []
+    assert not (layout.data / dc.LOCK_NAME).exists()
+
+
+def test_quiet_watcher_runs_a_pass_when_desktop_adds_a_version(layout: Layout) -> None:
+    layout.folder("1.0.0", "aaa")
+    quiet = _quiet(layout)
+    quiet()
+    assert quiet() is None
+    layout.folder("1.1.0", "bbb")  # Desktop downloads a new version
+    assert _states(quiet()) == [("up-to-date", "patched"), ("patched", "real")]
+    assert quiet() is None
+
+
+def test_quiet_watcher_retries_after_a_locked_folder(layout: Layout, monkeypatch) -> None:
+    folder = layout.folder()
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        if Path(src) == folder / "claude.exe" and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(dc.os, "replace", flaky_replace)
+    quiet = _quiet(layout)
+    assert _states(quiet()) == [("skipped", "locked")]
+    # Nothing on disk changed, but the locked pass is retried rather than skipped.
+    assert _states(quiet()) == [("patched", "real")]
+    assert quiet() is None
+
+
+def test_quiet_watcher_reverifies_after_the_full_pass_interval(layout: Layout) -> None:
+    layout.folder()
+    now = {"t": 0.0}
+    quiet = _quiet(layout, clock=lambda: now["t"], full_pass_seconds=100.0)
+    quiet()
+    now["t"] = 99.0
+    assert quiet() is None
+    now["t"] = 100.0
+    assert _states(quiet()) == [("up-to-date", "patched")]
+
+
+def test_unchanged_config_and_state_are_not_rewritten(layout: Layout) -> None:
+    layout.folder()
+    layout.install()
+    config = layout.data / dc.CONFIG_NAME
+    state = layout.data / dc.STATE_NAME
+    before = (config.stat().st_mtime_ns, state.stat().st_mtime_ns)
+    old = 1_000_000_000_000_000_000  # 2001-09-09, a whole second on every filesystem
+    os.utime(config, ns=(old, old))
+    os.utime(state, ns=(old, old))
+    layout.install()
+    assert (config.stat().st_mtime_ns, state.stat().st_mtime_ns) == (old, old)
+    assert before != (old, old)
+
+
 # ---------------------------------------------------------------------------
 # Status, config, roots
 # ---------------------------------------------------------------------------

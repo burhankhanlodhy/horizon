@@ -305,7 +305,15 @@ fn editor(id: &str) -> Result<&'static client::Tool, String> {
 /// Connects Claude Code: the terminal settings and forwarder, the Code-tab
 /// patch, and the watcher that keeps the patch current. Each target's result is
 /// returned, so a partial success stays visible.
-fn connect_claude_code(state: &AppState) -> Result<Vec<claude_code::Target>, String> {
+///
+/// `repatch` runs the Code-tab install now. A reconnect (every sign-in and app
+/// start) passes `false` when the Code tab is already patched: the watcher's
+/// first pass verifies it anyway, and running the install again on each start
+/// only touched Desktop's folder for nothing.
+fn connect_claude_code(
+    state: &AppState,
+    repatch: bool,
+) -> Result<Vec<claude_code::Target>, String> {
     let spec = editor(claude_code::ID)?;
     // The helpers must be in their shared places before the settings and the
     // Code-tab patch refer to them.
@@ -316,11 +324,12 @@ fn connect_claude_code(state: &AppState) -> Result<Vec<claude_code::Target>, Str
     ensure_forwarder(state, spec.port, spec.upstream)?;
     state.client.connect_editor(spec)?;
     state.client.set_wanted_editor(spec.id, true);
-    let code_tab = match state
-        .client
-        .run_horizon(&client::codetab_install_args(false))
-        .and_then(|_| state.client.start_codetab_watch())
-    {
+    let install = if repatch || !claude_code::code_tab_state_present() {
+        state.client.run_horizon(&client::codetab_install_args(false)).map(|_| ())
+    } else {
+        Ok(())
+    };
+    let code_tab = match install.and_then(|_| state.client.start_codetab_watch()) {
         Err(e) => claude_code::CodeTab::Failed(e),
         Ok(()) if claude_code::code_tab_state_present() => claude_code::CodeTab::Patched,
         Ok(()) => claude_code::CodeTab::Pending,
@@ -370,7 +379,7 @@ fn after_disconnect(state: &AppState) {
 fn reconnect_editors(state: &AppState) {
     for id in state.client.wanted_editors() {
         if id == claude_code::ID {
-            let _ = connect_claude_code(state);
+            let _ = connect_claude_code(state, false);
             continue;
         }
         if let Ok(spec) = editor(&id) {
@@ -641,7 +650,7 @@ async fn set_claude_code_connected(
 fn change_claude_code(state: &AppState, connected: bool) -> Result<ClaudeCodeResult, String> {
     let _ops = state.ops.lock().unwrap();
     if connected {
-        let targets = connect_claude_code(&state)?;
+        let targets = connect_claude_code(&state, true)?;
         return Ok(ClaudeCodeResult {
             status: "connected".into(),
             targets,
