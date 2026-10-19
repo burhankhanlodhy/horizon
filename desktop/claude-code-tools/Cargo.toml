@@ -1,0 +1,17 @@
+# Standalone workspace for the Claude Code Code-tab launcher and status helper.
+# Deliberately NOT a member of the root Cargo.toml workspace.
+[workspace]
+resolver = "2"
+members = ["launcher", "status"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

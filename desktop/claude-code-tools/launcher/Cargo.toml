@@ -1,0 +1,19 @@
+[package]
+name = "claude-code-launcher"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Trampoline for Claude Desktop's Code-tab claude.exe; routes it through ContextShrink when the forwarder is up"
+
+[[bin]]
+name = "claude-code-launcher"
+path = "src/main.rs"
+
+[[bin]]
+# Test-only stand-in for the real Claude Code binary. It is built alongside the
+# launcher so the integration tests can use CARGO_BIN_EXE_cs-test-child.
+name = "cs-test-child"
+path = "src/bin/cs_test_child.rs"
+
+[dependencies]
+serde_json = "1"

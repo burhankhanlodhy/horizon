@@ -1,0 +1,11 @@
+{
+  "name": "contextshrink",
+  "displayName": "ContextShrink",
+  "version": "0.1.0",
+  "description": "ContextShrink savings for Claude Code: a savings line above the prompt, and /savings, /pause, /resume and /report commands",
+  "author": {
+    "name": "ContextShrink"
+  },
+  "homepage": "https://contextshrink.com",
+  "license": "Proprietary"
+}
