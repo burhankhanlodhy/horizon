@@ -7,6 +7,7 @@ Binds loopback only, reads the per-user credential from the OS key store
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import click
 
@@ -46,12 +47,40 @@ def forward() -> None:
         "is not configured for (e.g. https://api.kimi.com/coding/v1)."
     ),
 )
-def forward_start(remote_url: str, port: int, host: str, upstream: str | None) -> None:
+@click.option(
+    "--state-dir",
+    "state_dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Where Claude Code stats are written (default: %LOCALAPPDATA%\\ContextShrink).",
+)
+@click.option(
+    "--pause-file",
+    "pause_file",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="While this file exists, model calls bypass Horizon (default: <state>/claude-code/paused).",
+)
+def forward_start(
+    remote_url: str,
+    port: int,
+    host: str,
+    upstream: str | None,
+    state_dir: Path | None,
+    pause_file: Path | None,
+) -> None:
     """Start the loopback relay to REMOTE_URL."""
     from horizon.forwarder import run_forwarder
 
     try:
-        run_forwarder(remote_url=remote_url, port=port, host=host, upstream=upstream)
+        run_forwarder(
+            remote_url=remote_url,
+            port=port,
+            host=host,
+            upstream=upstream,
+            state_dir=state_dir,
+            pause_file=pause_file,
+        )
     except KeyboardInterrupt:
         pass
     except Exception as exc:  # noqa: BLE001 — CLI boundary

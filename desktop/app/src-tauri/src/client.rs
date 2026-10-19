@@ -4,19 +4,21 @@
 //! the key to every request and relays it to the hosted proxy, and wraps the
 //! user's own tools so they talk to that forwarder.
 
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use crate::{claude_code, process};
+
 #[cfg(windows)]
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
@@ -291,14 +293,32 @@ pub const TOOLS: &[Tool] = &[
         settings: &[],
     },
     Tool {
+        id: claude_code::ID,
+        name: "Claude Code (terminal and Desktop Code tab)",
+        description: "Routes Claude Code in your terminal and Claude Desktop's Code tab through ContextShrink",
+        commands: &[],
+        install_url: "https://docs.anthropic.com/en/docs/claude-code/setup",
+        // Connect sets the user-level settings (terminal, status line, plugin),
+        // then patches Desktop's Claude Code binary (`horizon codetab`). Both
+        // are reversed on disconnect.
+        wrap: &[],
+        unwrap: &[],
+        port: FORWARDER_PORT,
+        upstream: None,
+        kind: Kind::Connect,
+        steps: "New terminal sessions and new Code tab sessions go through ContextShrink. Your Claude sign-in stays as it is.",
+        settings: &[],
+    },
+    Tool {
         id: "vscode-claude",
         name: "Claude Code for VS Code",
         description: "Anthropic's VS Code extension (also any Claude Code you start yourself)",
         commands: &[],
         install_url: "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code",
         // Sets ANTHROPIC_BASE_URL in the user-level ~/.claude/settings.json
-        // (key by key, previous values saved). The app restores it on quit and
-        // sign-out and re-applies it at the next sign-in.
+        // (key by key, previous values saved). The app restores it on sign-out
+        // and on update, not on quit: quitting leaves it in place, so the tool
+        // keeps working. It re-applies it at the next sign-in.
         wrap: &[],
         unwrap: &[],
         port: FORWARDER_PORT,
@@ -416,22 +436,264 @@ pub fn tools() -> Vec<ToolInfo> {
         .collect()
 }
 
+/// Whether Code-tab installs turn on tool search (`--tool-search`). Off until a
+/// live check of the hosted proxy's tool-search betas is recorded; flip this
+/// one constant to enable it.
+pub const CODE_TAB_TOOL_SEARCH: bool = false;
+
+/// Arguments for `horizon codetab install`, with `--watch` when `watch` is set.
+pub fn codetab_install_args(watch: bool) -> Vec<&'static str> {
+    let mut args = vec!["codetab", "install"];
+    if CODE_TAB_TOOL_SEARCH {
+        args.push("--tool-search");
+    }
+    if watch {
+        args.push("--watch");
+    }
+    args
+}
+
+/// Every loopback port a tool uses for its forwarder, once each.
+pub fn forwarder_ports() -> Vec<u16> {
+    let mut ports: Vec<u16> = TOOLS.iter().map(|t| t.port).collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// What a forwarder answers on `GET /__cs/health`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Health {
+    pub ok: bool,
+    pub version: String,
+    pub pid: Option<u32>,
+}
+
+/// Splits a raw HTTP response into its status code and body bytes.
+fn split_response(raw: &[u8]) -> Option<(u16, &[u8], bool)> {
+    let end = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&raw[..end]).ok()?;
+    let mut lines = head.lines();
+    let status: u16 = lines.next()?.split_whitespace().nth(1)?.parse().ok()?;
+    let chunked = lines.any(|l| {
+        let l = l.to_ascii_lowercase();
+        l.starts_with("transfer-encoding:") && l.contains("chunked")
+    });
+    Some((status, &raw[end + 4..], chunked))
+}
+
+/// Decodes a chunked HTTP body; `None` when it is malformed or truncated.
+fn dechunk(mut body: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    loop {
+        let eol = body.windows(2).position(|w| w == b"\r\n")?;
+        let size_text = std::str::from_utf8(&body[..eol]).ok()?;
+        let size = usize::from_str_radix(size_text.split(';').next()?.trim(), 16).ok()?;
+        body = &body[eol + 2..];
+        if size == 0 {
+            return Some(out);
+        }
+        out.extend_from_slice(body.get(..size)?);
+        body = body.get(size + 2..)?;
+    }
+}
+
+/// Parses a raw `/__cs/health` response; anything else is `None`.
+pub fn parse_health(raw: &[u8]) -> Option<Health> {
+    let (status, body, chunked) = split_response(raw)?;
+    if status != 200 {
+        return None;
+    }
+    let body = if chunked { dechunk(body)? } else { body.to_vec() };
+    let value: Value = serde_json::from_slice(&body).ok()?;
+    Some(Health {
+        ok: value["ok"].as_bool()?,
+        version: value["version"].as_str()?.to_string(),
+        pid: value["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
+    })
+}
+
+/// The version string the bundled client reports, e.g. `0.42.0`
+/// (click prints `horizon, version 0.42.0`).
+fn version_from_output(text: &str) -> Option<String> {
+    text.split_whitespace().last().map(str::to_string).filter(|v| !v.is_empty())
+}
+
+/// A process ID saved in a small pid file, if the file holds one.
+fn read_pid(path: &Path) -> Option<u32> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
 pub struct Client {
     exe: PathBuf,
     data_dir: PathBuf,
+    /// The bundled client's version, asked once. A forwarder is only adopted
+    /// when its health answer carries this same version.
+    version: OnceLock<Option<String>>,
 }
 
 impl Client {
     pub fn new(exe: PathBuf, data_dir: PathBuf) -> Self {
-        Client { exe, data_dir }
+        Client { exe, data_dir, version: OnceLock::new() }
     }
 
     fn command(&self) -> Command {
-        #[allow(unused_mut)]
-        let mut cmd = Command::new(&self.exe);
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        cmd
+        process::hidden(Command::new(&self.exe))
+    }
+
+    /// The bundled client's version, or `None` when it cannot be run.
+    pub fn expected_version(&self) -> Option<String> {
+        self.version
+            .get_or_init(|| {
+                let out = self
+                    .command()
+                    .arg("--version")
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output()
+                    .ok()?;
+                if !out.status.success() {
+                    return None;
+                }
+                version_from_output(&String::from_utf8_lossy(&out.stdout))
+            })
+            .clone()
+    }
+
+    /// Asks the forwarder on `port` for its health, or `None` when nothing
+    /// answers. Never relayed: the forwarder answers this route itself.
+    pub fn probe_health(port: u16) -> Option<Health> {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok()?;
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(1500)));
+        let request = format!(
+            "GET /__cs/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).ok()?;
+        let mut raw = Vec::new();
+        // A timeout keeps what arrived, which is the whole answer for a closing server.
+        let _ = stream.read_to_end(&mut raw);
+        parse_health(&raw)
+    }
+
+    /// True when the forwarder on `port` is healthy and runs `version`.
+    pub fn forwarder_healthy(port: u16, version: &str) -> bool {
+        Self::probe_health(port).is_some_and(|h| h.ok && h.version == version)
+    }
+
+    /// Waits up to 12 s for the forwarder on `port` to report `version`.
+    pub fn wait_for_healthy(port: u16, version: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            if Self::forwarder_healthy(port, version) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    /// The process that answers on `port`: its health pid, or the socket owner
+    /// when it does not answer health (an older forwarder, or one that is stuck).
+    pub fn listener_pid(port: u16) -> Option<u32> {
+        if !process::port_open(port) {
+            return None;
+        }
+        Self::probe_health(port)
+            .and_then(|h| h.pid)
+            .or_else(|| process::listener_pid_os(port))
+    }
+
+    /// Stops the ContextShrink forwarder listening on `port`, if any. Something
+    /// else on that port is an error, never a kill.
+    pub fn stop_forwarder_on_port(&self, port: u16) -> Result<(), String> {
+        let Some(pid) = Self::listener_pid(port) else {
+            return Ok(());
+        };
+        // The pid came from a health answer or the socket table. It is stopped
+        // only if it is our own forwarder on this port, not any other program.
+        if !process::is_our_forwarder(pid, port) {
+            return Err(format!(
+                "foreign program on port {port}: it is not ContextShrink's forwarder, so it was left running. Close it and try again."
+            ));
+        }
+        if !process::kill_pid(pid) {
+            return Err(format!("Could not stop the ContextShrink forwarder on port {port}."));
+        }
+        if process::wait_port_free(port, Duration::from_secs(5)) {
+            Ok(())
+        } else {
+            Err(format!("The ContextShrink forwarder on port {port} did not stop."))
+        }
+    }
+
+    /// Runs the bundled client with `args` and returns its stdout. On failure
+    /// the error is the client's last error line, if it printed one.
+    pub fn run_horizon(&self, args: &[&str]) -> Result<String, String> {
+        let out = self
+            .command()
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("Could not start the ContextShrink client: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() {
+            return Ok(stdout);
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .or_else(|| stdout.lines().rev().find(|l| !l.trim().is_empty()))
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches("Error: ")
+            .to_string();
+        Err(if last.is_empty() {
+            format!("horizon {} failed", args.join(" "))
+        } else {
+            last
+        })
+    }
+
+    /// Starts the Code-tab watcher (`horizon codetab install --watch`) unless one
+    /// is already running. It is windowless and outlives the app, like the forwarder.
+    pub fn start_codetab_watch(&self) -> Result<(), String> {
+        let pid_file = self.codetab_watch_pid_file();
+        if read_pid(&pid_file).is_some_and(process::is_our_codetab_watch) {
+            return Ok(());
+        }
+        fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
+        let log = File::create(self.data_dir.join("codetab-watch.log")).ok();
+        let child = process::spawn_detached(|| {
+            let mut cmd = Command::new(&self.exe);
+            cmd.args(codetab_install_args(true)).stdin(Stdio::null());
+            match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
+                Some((out, err)) => cmd.stdout(out).stderr(err),
+                None => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
+            };
+            cmd
+        })
+        .map_err(|e| format!("Could not start the Code tab watcher: {e}"))?;
+        fs::write(&pid_file, child.id().to_string()).map_err(|e| e.to_string())
+        // Dropping the handle does not stop the process.
+    }
+
+    /// Stops the Code-tab watcher this app started, if it is still running.
+    pub fn stop_codetab_watch(&self) {
+        let pid_file = self.codetab_watch_pid_file();
+        if let Some(pid) = read_pid(&pid_file).filter(|p| process::is_our_codetab_watch(*p)) {
+            process::kill_pid(pid);
+        }
+        let _ = fs::remove_file(&pid_file);
+    }
+
+    fn codetab_watch_pid_file(&self) -> PathBuf {
+        self.data_dir.join("codetab-watch.pid")
     }
 
     pub fn available(&self) -> bool {
@@ -489,13 +751,15 @@ impl Client {
             .status();
     }
 
+    /// Starts the forwarder as a background process that outlives the app. The
+    /// main forwarder also gets the tray's pause flag file.
     pub fn start_forwarder(
         &self,
         remote: &str,
         port: u16,
         upstream: Option<&str>,
     ) -> Result<Child, String> {
-        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
         // One log for both streams: uvicorn writes request lines to stdout and
         // startup/errors to stderr.
         let log_name = if port == FORWARDER_PORT {
@@ -503,36 +767,28 @@ impl Client {
         } else {
             format!("forwarder-{port}.log")
         };
-        let log = std::fs::File::create(self.data_dir.join(log_name)).ok();
-        let mut cmd = self.command();
-        cmd.args(["forward", "start", "--remote", remote, "--port"])
-            .arg(port.to_string())
-            .stdin(Stdio::null());
-        if let Some(upstream) = upstream {
-            cmd.args(["--upstream", upstream]);
-        }
-        match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
-            Some((out, err)) => cmd.stdout(out).stderr(err),
-            None => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
-        };
-        cmd.spawn()
-            .map_err(|e| format!("Could not start the ContextShrink forwarder: {e}"))
-    }
-
-    pub fn wait_for_forwarder(port: u16) -> bool {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        (0..40).any(|_| {
-            if TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok() {
-                return true;
+        let log = File::create(self.data_dir.join(log_name)).ok();
+        let pause_file = (port == FORWARDER_PORT).then(claude_code::paused_file).flatten();
+        process::spawn_detached(|| {
+            let mut cmd = Command::new(&self.exe);
+            cmd.args(["forward", "start", "--remote", remote, "--port"])
+                .arg(port.to_string())
+                // Loopback only: the forwarder must never be reachable from the network.
+                .args(["--host", "127.0.0.1"])
+                .stdin(Stdio::null());
+            if let Some(upstream) = upstream {
+                cmd.args(["--upstream", upstream]);
             }
-            std::thread::sleep(Duration::from_millis(250));
-            false
+            if let Some(pause) = &pause_file {
+                cmd.arg("--pause-file").arg(pause);
+            }
+            match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
+                Some((out, err)) => cmd.stdout(out).stderr(err),
+                None => cmd.stdout(Stdio::null()).stderr(Stdio::null()),
+            };
+            cmd
         })
-    }
-
-    pub fn forwarder_listening(port: u16) -> bool {
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+        .map_err(|e| format!("Could not start the ContextShrink forwarder: {e}"))
     }
 
     /// Runs `horizon desktop <action> <editor> --port <port>`; returns stdout.
@@ -706,5 +962,93 @@ mod tests {
         let aider = TOOLS.iter().find(|t| t.id == "aider").unwrap();
         let script = unix_launch_script(aider, "'h'", Path::new("/p"), "/usr/bin");
         assert!(!script.contains("unwrap"));
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    const BODY: &str = r#"{"ok":true,"version":"0.42.0","pid":4242,"port":18788,"remote":"https://proxy.contextshrink.com","started_at":"2026-10-18T09:00:00Z"}"#;
+
+    fn ok_response(body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn parses_a_health_answer() {
+        let h = parse_health(&ok_response(BODY)).expect("health");
+        assert_eq!(h, Health { ok: true, version: "0.42.0".into(), pid: Some(4242) });
+    }
+
+    #[test]
+    fn parses_a_chunked_health_answer() {
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{BODY}\r\n0\r\n\r\n",
+            BODY.len()
+        );
+        assert_eq!(parse_health(raw.as_bytes()).map(|h| h.version), Some("0.42.0".into()));
+    }
+
+    #[test]
+    fn an_old_forwarder_or_a_relayed_error_is_not_healthy() {
+        // An older forwarder relays /__cs/health upstream, so it does not answer 200 JSON.
+        assert!(parse_health(b"HTTP/1.1 404 Not Found\r\ncontent-length: 2\r\n\r\nno").is_none());
+        assert!(parse_health(b"HTTP/1.1 200 OK\r\n\r\n<html>proxy</html>").is_none());
+        assert!(parse_health(b"").is_none());
+    }
+
+    #[test]
+    fn version_comes_from_the_last_word_of_the_client_banner() {
+        assert_eq!(version_from_output("horizon, version 0.42.0\n").as_deref(), Some("0.42.0"));
+        assert_eq!(version_from_output("   \n"), None);
+    }
+
+    #[test]
+    fn dechunk_joins_chunks_and_rejects_truncation() {
+        assert_eq!(dechunk(b"3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"), Some(b"abcde".to_vec()));
+        assert_eq!(dechunk(b"5\r\nab\r\n"), None);
+    }
+
+    /// Serves one health answer with `version` on a free loopback port.
+    fn serve_health(version: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let body = BODY.replace("0.42.0", version);
+                let _ = stream.write_all(&ok_response(&body));
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn a_forwarder_is_adopted_only_when_its_version_matches() {
+        let port = serve_health("0.41.0");
+        assert!(!Client::forwarder_healthy(port, "0.42.0"), "a mismatched version must not be adopted");
+        let port = serve_health("0.42.0");
+        assert!(Client::forwarder_healthy(port, "0.42.0"));
+    }
+}
+
+#[cfg(test)]
+mod codetab_args_tests {
+    use super::*;
+
+    /// Pins the install arguments while tool search is off. Flipping
+    /// `CODE_TAB_TOOL_SEARCH` must come with a recorded live check and an update here.
+    #[test]
+    fn tool_search_stays_off_until_recorded() {
+        assert!(!CODE_TAB_TOOL_SEARCH);
+        assert_eq!(codetab_install_args(false), vec!["codetab", "install"]);
+        assert_eq!(codetab_install_args(true), vec!["codetab", "install", "--watch"]);
     }
 }

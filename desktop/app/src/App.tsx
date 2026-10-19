@@ -36,6 +36,19 @@ interface Tool {
 
 type EditorStatus = "connected" | "other" | "off";
 
+/** One row of Connect's result for Claude Code. */
+interface ClaudeTarget {
+  key: string;
+  label: string;
+  state: "done" | "waiting" | "skipped" | "failed";
+  detail: string;
+}
+
+interface ClaudeCodeResult {
+  status: EditorStatus;
+  targets: ClaudeTarget[];
+}
+
 interface Summary {
   user: User;
   estimate: {
@@ -426,11 +439,14 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
 
       <h2 className="section-title">Editors</h2>
       <p className="muted small section-note">
-        Editors stay connected while ContextShrink is running, including when it is minimised.
+        Connected editors stay connected after ContextShrink closes. While one is connected, ContextShrink starts in the
+        tray when you sign in.
       </p>
       <section className="tools">
         {editors.map((tool) =>
-          tool.kind === "connect" ? (
+          tool.id === "claude-code" ? (
+            <ClaudeCodeCard key={tool.id} tool={tool} onConnected={() => setConnected(true)} />
+          ) : tool.kind === "connect" ? (
             <ConnectCard key={tool.id} tool={tool} onConnected={() => setConnected(true)} />
           ) : (
             <SettingsCard key={tool.id} tool={tool} />
@@ -496,6 +512,86 @@ function ConnectCard({ tool, onConnected }: { tool: Tool; onConnected: () => voi
     <div className="card tool">
       <EditorHead tool={tool} />
       {status === "connected" && <p className="ok small">Connected. {tool.steps}</p>}
+      {status === "other" && (
+        <p className="muted small">
+          Already routed through a Horizon proxy set up outside this app, so it is left alone.
+        </p>
+      )}
+      {error && <p className="error small">{error}</p>}
+      {status === "connected" ? (
+        <button disabled={busy} onClick={() => void toggle(false)}>
+          {busy ? "Restoring…" : "Disconnect"}
+        </button>
+      ) : (
+        <button className="primary" disabled={busy || status !== "off"} onClick={() => void toggle(true)}>
+          {busy ? "Connecting…" : `Connect ${tool.name}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const TARGET_STATE: Record<ClaudeTarget["state"], string> = {
+  done: "Done",
+  waiting: "Waiting",
+  skipped: "Kept",
+  failed: "Failed",
+};
+
+/** Claude Code in the terminal and the Desktop Code tab, connected as one step. */
+function ClaudeCodeCard({ tool, onConnected }: { tool: Tool; onConnected: () => void }) {
+  const [status, setStatus] = useState<EditorStatus | null>(null);
+  const [targets, setTargets] = useState<ClaudeTarget[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const refreshStatus = useCallback(
+    () =>
+      invoke<EditorStatus>("editor_status", { tool: tool.id })
+        .then(setStatus)
+        .catch((e) => setError(message(e))),
+    [tool.id],
+  );
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+
+  async function toggle(connected: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await invoke<ClaudeCodeResult>("set_claude_code_connected", { connected });
+      setStatus(result.status);
+      setTargets(result.targets);
+      if (connected) onConnected();
+    } catch (e) {
+      setError(message(e));
+      await refreshStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card tool">
+      <EditorHead tool={tool} />
+      {status === "connected" && (
+        <>
+          <p className="ok small">Connected. {tool.steps}</p>
+          {targets.length > 0 && (
+            <ul className="targets">
+              {targets.map((t) => (
+                <li key={t.key}>
+                  <span className={`pill ${t.state}`}>{TARGET_STATE[t.state]}</span>
+                  <span className="target-label">{t.label}</span>
+                  <span className="muted small">{t.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
       {status === "other" && (
         <p className="muted small">
           Already routed through a Horizon proxy set up outside this app, so it is left alone.

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../claude-code-tools/target/release/contextshrink-status.exe": "claude-code/bin/contextshrink-status.exe",
+      "../../claude-code-tools/target/release/claude-code-launcher.exe": "claude-code/bin/claude-code-launcher.exe",
+      "../../claude-code-plugin/.claude-plugin/marketplace.json": "claude-code/plugin-marketplace/.claude-plugin/marketplace.json",
+      "../../claude-code-plugin/.claude-plugin/plugin.json": "claude-code/plugin-marketplace/.claude-plugin/plugin.json",
+      "../../claude-code-plugin/hooks/": "claude-code/plugin-marketplace/hooks/",
+      "../../claude-code-plugin/skills/": "claude-code/plugin-marketplace/skills/"
+    }
+  }
+}

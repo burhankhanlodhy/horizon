@@ -1,0 +1,15 @@
+{
+  "name": "contextshrink",
+  "owner": {
+    "name": "ContextShrink"
+  },
+  "description": "ContextShrink plugin for Claude Code and the Claude Desktop Code tab",
+  "plugins": [
+    {
+      "name": "contextshrink",
+      "source": ".",
+      "description": "Savings line above the prompt and savings, pause, resume and report commands",
+      "version": "0.1.0"
+    }
+  ]
+}

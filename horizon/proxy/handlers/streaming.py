@@ -24,6 +24,7 @@ from horizon.proxy.helpers import (
 )
 from horizon.proxy.provider_usage import billed_input_for_provider
 from horizon.proxy.token_counting import gemini_output_tokens
+from horizon.verified_savings import sse_comment_line
 
 if TYPE_CHECKING:
     from fastapi.responses import Response, StreamingResponse
@@ -744,7 +745,13 @@ class StreamingMixin:
         # See ``conversation_savings``.
         conversation_key: str | None = None,
         conversation_tokens_saved: int | None = None,
-    ) -> None:
+    ) -> float | None:
+        """Record the request's outcome; return its verified saving in USD.
+
+        The verified figure is what the stream's closing SSE comment carries
+        (see :func:`horizon.verified_savings.sse_comment_line`). ``None`` means
+        the funnel did not report one.
+        """
         from horizon.proxy.outcome import RequestOutcome
 
         outcome_provider = outcome_provider or provider
@@ -942,7 +949,8 @@ class StreamingMixin:
             conversation_key=conversation_key,
             conversation_tokens_saved=conversation_tokens_saved,
         )
-        await self._record_request_outcome(outcome)
+        verified = await self._record_request_outcome(outcome)
+        return float(verified) if isinstance(verified, (int, float)) else None
 
     async def _stream_response(
         self,
@@ -973,6 +981,7 @@ class StreamingMixin:
         conversation_key: str | None = None,
         conversation_tokens_saved: int | None = None,
         client_beta: str | None = None,
+        forwarder_tagged: bool = False,
     ) -> Response | StreamingResponse:
         """Stream response with metrics tracking and memory tool handling.
 
@@ -1020,6 +1029,7 @@ class StreamingMixin:
                 conversation_key=conversation_key,
                 conversation_tokens_saved=conversation_tokens_saved,
                 client_beta=client_beta,
+                forwarder_tagged=forwarder_tagged,
             )
         except (Exception, asyncio.CancelledError):
             self._cleanup_mid_turn_stream(session_key)
@@ -1053,8 +1063,14 @@ class StreamingMixin:
         conversation_key: str | None = None,
         conversation_tokens_saved: int | None = None,
         client_beta: str | None = None,
+        forwarder_tagged: bool = False,
     ) -> Response | StreamingResponse:
-        """Actual streaming implementation, guarded by _stream_response's cleanup wrapper."""
+        """Actual streaming implementation, guarded by _stream_response's cleanup wrapper.
+
+        ``forwarder_tagged`` is set when the request came through the Claude Code
+        forwarder (``x-horizon-forwarder: claude-code``). Only then does the
+        stream close with the verified-savings SSE comment.
+        """
         from fastapi.responses import Response, StreamingResponse
         from starlette.background import BackgroundTask
 
@@ -1579,6 +1595,10 @@ class StreamingMixin:
             full_sse_bytes = bytearray()
             parsed_response = None  # Set by memory block; used by CCR + prefix tracker
             completed_normally = False
+            # True only for a clean completion. The verified-savings comment is
+            # written only then: yielding from a generator closed by a client
+            # disconnect would raise, and a failed stream must not claim a saving.
+            reached_end = False
             pending_messages: list[dict] = []
 
             try:
@@ -1767,6 +1787,10 @@ class StreamingMixin:
                 completed_normally = (
                     stream_state["stream_terminal"] and not stream_state["stream_failed"]
                 )
+                # Only a clean completion (a terminal event and no failure) may
+                # close with the verified figure: a failed or truncated stream
+                # carries no saving the client should be told about.
+                reached_end = completed_normally
 
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
                 logger.error(f"[{request_id}] Connection error to upstream API: {e}")
@@ -1823,7 +1847,7 @@ class StreamingMixin:
                     # are forbidden in this module per PR-A8 / P1-8.
                     decoder = __import__("codecs").getincrementaldecoder("utf-8")()
                     _final_full_sse_data = decoder.decode(bytes(full_sse_bytes), final=False)
-                await self._finalize_stream_response(
+                verified_usd = await self._finalize_stream_response(
                     body=body,
                     provider=provider,
                     outcome_provider=outcome_provider,
@@ -1850,6 +1874,11 @@ class StreamingMixin:
                     conversation_key=conversation_key,
                     conversation_tokens_saved=conversation_tokens_saved,
                 )
+                # The verified saving closes the stream as one SSE comment, just
+                # before the final event. The forwarder strips it; a client that
+                # ignores comments (per the SSE spec) never sees it.
+                if forwarder_tagged and reached_end and verified_usd is not None:
+                    yield sse_comment_line(verified_usd)
                 if supports_mid_turn_coalescing(client) and pending_messages:
                     pending_event = json.dumps(
                         {"type": "horizon_pending_messages", "messages": pending_messages}

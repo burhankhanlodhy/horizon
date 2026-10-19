@@ -37,7 +37,7 @@ const MARKS: Record<string, Mark> = {
 };
 
 export function ToolIcon({ id, name }: { id: string; name: string }) {
-  const mark = MARKS[id === "vscode-claude" ? "claude" : id];
+  const mark = MARKS[id === "vscode-claude" || id === "claude-code" ? "claude" : id];
   if (mark) {
     return (
       <span className="tool-icon" title={name}>

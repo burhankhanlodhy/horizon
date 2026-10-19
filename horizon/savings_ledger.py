@@ -320,7 +320,7 @@ def _price_event(
     return total, total_list, weakest_basis(*bases)
 
 
-def record_savings_event(
+def build_savings_event(
     *,
     tokens_before: int,
     tokens_after: int,
@@ -330,7 +330,6 @@ def record_savings_event(
     timestamp: Any = None,
     cost_usd: float | None = None,
     fallback_rate: float = DEFAULT_FALLBACK_INPUT_COST_PER_TOKEN,
-    path: str | os.PathLike[str] | None = None,
     # ── v2: savings shape + observed cache mix ────────────────────────────
     # All optional. The MCP tool path supplies none of them and keeps writing
     # exactly the events it always did, priced at list and labelled as such.
@@ -345,11 +344,12 @@ def record_savings_event(
     provider: Any = None,
     new_input_tokens: int | None = None,
     deferred_tokens: int = 0,
-) -> bool:
-    """Append one savings event to the durable ledger. Never raises.
+) -> dict[str, Any] | None:
+    """Build (without writing) the savings event :func:`record_savings_event` appends.
 
-    Returns ``True`` when a line was written. ``cost_usd`` is computed from the
-    model + tokens saved when not supplied by the caller.
+    Returns ``None`` when the ledger would write nothing for this request.
+    ``cost_usd`` is computed from the model + tokens saved when not supplied by
+    the caller.
 
     When the caller knows the savings split and the request's cache mix (the
     proxy path does; the MCP path does not), both are recorded and the event
@@ -376,11 +376,11 @@ def record_savings_event(
         before = max(int(tokens_before), 0)
         after = max(int(tokens_after), 0)
     except (TypeError, ValueError):
-        return False
+        return None
 
     saved = max(before - after, 0)
     if saved <= 0 and new_input_tokens is None:
-        return False
+        return None
 
     model_label = _normalize_model(model)
     if cost_usd is None:
@@ -461,6 +461,64 @@ def record_savings_event(
             if cost_usd is None:
                 event["cost_usd"] = round(list_usd, 6)
 
+    return event
+
+
+def record_savings_event(
+    *,
+    tokens_before: int,
+    tokens_after: int,
+    model: Any = None,
+    client: Any = None,
+    source: str = "mcp",
+    timestamp: Any = None,
+    cost_usd: float | None = None,
+    fallback_rate: float = DEFAULT_FALLBACK_INPUT_COST_PER_TOKEN,
+    path: str | os.PathLike[str] | None = None,
+    saved_compression: Any = None,
+    saved_tool_schema: Any = None,
+    cache_read_tokens: Any = 0,
+    cache_write_tokens: Any = 0,
+    cache_write_5m_tokens: Any = 0,
+    cache_write_1h_tokens: Any = 0,
+    uncached_input_tokens: Any = 0,
+    cache_inferred: Any = False,
+    provider: Any = None,
+    new_input_tokens: int | None = None,
+    deferred_tokens: int = 0,
+) -> bool:
+    """Append one savings event to the durable ledger. Never raises.
+
+    The event is built by :func:`build_savings_event`, the same code
+    :func:`verified_saving_usd` prices, so a figure reported from one and the
+    line stored by the other cannot disagree. Returns ``True`` when a line was
+    written; a request the ledger would skip returns ``False``.
+    """
+
+    event = build_savings_event(
+        tokens_before=tokens_before,
+        tokens_after=tokens_after,
+        model=model,
+        client=client,
+        source=source,
+        timestamp=timestamp,
+        cost_usd=cost_usd,
+        fallback_rate=fallback_rate,
+        saved_compression=saved_compression,
+        saved_tool_schema=saved_tool_schema,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        cache_write_5m_tokens=cache_write_5m_tokens,
+        cache_write_1h_tokens=cache_write_1h_tokens,
+        uncached_input_tokens=uncached_input_tokens,
+        cache_inferred=cache_inferred,
+        provider=provider,
+        new_input_tokens=new_input_tokens,
+        deferred_tokens=deferred_tokens,
+    )
+    if event is None:
+        return False
+
     target = _resolve_path(path)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -478,6 +536,55 @@ def record_savings_event(
 
     _maybe_compact(target)
     return True
+
+
+def verified_saving_usd(
+    *,
+    tokens_before: int,
+    tokens_after: int,
+    model: Any,
+    saved_compression: Any,
+    saved_tool_schema: Any,
+    cache_read_tokens: Any = 0,
+    cache_write_tokens: Any = 0,
+    cache_write_5m_tokens: Any = 0,
+    cache_write_1h_tokens: Any = 0,
+    uncached_input_tokens: Any = 0,
+    cache_inferred: Any = False,
+    provider: Any = None,
+    fallback_rate: float = DEFAULT_FALLBACK_INPUT_COST_PER_TOKEN,
+) -> float:
+    """The cache-aware dollar saving of one request, as the ledger records it.
+
+    This is the "Saved $ (verified)" figure. It is the value the event
+    :func:`record_savings_event` appends carries as the saving:
+    ``cost_effective_usd`` when the cache mix priced, otherwise ``cost_usd``
+    (the list figure, which equals the cache-aware one when no mix was
+    reported). Returns ``0.0`` when the ledger would write nothing. Never raises.
+    """
+
+    try:
+        event = build_savings_event(
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+            model=model,
+            saved_compression=saved_compression,
+            saved_tool_schema=saved_tool_schema,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cache_write_5m_tokens=cache_write_5m_tokens,
+            cache_write_1h_tokens=cache_write_1h_tokens,
+            uncached_input_tokens=uncached_input_tokens,
+            cache_inferred=cache_inferred,
+            provider=provider,
+            fallback_rate=fallback_rate,
+        )
+        if event is None:
+            return 0.0
+        value = event.get("cost_effective_usd", event.get("cost_usd", 0.0))
+        return max(float(value), 0.0)
+    except Exception:  # noqa: BLE001 - a telemetry figure must never break a response
+        return 0.0
 
 
 def _read_events(

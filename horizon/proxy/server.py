@@ -2426,7 +2426,7 @@ class HorizonProxy(
             logger.info(f"Avg latency:           {avg_latency:.0f}ms")
         logger.info("=" * 70)
 
-    async def _record_request_outcome(self, outcome: RequestOutcome) -> None:
+    async def _record_request_outcome(self, outcome: RequestOutcome) -> float:
         """Single funnel for per-request bookkeeping.
 
         Thin wrapper around :func:`horizon.proxy.outcome.emit_request_outcome`
@@ -2434,7 +2434,7 @@ class HorizonProxy(
         (idiomatic) instead of ``await emit_request_outcome(self, outcome)``.
         The real implementation lives in ``outcome.py`` as a free function so
         test dummies and provider mixins can call it without inheriting from
-        ``HorizonProxy``.
+        ``HorizonProxy``. Returns the request's verified saving in USD.
 
         See ``docs/superpowers/specs/P0-proxy-pipeline-audit.md`` for the
         divergence catalog this funnel collapses.
@@ -2452,7 +2452,7 @@ class HorizonProxy(
         # The shield does not swallow the cancellation — the await below still
         # raises CancelledError, so generator teardown propagates exactly as
         # before. It only keeps the bookkeeping from being torn in half.
-        await asyncio.shield(emit_request_outcome(self, outcome))
+        return await asyncio.shield(emit_request_outcome(self, outcome))
 
     async def _next_request_id(self) -> str:
         """Generate unique request ID."""
