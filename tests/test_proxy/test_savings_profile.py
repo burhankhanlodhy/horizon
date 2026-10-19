@@ -23,14 +23,17 @@ def test_auto_fills_unset_and_empty_but_never_overrides() -> None:
     assert env["HORIZON_FLASH_OPENAI_UPSTREAMS"] == "*"
     assert env["HORIZON_OPENAI_FLEX_POLICY"] == "headless"
     assert "HORIZON_MODEL_MODERNIZE" not in env  # auto never swaps the model
+    assert "HORIZON_FOLD_AT_REWRITE" not in env
     assert "HORIZON_PRICE_CLIFF_GUARD" not in applied
     assert apply_savings_profile(env) == {}  # idempotent
 
 
-def test_max_adds_model_modernization() -> None:
+def test_max_adds_model_modernization_and_fold_at_rewrite() -> None:
     env = {"HORIZON_SAVINGS": "MAX"}
     apply_savings_profile(env)
     assert env["HORIZON_MODEL_MODERNIZE"] == "1"
+    assert env["HORIZON_FOLD_AT_REWRITE"] == "1"
+    assert "HORIZON_FOLD_AT_REWRITE" not in PROFILES["auto"]
     assert set(PROFILES["auto"]) < set(PROFILES["max"])
 
 

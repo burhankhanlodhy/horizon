@@ -53,6 +53,10 @@ services:
       - HORIZON_FLASH_OBSERVATIONS=${HORIZON_FLASH_OBSERVATIONS:-}
       - HORIZON_FLASH_OPENAI=${HORIZON_FLASH_OPENAI:-}
       - HORIZON_FLASH_GEMINI=${HORIZON_FLASH_GEMINI:-}
+      # Fold old tool output into stubs on requests whose cache expired anyway
+      # (horizon/proxy/fold_at_rewrite.py): 1, shadow (log only) or 0. max sets 1.
+      - HORIZON_FOLD_AT_REWRITE=${HORIZON_FOLD_AT_REWRITE:-}
+      - HORIZON_FOLD_STORE_MAX_MB=${HORIZON_FOLD_STORE_MAX_MB:-}
       # Stable cache-routing id for Grok when the client sends none.
       - HORIZON_CACHE_ROUTING=${HORIZON_CACHE_ROUTING:-}
       - HORIZON_FLASH_OPENAI_UPSTREAMS=${HORIZON_FLASH_OPENAI_UPSTREAMS:-}

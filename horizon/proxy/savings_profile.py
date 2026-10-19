@@ -22,9 +22,14 @@ choosing anything, each protected by an automatic safety net:
 * ``HORIZON_PRICE_CLIFF_GUARD=1``: compress harder just below a whole-request
   price tier.
 
-``max`` adds ``HORIZON_MODEL_MODERNIZE=1``, which serves a superseded model id
-on its successor. That changes the model the user picked, so ``auto`` leaves it
-out.
+``max`` adds two more:
+
+* ``HORIZON_MODEL_MODERNIZE=1`` serves a superseded model id on its successor.
+  That changes the model the user picked, so ``auto`` leaves it out.
+* ``HORIZON_FOLD_AT_REWRITE=1`` folds old tool output into short stubs, only on
+  requests whose prompt cache has expired anyway
+  (:mod:`horizon.proxy.fold_at_rewrite`). Claude can fetch any original back,
+  but that retrieval rate is not measured yet, so ``auto`` leaves it out.
 """
 
 from __future__ import annotations
@@ -51,7 +56,7 @@ _AUTO: dict[str, str] = {
 PROFILES: dict[str, dict[str, str]] = {
     "off": {},
     "auto": _AUTO,
-    "max": {**_AUTO, "HORIZON_MODEL_MODERNIZE": "1"},
+    "max": {**_AUTO, "HORIZON_MODEL_MODERNIZE": "1", "HORIZON_FOLD_AT_REWRITE": "1"},
 }
 
 _applied: dict[str, str] = {}
