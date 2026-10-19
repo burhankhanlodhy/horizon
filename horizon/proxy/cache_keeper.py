@@ -47,6 +47,18 @@ whether or not the user ever returns, so abandoned sessions count against the
 feature. A request that resumes a group after a gap longer than the entry's
 lifetime, and still reads the cache, records the rewrite it avoided. Credentials
 stay in memory only and are dropped when a group stops or ends.
+
+Credentials rotate: every newer request in a group replaces the headers pings
+are sent with (at its start, so a request that then fails still refreshes them).
+A ping the upstream rejects with 401 or 403 does not stop the group: it waits
+for the next real request, which brings fresh headers. Groups the Claude Code
+forwarder created (``forwarder=True``) get a shorter idle cap, since the client
+ends them on exit through the forwarder's session-end route.
+
+Each ping may also touch the prefix tracker of the session it keeps warm
+(``touch``), so the proxy's frozen prefix outlives the tracker's own idle expiry
+for as long as the provider's cache does; a re-rendered prefix would otherwise
+miss the cache the pings just paid to keep.
 """
 
 from __future__ import annotations
@@ -85,11 +97,33 @@ OPENAI_CHAT = "openai_chat"
 OPENAI_RESPONSES_WS = "openai_responses_ws"
 #: Output limit of a Chat Completions ping (Chat has no output-free pre-warm).
 CHAT_PING_MAX_TOKENS = 16
+#: Idle cap for groups the Claude Code forwarder created, when no session-end arrives.
+FORWARDER_IDLE_CAP_S = 2 * 3600
+#: Statuses that mean the credential was refused, not that the cache is gone.
+AUTH_REFUSED = frozenset({401, 403})
 
 # (status, usage) for one pre-warm request; usage is the response's usage block.
 Sender = Callable[[str, dict[str, str], dict[str, Any]], Awaitable[tuple[int, dict[str, Any]]]]
 # (owner, ping record): bills one ping to the account that owns the session.
 Reporter = Callable[[Any, dict[str, Any]], Awaitable[None]]
+# Keeps the session's prefix tracker alive while its cache is kept warm.
+Touch = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class Settlement:
+    """What one completed request settles in its group, in USD.
+
+    ``avoided_usd``: the rewrite a resume avoided (the credit booked on the
+    request). ``ping_usd``: what the group's pings cost since the previous real
+    request, every one of them booked to the ledger, kept or not.
+    """
+
+    avoided_usd: float = 0.0
+    ping_usd: float = 0.0
+
+
+_NO_SETTLEMENT = Settlement()
 
 
 def ttl_of(body: dict[str, Any]) -> int | None:
@@ -227,6 +261,8 @@ class _Pending:
     meta: dict[str, Any]
     flavor: str = ANTHROPIC
     channel: Any = None
+    forwarder: bool = False
+    touch: Touch | None = None
 
 
 @dataclass
@@ -247,6 +283,11 @@ class _Group:
     generation: int = 0  # bumped whenever a newer request becomes the target
     pings: int = 0
     ping_cost_usd: float = 0.0
+    # Every ping booked to the ledger since the last real request (kept or not).
+    booked_usd: float = 0.0
+    forwarder: bool = False  # created by the Claude Code forwarder: shorter idle cap
+    touch: Touch | None = None  # the session's prefix tracker, kept alive by pings
+    waiting: bool = False  # the last ping was refused (401/403): wait for fresh headers
     inflight: bool = False
     stopped: bool = False  # the cache is gone (or unknown): never credit a resume
     # Not credited on resume: what the group's first request already found warm,
@@ -268,6 +309,7 @@ class CacheKeeper:
         min_context: int = 20_000,
         return_odds: float = 0.5,
         max_idle_seconds: float = 8 * 3600,
+        forwarder_max_idle_seconds: float = FORWARDER_IDLE_CAP_S,
         max_groups: int = 256,
         max_context_tokens: int = 25_000_000,
         concurrency: int = 8,
@@ -280,6 +322,7 @@ class CacheKeeper:
         self.min_context = min_context
         self.return_odds = return_odds
         self.max_idle_seconds = max_idle_seconds
+        self.forwarder_max_idle_seconds = forwarder_max_idle_seconds
         self._max_groups = max_groups
         # Bounds the request bodies held for pinging (~4 bytes a token).
         self._max_context_tokens = max_context_tokens
@@ -290,6 +333,8 @@ class CacheKeeper:
         self._ended: OrderedDict[str, None] = OrderedDict()
         self._ledger_path = ledger_path
         self._tasks: set[asyncio.Task] = set()
+        # Settlement of the last record_usage call, read right after it.
+        self.last_settlement = _NO_SETTLEMENT
 
     # -- real traffic -------------------------------------------------------
 
@@ -305,6 +350,8 @@ class CacheKeeper:
         meta: dict[str, Any] | None = None,
         flavor: str = ANTHROPIC,
         channel: Any = None,
+        forwarder: bool = False,
+        touch: Touch | None = None,
     ) -> None:
         """Remember a forwarded request until its usage says whether it is worth keeping.
 
@@ -315,7 +362,9 @@ class CacheKeeper:
         warm only when the client sent a liveness id, which is also what lets
         the client end them, and never once its plan has paused savings.
         ``channel`` (``OPENAI_RESPONSES_WS`` only) sends the pre-warm on the
-        connection that carried the request.
+        connection that carried the request. ``forwarder`` marks a request the
+        Claude Code forwarder relayed; ``touch`` runs after each successful ping,
+        to keep the session's prefix tracker alive.
         """
         if flavor == ANTHROPIC:
             if not body.get("tools") or body.get("max_tokens") == 0:
@@ -338,10 +387,26 @@ class CacheKeeper:
         ):
             return
         group = group_of(headers, liveness_id, getattr(owner, "user_id", None))
-        if group in self._ended:
-            return
+        # A real request for an ended id is the session coming back (``claude --resume``
+        # reuses the id): it starts a fresh group. Pings never come through here.
+        self._ended.pop(group, None)
+        existing = self._groups.get(group)
+        if existing is not None:
+            # The newest request's credentials are the ones pings carry, even if
+            # this request later fails: a refused ping then waits for exactly this.
+            existing.url, existing.headers, existing.waiting = url, dict(headers), False
         self._pending[request_id] = _Pending(
-            group, url, dict(headers), body, self._clock(), owner, dict(meta or {}), flavor, channel
+            group,
+            url,
+            dict(headers),
+            body,
+            self._clock(),
+            owner,
+            dict(meta or {}),
+            flavor,
+            channel,
+            forwarder=forwarder,
+            touch=touch,
         )
         while len(self._pending) > 64:
             self._pending.popitem(last=False)
@@ -355,7 +420,12 @@ class CacheKeeper:
     def record_usage(
         self, request_id: str, *, model: str, cache_read: int, cache_write: int, uncached: int
     ) -> dict[str, Any] | None:
-        """Adopt a completed request as its group's warm target; report a kept-warm resume."""
+        """Adopt a completed request as its group's warm target; report a kept-warm resume.
+
+        ``last_settlement`` is set alongside: the rewrite this request avoided and
+        what the group's pings cost since the previous real request.
+        """
+        self.last_settlement = _NO_SETTLEMENT
         p = self._pending.pop(request_id, None)
         if p is None or p.group in self._ended:
             return None
@@ -373,9 +443,18 @@ class CacheKeeper:
         if g is None:
             g = _Group(key=p.group, baseline_read=cache_read)
             self._groups[p.group] = g
+        # Settled against the gap that ends here: every ping booked since the
+        # previous real request, whether or not it kept the cache.
+        self.last_settlement = Settlement(
+            avoided_usd=float(event["avoided_usd"]) if event else 0.0,
+            ping_usd=g.booked_usd,
+        )
+        g.booked_usd = 0.0
         g.owner, g.meta = p.owner, p.meta
         g.url, g.headers, g.body, g.model = p.url, p.headers, copy.deepcopy(p.body), model
         g.flavor, g.channel = p.flavor, p.channel
+        g.forwarder, g.touch = p.forwarder, p.touch
+        g.waiting = False
         if p.flavor == ANTHROPIC:
             g.ttl = ttl_of(p.body) or TTL_5M
         else:
@@ -391,7 +470,12 @@ class CacheKeeper:
         return event
 
     def end(self, liveness_id: str, owner_id: str | None = None) -> bool:
-        """The wrapped tool exited: stop keeping its session warm, for good."""
+        """The wrapped tool exited: stop keeping its session warm.
+
+        Idempotent and harmless without a group: an unknown id only marks it ended.
+        Only a real request for the id starts a group again (``record_request``); a
+        ping never does.
+        """
         key = group_of({}, liveness_id, owner_id)
         self._ended[key] = None
         while len(self._ended) > 4096:
@@ -460,14 +544,20 @@ class CacheKeeper:
             return 0
         return int(self.return_odds * (write - read) / read)
 
+    def _idle_cap(self, g: _Group) -> float:
+        """How long a group may go without a real request before its pings stop."""
+        return self.forwarder_max_idle_seconds if g.forwarder else self.max_idle_seconds
+
     def due(self) -> list[_Group]:
         now = self._clock()
         out = []
         for g in list(self._groups.values()):
             if g.stopped or not g.body or g.inflight:
                 continue
-            if now - g.last_request_at > self.max_idle_seconds:
+            if now - g.last_request_at > self._idle_cap(g):
                 self._release(g, "idle")
+            elif g.waiting:
+                continue  # refused: nothing to send until a real request brings fresh headers
             elif g.pings >= self.max_pings(g.ttl, g.model):
                 self._release(g, "budget")
             elif now >= g.last_touch_at + g.ttl - LATE:
@@ -508,6 +598,8 @@ class CacheKeeper:
     async def _ping(self, g: _Group, slots: asyncio.Semaphore) -> int:
         """One pre-warm for ``g``; bills it whatever happens and stops the group on a miss."""
         try:
+            if self._groups.get(g.key) is not g:
+                return 0  # ended (or evicted) since it was due: a ping never revives it
             send = self._send
             if g.flavor == ANTHROPIC:
                 body = prewarm_body(g.body)
@@ -564,7 +656,12 @@ class CacheKeeper:
             )
             if status and status != 200:
                 cost = 0.0  # rejected requests are not billed
+            # Booked as its own ledger row whatever it did to the group, so the
+            # gap's ping total is the sum of what was booked (see Settlement).
+            cost = round(cost, 6)
+            g.booked_usd += cost
             current = self._groups.get(g.key) is g and g.generation == generation
+            refused = status in AUTH_REFUSED and not estimated
             if g.flavor == ANTHROPIC:
                 missed = estimated or status != 200 or write > 0 or read == 0
             else:
@@ -572,8 +669,14 @@ class CacheKeeper:
                 # a rewrite of the context is what says the cache was gone.
                 context = read + write + uncached
                 missed = estimated or status != 200 or read == 0 or write > 0.05 * context
+            if refused:
+                missed = False  # the credential was refused: the cache may well be warm
             record = {
-                "event": "cache_keeper_stop" if missed else "cache_keeper_ping",
+                "event": "cache_keeper_stop"
+                if missed
+                else "cache_keeper_refused"
+                if refused
+                else "cache_keeper_ping",
                 "group": g.key[:16],
                 "provider": "openai" if g.flavor != ANTHROPIC else "anthropic",
                 "model": model,
@@ -592,7 +695,11 @@ class CacheKeeper:
                 "meta": meta,
             }
             if current:
-                if missed:
+                if refused:
+                    # Not gone, only unauthorised for these headers: wait for the next
+                    # real request, which refreshes them, rather than stopping for good.
+                    g.waiting = True
+                elif missed:
                     g.stopped = True
                     self._release(g, "miss")
                 else:
@@ -600,6 +707,11 @@ class CacheKeeper:
                     g.ping_cost_usd += cost
                     g.last_touch_at = started
                 record["ping"] = g.pings
+            if not missed and not refused and g.touch is not None:
+                try:
+                    g.touch()  # the session's prefix stays alive as long as its cache
+                except Exception:  # pragma: no cover - a touch must never break a ping
+                    logger.warning("event=cache_keeper_touch_failed")
             self._log({k: v for k, v in record.items() if k != "meta"})
             await self._report(owner, record)
             return 1

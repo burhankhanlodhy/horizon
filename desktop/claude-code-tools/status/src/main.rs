@@ -15,10 +15,11 @@
 
 use serde_json::Value;
 use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const STDIN_CAP: u64 = 256 * 1024;
 const STDIN_WAIT: Duration = Duration::from_millis(10);
@@ -29,6 +30,14 @@ const OFF_LINE: &str = "ContextShrink off";
 const PAUSED_LINE: &str = "ContextShrink paused";
 
 fn main() {
+    // The plugin's session.end hook: pass the session on to the forwarder and go.
+    // Prints nothing; a hook's output would reach the person.
+    if std::env::args_os().skip(1).any(|arg| arg == "--session-end") {
+        if let Some(session) = read_session_id_within(SESSION_END_STDIN_WAIT) {
+            post_session_end(&session);
+        }
+        std::process::exit(0);
+    }
     let detail = std::env::args_os().skip(1).any(|arg| arg == "--detail");
     let session = read_session_id();
     let output = if detail {
@@ -50,14 +59,84 @@ fn main() {
 /// Reads stdin on a helper thread for at most 10 ms, so a terminal or a pipe
 /// that never closes cannot hold the status line up.
 fn read_session_id() -> Option<String> {
+    read_session_id_within(STDIN_WAIT)
+}
+
+/// The same, waiting up to `wait` for the hook's JSON (a session end is not on a
+/// status line's clock, but the hook still has a short budget).
+fn read_session_id_within(wait: Duration) -> Option<String> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut buffer = Vec::new();
         let _ = std::io::stdin().take(STDIN_CAP).read_to_end(&mut buffer);
         let _ = sender.send(buffer);
     });
-    let buffer = receiver.recv_timeout(STDIN_WAIT).unwrap_or_default();
+    let buffer = receiver.recv_timeout(wait).unwrap_or_default();
     parse_session_id(&buffer)
+}
+
+// ---------------------------------------------------------------------------
+// Session end
+// ---------------------------------------------------------------------------
+
+const FORWARDER_PORT: u16 = 18788;
+const SESSION_END_PATH: &str = "/__cs/session-end";
+const SESSION_END_STDIN_WAIT: Duration = Duration::from_millis(1000);
+const SESSION_CONNECT_BUDGET: Duration = Duration::from_millis(300);
+/// Whole session-end call. The plugin's session.end hook has about 1.5 s for
+/// everything, so this stays well inside it.
+const SESSION_END_BUDGET: Duration = Duration::from_millis(900);
+
+/// The forwarder's loopback port; ``CONTEXTSHRINK_FORWARDER_PORT`` overrides it (tests).
+fn forwarder_port() -> u16 {
+    std::env::var("CONTEXTSHRINK_FORWARDER_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(FORWARDER_PORT)
+}
+
+/// The HTTP/1.1 request that ends one session at the forwarder.
+fn session_end_request(port: u16, session_id: &str) -> String {
+    let body = serde_json::json!({ "session_id": session_id }).to_string();
+    format!(
+        "POST {SESSION_END_PATH} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn time_left(deadline: Instant) -> Option<Duration> {
+    deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
+}
+
+/// Posts the session end to the forwarder and waits for its first reply byte, so
+/// the forwarder has read the request. The forwarder itself is not running (or
+/// is paused, or refuses) on most machines most of the time: then nothing happens
+/// and the proxy's idle cap ends the session instead.
+fn post_session_end(session_id: &str) -> bool {
+    let port = forwarder_port();
+    let deadline = Instant::now() + SESSION_END_BUDGET;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let connect_wait = SESSION_CONNECT_BUDGET.min(time_left(deadline).unwrap_or_default());
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, connect_wait) else {
+        return false;
+    };
+    let request = session_end_request(port, session_id);
+    let Some(write_wait) = time_left(deadline) else {
+        return false;
+    };
+    if stream.set_write_timeout(Some(write_wait)).is_err()
+        || stream.write_all(request.as_bytes()).is_err()
+    {
+        return false;
+    }
+    let Some(read_wait) = time_left(deadline) else {
+        return true;
+    };
+    let _ = stream.set_read_timeout(Some(read_wait));
+    let mut reply = [0u8; 16];
+    matches!(stream.read(&mut reply), Ok(count) if count > 0)
 }
 
 fn parse_session_id(buffer: &[u8]) -> Option<String> {
@@ -220,12 +299,22 @@ fn trimmed_percent(entry: &Value) -> u64 {
     ((1.0 - after / before) * 100.0).clamp(0.0, 100.0).round() as u64
 }
 
-fn render_counters_line(entry: &Value) -> String {
-    let saved = if number(entry, "verified_requests") > 0.0 {
-        format!("saved ${:.2} verified", number(entry, "verified_saved_usd"))
+/// The verified figure as the line words it: a saving, a cost when the session's
+/// keep-alive pings outweighed what they saved, or pending until one is reported.
+fn verified_text(entry: &Value) -> String {
+    if number(entry, "verified_requests") <= 0.0 {
+        return "saved pending verified".to_string();
+    }
+    let verified = entry.get("verified_saved_usd").and_then(Value::as_f64).unwrap_or(0.0);
+    if verified < 0.0 {
+        format!("cost ${:.2} verified", -verified)
     } else {
-        "saved pending verified".to_string()
-    };
+        format!("saved ${:.2} verified", verified)
+    }
+}
+
+fn render_counters_line(entry: &Value) -> String {
+    let saved = verified_text(entry);
     format!(
         "ContextShrink \u{2713} trimmed {}% \u{b7} ${:.2} of tokens at list price \u{b7} {} \u{b7} {} req",
         trimmed_percent(entry),
@@ -297,7 +386,12 @@ fn render_detail(session: Option<&str>) -> String {
         }),
         ("saved $ (verified)", |entry| {
             if number(entry, "verified_requests") > 0.0 {
-                format!("${:.2}", number(entry, "verified_saved_usd"))
+                let verified = entry.get("verified_saved_usd").and_then(Value::as_f64).unwrap_or(0.0);
+                if verified < 0.0 {
+                    format!("-${:.2}", -verified)
+                } else {
+                    format!("${:.2}", verified)
+                }
             } else {
                 "pending".to_string()
             }
@@ -486,5 +580,32 @@ mod tests {
             "trimmed_list_usd": 0.5, "verified_saved_usd": 0.0, "verified_requests": 0
         });
         assert!(render_counters_line(&entry).contains("saved pending verified"));
+    }
+
+    #[test]
+    fn a_negative_verified_figure_reads_as_a_cost() {
+        let entry = serde_json::json!({
+            "tokens_before": 1000, "tokens_after": 1000, "requests": 3,
+            "trimmed_list_usd": 0.0, "verified_saved_usd": -0.42, "verified_requests": 3
+        });
+        assert!(render_counters_line(&entry).ends_with("cost $0.42 verified \u{b7} 3 req"));
+        assert!(!render_counters_line(&entry).contains("saved $"));
+    }
+
+    #[test]
+    fn session_end_request_names_the_route_and_carries_the_session_as_json() {
+        let request = session_end_request(18788, "abc-123");
+        assert!(request.starts_with("POST /__cs/session-end HTTP/1.1\r\nHost: 127.0.0.1:18788\r\n"));
+        let body = request.split("\r\n\r\n").nth(1).unwrap();
+        assert_eq!(body, r#"{"session_id":"abc-123"}"#);
+        assert!(request.contains(&format!("Content-Length: {}\r\n", body.len())));
+    }
+
+    #[test]
+    fn a_session_id_is_read_from_the_hook_json_on_stdin() {
+        assert_eq!(
+            parse_session_id(br#"{"session_id":"s-9","reason":"clear"}"#).as_deref(),
+            Some("s-9")
+        );
     }
 }

@@ -1336,6 +1336,15 @@ class PrefixCacheTracker:
         if cache_ttl_seconds is not None:
             self._cache_ttl_seconds = max(self._cache_ttl_seconds or 0, cache_ttl_seconds)
 
+    def keep_alive_touch(self) -> None:
+        """A keep-alive ping read this lineage's cache: the frozen prefix is still live.
+
+        The provider keeps the entry for its whole lifetime while pings read it,
+        so the tracker must not expire first; an expired tracker re-renders the
+        prefix, and the re-rendered bytes miss the cache the pings just warmed.
+        """
+        self._last_activity = time.time()
+
     def seconds_since_activity(self) -> float:
         """Wall-clock seconds since this tracker last saw activity.
 

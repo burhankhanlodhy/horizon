@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from importlib import resources
 from typing import Any
 
 from horizon.pricing.deepseek_tiers import (
@@ -52,6 +55,49 @@ except ImportError:
 _resolved_model_cache: dict[str, str] = {}
 
 logger = logging.getLogger("horizon.pricing")
+
+# --- Bundled price rows -----------------------------------------------------
+# The frozen desktop client excludes the litellm package for size, so it cannot
+# price any model from ``litellm.model_cost``. ``desktop/client/build_pricing.py``
+# writes the rows the dev venv prices with into this file before PyInstaller runs
+# (git-ignored, removed after the build). Only read when litellm is not importable.
+BUNDLED_PRICES_NAME = "_model_prices.json"
+_bundled_lock = threading.Lock()
+_bundled_cache: dict[str, Any] | None = None
+
+
+def _read_bundled_text() -> str:
+    """The bundled price file's text. Monkeypatched by tests."""
+    return (
+        resources.files("horizon.pricing").joinpath(BUNDLED_PRICES_NAME).read_text(encoding="utf-8")
+    )
+
+
+def _bundled_table() -> dict[str, Any]:
+    """The bundled price rows, loaded once; ``{}`` when the file is absent or unreadable."""
+    global _bundled_cache
+    with _bundled_lock:
+        if _bundled_cache is None:
+            try:
+                data = json.loads(_read_bundled_text())
+            except (OSError, ValueError, ModuleNotFoundError):
+                logger.debug("no bundled LiteLLM price rows; list prices unavailable")
+                data = {}
+            _bundled_cache = data if isinstance(data, dict) else {}
+        return _bundled_cache
+
+
+def model_cost_table() -> Mapping[str, Any]:
+    """LiteLLM's price rows: the live package's when importable, else the bundled copy.
+
+    With litellm installed this is ``litellm.model_cost`` itself, so nothing
+    changes for it; the bundled rows only stand in for a frozen client that cannot
+    import it.
+    """
+    if LITELLM_AVAILABLE and litellm is not None:
+        return litellm.model_cost  # type: ignore[no-any-return]
+    return _bundled_table()
+
 
 # --- Gateway model-name resolution ---------------------------------------
 # When Horizon sits behind a gateway (Kong, LiteLLM, ...) that aliases model
@@ -117,7 +163,9 @@ def resolve_litellm_model(model: str) -> str:
 def _resolve_litellm_model_uncached(model: str) -> str:
     """Uncached resolution — called once per unique model name."""
     if not LITELLM_AVAILABLE:
-        return model
+        # Without the package, the bundled rows answer the same candidate list.
+        table = _bundled_table()
+        return next((c for c in pricing_lookup_candidates(model) if c in table), model)
 
     def is_known_model(candidate: str) -> bool:
         try:
@@ -190,17 +238,16 @@ def get_litellm_model_cost() -> dict[str, Any]:
 
 
 def get_model_pricing(model: str) -> LiteLLMModelPricing | None:
-    """Get pricing for a model from LiteLLM's database.
+    """Get pricing for a model from LiteLLM's database (or its bundled copy).
 
     Args:
         model: Model name (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022').
 
     Returns:
-        LiteLLMModelPricing if found, None if not found or litellm not installed.
+        LiteLLMModelPricing if found, None if not found, or if neither litellm nor
+        the bundled price rows are available.
     """
-    if not LITELLM_AVAILABLE:
-        return None
-    cost_data = litellm.model_cost
+    cost_data = model_cost_table()
 
     info = None
     for candidate in pricing_lookup_candidates(model):

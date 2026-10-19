@@ -29,12 +29,14 @@ and everything else goes straight to the provider.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
 import logging
 import os
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,7 +44,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from horizon.forwarder_stats import (
@@ -81,7 +83,16 @@ BYPASS_HEADER = "x-horizon-bypass"
 #: Relayed Anthropic messages calls: the path suffix that gets the Claude Code tag.
 _MESSAGES_SUFFIX = "/v1/messages"
 _KEEPALIVE_PATH = re.compile(r"^/k/([^/]+)/")
+_KEEPALIVE_SEGMENT = re.compile(r"^/k/([A-Za-z0-9_-]{1,64})(?=/|$)")
 _SESSION_HEADER = "x-claude-code-session-id"
+#: The proxy's keep-alive id charset and length (horizon.proxy.project_policy).
+_KEEPALIVE_ID_MAX = 64
+#: Hex digits of sha256(session id) appended to the machine id: one keep-alive group per session.
+_SESSION_DIGEST_HEX = 12
+#: Session-end route: the plugin's session.end hook posts here (loopback only).
+SESSION_END_PATH = "/__cs/session-end"
+_SESSION_END_BODY_MAX = 4096
+_SESSION_LIVENESS_MAX = 512
 
 #: Set by transport plugins: the real destination's origin, and the original
 #: path when the plugin normalized it for the proxy.
@@ -101,6 +112,38 @@ def _is_loopback(host: str) -> bool:
     except ValueError:
         return host in ("localhost", "localhost.localdomain")
     return addr.is_loopback
+
+
+def session_keepalive_id(machine_id: str, session_id: str) -> str | None:
+    """The keep-alive id one Claude Code session gets under a machine's ``/k/`` route.
+
+    Connect gives every session the same per-machine id; this derives
+    ``<machine id>-<12 hex of sha256(session id)>`` so each session is its own
+    keep-alive group and can be ended alone. ``None`` when the result would not
+    fit the proxy's id rules, in which case the machine id stands.
+    """
+    if not session_id:
+        return None
+    digest = hashlib.sha256(session_id.encode("utf-8", "ignore")).hexdigest()
+    derived = f"{machine_id}-{digest[:_SESSION_DIGEST_HEX]}"
+    if len(derived) > _KEEPALIVE_ID_MAX or not re.fullmatch(r"[A-Za-z0-9_-]+", derived):
+        return None
+    return derived
+
+
+def per_session_path(url: str, session_id: str) -> tuple[str, str | None]:
+    """``/k/<machine>/rest`` with the machine id made per-session; returns (url, derived id).
+
+    A path without a ``/k/`` id, or a request without a session header, is
+    returned unchanged with ``None``.
+    """
+    match = _KEEPALIVE_SEGMENT.match(url)
+    if match is None or not session_id:
+        return url, None
+    derived = session_keepalive_id(match.group(1), session_id)
+    if derived is None:
+        return url, None
+    return f"/k/{derived}{url[match.end() :]}", derived
 
 
 def _proxy_serves(path: str) -> bool:
@@ -253,6 +296,34 @@ def build_app(
     direct = httpx.AsyncClient(
         timeout=_DEFAULT_TIMEOUT, follow_redirects=False, transport=transport
     )
+
+    # Claude Code session id -> the per-session keep-alive ids its messages were
+    # relayed under; the session-end route ends those on the proxy.
+    session_liveness: OrderedDict[str, list[str]] = OrderedDict()
+
+    def remember_liveness(session: str, derived: str) -> None:
+        ids = session_liveness.setdefault(session, [])
+        if derived not in ids:
+            ids.append(derived)
+        session_liveness.move_to_end(session)
+        while len(session_liveness) > _SESSION_LIVENESS_MAX:
+            session_liveness.popitem(last=False)
+
+    async def end_remote_keepalives(ids: list[str]) -> None:
+        """Tell the proxy each keep-alive id is over (same call as ``wrap`` makes)."""
+        for keepalive in ids:
+            try:
+                credential = credential_provider()
+                resp = await client.post(
+                    "/v1/horizon/keepalive/end",
+                    json={"id": keepalive},
+                    headers={CREDENTIAL_HEADER: credential},
+                    timeout=10.0,
+                )
+                if resp.status_code >= 400:
+                    logger.warning("forwarder keep-alive end refused: status=%s", resp.status_code)
+            except Exception as exc:  # noqa: BLE001 - a missed end falls back to the idle cap
+                logger.warning("forwarder keep-alive end failed: %s", type(exc).__name__)
 
     async def send(
         http: httpx.AsyncClient,
@@ -454,6 +525,30 @@ def build_app(
             }
         )
 
+    @app.post(SESSION_END_PATH)
+    async def session_end(request: Request, background: BackgroundTasks) -> Response:
+        """The plugin's session.end hook: this Claude Code session is over.
+
+        Answered at once; the proxy call runs after the reply, so the hook never
+        waits on the network. Loopback and Origin/Host rules as for the relay.
+        """
+        if not request_allowed(request.headers, port):
+            return Response(content="forbidden\n", status_code=403, media_type="text/plain")
+        raw = await request.body()
+        if len(raw) > _SESSION_END_BODY_MAX:
+            return Response(content="too large\n", status_code=413, media_type="text/plain")
+        try:
+            payload = json.loads(raw or b"{}")
+        except ValueError:
+            payload = None
+        session = payload.get("session_id") if isinstance(payload, dict) else None
+        if not isinstance(session, str) or not session.strip() or len(session) > 256:
+            return Response(content="bad session id\n", status_code=400, media_type="text/plain")
+        ids = session_liveness.pop(session.strip(), [])
+        if ids:
+            background.add_task(end_remote_keepalives, ids)
+        return JSONResponse({"accepted": len(ids)}, status_code=202)
+
     @app.api_route(
         "/{path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
@@ -518,6 +613,11 @@ def build_app(
             headers[BYPASS_HEADER] = "true"
         recorder = None
         if url.endswith(_MESSAGES_SUFFIX):
+            # One keep-alive group per Claude Code session, not one per machine.
+            session = request.headers.get(_SESSION_HEADER, "").strip()
+            url, derived = per_session_path(url, session)
+            if derived is not None:
+                remember_liveness(session, derived)
             headers[FORWARDER_HEADER] = FORWARDER_CLAUDE_CODE
             if stats is not None:
                 recorder = await _messages_recorder(stats, request, url, forwarder_info)

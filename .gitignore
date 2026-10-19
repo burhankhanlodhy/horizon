@@ -293,3 +293,6 @@ desktop/mcp/prepared-vault/
 # Desktop extension build output (never committed; installers are not hosted on GitHub)
 desktop/mcp/extension/build/
 desktop/mcp/extension/dist/
+
+# Price rows the frozen desktop client ships (written by desktop/client/build_pricing.py)
+horizon/pricing/_model_prices.json

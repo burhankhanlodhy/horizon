@@ -4333,6 +4333,9 @@ class AnthropicHandlerMixin:
                         liveness_id=request.headers.get(LIVENESS_HEADER),
                         owner=_account.get(),
                         meta={"project": get_current_project(), "agent": client},
+                        forwarder=forwarder_tagged,
+                        # Each ping keeps this session's frozen prefix alive too.
+                        touch=getattr(prefix_tracker, "keep_alive_touch", None),
                     )
 
                 if stream and not buffered_stream_ccr:

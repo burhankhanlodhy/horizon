@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 STATUS_VERSION = 1
 CACHE_TTL_SECONDS = 300
 MAX_SESSIONS = 200
+#: Models tallied per session (the main model plus a few helper models).
+_MODEL_TALLY_MAX = 16
 HEARTBEAT_SECONDS = 10.0
 STALE_AFTER_SECONDS = 30.0
 HISTORY_DAYS = 400
@@ -203,13 +205,14 @@ def _as_int(value: Any) -> int:
 
 
 def _as_float(value: Any) -> float | None:
+    """A finite number, signed: the verified figure can be negative (keep-alive cost)."""
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
     if number != number or number in (float("inf"), float("-inf")):
         return None
-    return max(number, 0.0)
+    return number
 
 
 def _empty_counters() -> dict[str, Any]:
@@ -296,7 +299,11 @@ def render_status_line(status: dict[str, Any], now: float) -> str:
     else:
         money = f"${float(latest.get('trimmed_list_usd', 0.0)):.2f} of tokens at list price"
     if _as_int(latest.get("verified_requests")) > 0:
-        saved = f"saved ${float(latest.get('verified_saved_usd', 0.0)):.2f} verified"
+        verified = float(latest.get("verified_saved_usd", 0.0))
+        if verified < 0:
+            saved = f"cost ${-verified:.2f} verified"
+        else:
+            saved = f"saved ${verified:.2f} verified"
     else:
         saved = "saved pending verified"
     requests = _as_int(latest.get("requests"))
@@ -364,6 +371,7 @@ class ClaudeCodeStats:
         tokens_saved: int,
         list_usd: float,
         unpriced: bool,
+        priced: bool = False,
         verified_usd: float | None,
         cache_written: bool,
         keepalive: bool,
@@ -375,7 +383,8 @@ class ClaudeCodeStats:
         delta["tokens_after"] = _as_int(tokens_after)
         delta["trimmed_list_usd"] = max(float(list_usd), 0.0)
         if verified_usd is not None:
-            delta["verified_saved_usd"] = max(float(verified_usd), 0.0)
+            # Signed: a request whose keep-alive pings outweighed its saving is a cost.
+            delta["verified_saved_usd"] = float(verified_usd)
             delta["verified_requests"] = 1
         stamp = _iso(now)
         with self._lock:
@@ -396,9 +405,23 @@ class ClaudeCodeStats:
             _add_counters(session, delta)
             session["last_at"] = stamp
             if model:
-                session["model"] = model
-            if unpriced:
-                session["unpriced"] = True
+                # The model that carried the most of the session's tokens: Claude Code
+                # mixes in small helper calls (Haiku) beside the main model.
+                tally = session.setdefault("model_tokens", {})
+                tally[model] = tally.get(model, 0) + _as_int(tokens_before)
+                if len(tally) > _MODEL_TALLY_MAX:
+                    del tally[min(tally, key=tally.get)]
+                session["model"] = max(tally, key=tally.get)
+            # A session is unpriced only when none of its requests could be priced;
+            # the priced ones keep their dollars either way.
+            if priced:
+                session["priced_requests"] = _as_int(session.get("priced_requests")) + 1
+            elif unpriced:
+                session["unpriced_requests"] = _as_int(session.get("unpriced_requests")) + 1
+            session["unpriced"] = (
+                _as_int(session.get("unpriced_requests")) > 0
+                and _as_int(session.get("priced_requests")) == 0
+            )
             cache = session["cache"]
             if cache_written:
                 cache["last_write_at"] = stamp
@@ -469,7 +492,16 @@ class ClaudeCodeStats:
 
 def _round_session(session: dict[str, Any]) -> dict[str, Any]:
     out = _round_counters(session)
-    for key in ("first_at", "last_at", "model", "unpriced", "cache"):
+    for key in (
+        "first_at",
+        "last_at",
+        "model",
+        "model_tokens",
+        "unpriced",
+        "priced_requests",
+        "unpriced_requests",
+        "cache",
+    ):
         if key in session:
             out[key] = session[key]
     return out
@@ -613,6 +645,7 @@ class RequestRecorder:
 
         price = list_input_price_per_token(model) if saved > 0 else None
         unpriced = saved > 0 and price is None
+        priced = saved > 0 and price is not None
         list_usd = saved * price if price is not None else 0.0
         self.stats.record(
             session_id=self.session_id,
@@ -622,6 +655,7 @@ class RequestRecorder:
             tokens_saved=saved,
             list_usd=list_usd,
             unpriced=unpriced,
+            priced=priced,
             verified_usd=verified if status_code < 400 else None,
             cache_written=cache_written,
             keepalive=self.keepalive,

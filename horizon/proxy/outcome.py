@@ -472,14 +472,35 @@ def _warn_estimated_input(provider: str, model: str) -> None:
     )
 
 
+def keepalive_adjusted_saving(
+    compression_usd: float, *, keepalive_usd: float, ping_usd: float
+) -> float:
+    """The verified figure of one request, with its keep-alive settled in.
+
+    ``compression_usd`` is the cache-aware saving the ledger records for the
+    request (never negative). ``keepalive_usd`` is the rewrite a resumed session
+    avoided, credited on this request. ``ping_usd`` is what the keep-alive pings
+    of the gap before it cost, booked to the ledger. The result can be negative:
+    pings that did not pay off are a real cost, and the floor is exactly that
+    cost (a request's own saving never goes below zero).
+    """
+    saving = max(float(compression_usd), 0.0)
+    credit = max(float(keepalive_usd), 0.0)
+    cost = max(float(ping_usd), 0.0)
+    return max(saving + credit - cost, -cost)
+
+
 async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
     """Single funnel for per-request bookkeeping. The contract.
 
-    Returns the request's verified saving in USD: the cache-aware figure the
+    Returns the request's verified figure in USD: the cache-aware saving the
     savings ledger records for it (see
-    :func:`horizon.savings_ledger.verified_saving_usd`), or ``0.0`` when the
-    request saved nothing or was rejected. The stream finalizer and the
-    non-streaming handler use it to stamp ``x-horizon-verified-savings-usd``.
+    :func:`horizon.savings_ledger.verified_saving_usd`), plus the keep-alive
+    credit it earned, minus the keep-alive pings its gap cost (see
+    :func:`keepalive_adjusted_saving`). It is zero for a request that saved
+    nothing, and negative when the gap's pings outweighed the saving. The stream
+    finalizer and the non-streaming handler use it to stamp
+    ``x-horizon-verified-savings-usd``.
 
     Owns the downstream effects in canonical order:
 
@@ -690,21 +711,23 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
     # Before the account row: a request that resumes a session the keep-alive
     # held warm carries the rewrite it avoided in its own savings.
     keepalive_usd = 0.0
+    keepalive_ping_usd = 0.0
     keeper = getattr(handler, "cache_keeper", None)
     if (
         keeper is not None
         and outcome.provider in ("anthropic", "openai")
         and outcome.status_code < 400
     ):
-        resume = keeper.record_usage(
+        keeper.record_usage(
             outcome.request_id,
             model=outcome.model,
             cache_read=outcome.cache_read_tokens,
             cache_write=outcome.cache_write_tokens,
             uncached=outcome.uncached_input_tokens,
         )
-        if resume is not None:
-            keepalive_usd = float(resume.get("avoided_usd") or 0.0)
+        settlement = keeper.last_settlement
+        keepalive_usd = float(settlement.avoided_usd)
+        keepalive_ping_usd = float(settlement.ping_usd)
     await record_account_outcome(
         outcome,
         saved=novel_tokens_saved,
@@ -750,7 +773,7 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
 
     _ledger_compression = max(int(novel_tokens_saved), 0)
     _ledger_deferral = max(int(tool_search_saved), 0)
-    verified_usd = verified_saving_usd(
+    compression_usd = verified_saving_usd(
         tokens_before=int(outcome.optimized_tokens) + _ledger_compression + _ledger_deferral,
         tokens_after=int(outcome.optimized_tokens),
         model=outcome.model,
@@ -763,6 +786,10 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
         uncached_input_tokens=outcome.uncached_input_tokens,
         cache_inferred=outcome.cache_inferred,
         provider=outcome.provider,
+    )
+    # Signed: the keep-alive pings this request's gap paid for can outweigh its saving.
+    verified_usd = keepalive_adjusted_saving(
+        compression_usd, keepalive_usd=keepalive_usd, ping_usd=keepalive_ping_usd
     )
 
     # 1. Prometheus / SavingsTracker.
