@@ -49,6 +49,14 @@ interface ClaudeCodeResult {
   targets: ClaudeTarget[];
 }
 
+/** Keep sessions lean, from `lean_status` and `set_lean`. */
+interface LeanStatus {
+  enabled: boolean;
+  window: number | null;
+  terminal_connected: boolean;
+  code_tab: string;
+}
+
 interface Summary {
   user: User;
   estimate: {
@@ -544,6 +552,8 @@ function ClaudeCodeCard({ tool, onConnected }: { tool: Tool; onConnected: () => 
   const [targets, setTargets] = useState<ClaudeTarget[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [lean, setLean] = useState<LeanStatus | null>(null);
+  const [leanBusy, setLeanBusy] = useState(false);
 
   const refreshStatus = useCallback(
     () =>
@@ -556,6 +566,29 @@ function ClaudeCodeCard({ tool, onConnected }: { tool: Tool; onConnected: () => 
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (status !== "connected") {
+      setLean(null);
+      return;
+    }
+    invoke<LeanStatus>("lean_status")
+      .then(setLean)
+      .catch(() => setLean(null));
+  }, [status]);
+
+  async function toggleLean(enabled: boolean) {
+    setLeanBusy(true);
+    setError("");
+    try {
+      setLean(await invoke<LeanStatus>("set_lean", { enabled }));
+    } catch (e) {
+      setError(message(e));
+      setLean(await invoke<LeanStatus>("lean_status").catch(() => null));
+    } finally {
+      setLeanBusy(false);
+    }
+  }
 
   async function toggle(connected: boolean) {
     setBusy(true);
@@ -579,6 +612,23 @@ function ClaudeCodeCard({ tool, onConnected }: { tool: Tool; onConnected: () => 
       {status === "connected" && (
         <>
           <p className="ok small">Connected. {tool.steps}</p>
+          {lean && (
+            <label className="lean-toggle">
+              <input
+                type="checkbox"
+                checked={lean.enabled}
+                disabled={leanBusy || !lean.terminal_connected}
+                onChange={(e) => void toggleLean(e.currentTarget.checked)}
+              />
+              <span>
+                <strong>Keep sessions lean (compact at 200k)</strong>
+                <span className="muted small">
+                  Compacts long Claude Code sessions at 200k tokens instead of near 1M. Cuts cost
+                  on long sessions; Claude keeps a summary of earlier work.
+                </span>
+              </span>
+            </label>
+          )}
           {targets.length > 0 && (
             <ul className="targets">
               {targets.map((t) => (

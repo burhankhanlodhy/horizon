@@ -453,6 +453,63 @@ pub fn codetab_install_args(watch: bool) -> Vec<&'static str> {
     args
 }
 
+/// The compaction window "Keep sessions lean" sets, in tokens.
+pub const LEAN_WINDOW: u32 = 200_000;
+
+/// Arguments for `horizon lean on --window <LEAN_WINDOW> --json`, or `horizon lean off --json`.
+pub fn lean_args(enabled: bool) -> Vec<String> {
+    if enabled {
+        vec![
+            "lean".into(),
+            "on".into(),
+            "--window".into(),
+            LEAN_WINDOW.to_string(),
+            "--json".into(),
+        ]
+    } else {
+        vec!["lean".into(), "off".into(), "--json".into()]
+    }
+}
+
+/// Arguments for `horizon lean status --json`.
+pub fn lean_status_args() -> Vec<&'static str> {
+    vec!["lean", "status", "--json"]
+}
+
+/// Keep-sessions-lean state, as `horizon lean status --json` reports it.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct LeanStatus {
+    pub enabled: bool,
+    pub window: Option<u64>,
+    /// False when the terminal's Claude Code is not connected, so lean cannot change there.
+    pub terminal_connected: bool,
+    pub code_tab: String,
+}
+
+pub fn parse_lean_status(raw: &str) -> Result<LeanStatus, String> {
+    let value: Value =
+        serde_json::from_str(raw).map_err(|e| format!("Unreadable lean status: {e}"))?;
+    let enabled = value["enabled"].as_bool().ok_or("Lean status has no enabled flag")?;
+    let terminal = value["terminal"].as_str().ok_or("Lean status has no terminal state")?;
+    let code_tab = value["code_tab"].as_str().ok_or("Lean status has no Code tab state")?;
+    Ok(LeanStatus {
+        enabled,
+        window: value["window"].as_u64(),
+        terminal_connected: terminal != "not-connected",
+        code_tab: code_tab.to_string(),
+    })
+}
+
+/// The message to show when `horizon lean on|off --json` left the terminal's
+/// setting alone because the user had changed it. `None` for every other result.
+pub fn lean_change_error(raw: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    (value["terminal"].as_str() == Some("user-edited")).then(|| {
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW was changed in your Claude settings, so it was left alone."
+            .to_string()
+    })
+}
+
 /// Every loopback port a tool uses for its forwarder, once each.
 pub fn forwarder_ports() -> Vec<u16> {
     let mut ports: Vec<u16> = TOOLS.iter().map(|t| t.port).collect();
@@ -1050,5 +1107,69 @@ mod codetab_args_tests {
         assert!(!CODE_TAB_TOOL_SEARCH);
         assert_eq!(codetab_install_args(false), vec!["codetab", "install"]);
         assert_eq!(codetab_install_args(true), vec!["codetab", "install", "--watch"]);
+    }
+}
+
+#[cfg(test)]
+mod lean_tests {
+    use super::*;
+
+    #[test]
+    fn lean_on_passes_the_window_and_asks_for_json() {
+        assert_eq!(LEAN_WINDOW, 200_000);
+        assert_eq!(
+            lean_args(true),
+            vec!["lean", "on", "--window", "200000", "--json"]
+        );
+    }
+
+    #[test]
+    fn lean_off_asks_for_json_without_a_window() {
+        assert_eq!(lean_args(false), vec!["lean", "off", "--json"]);
+        assert_eq!(lean_status_args(), vec!["lean", "status", "--json"]);
+    }
+
+    #[test]
+    fn parses_an_on_status() {
+        let raw = r#"{"enabled":true,"window":200000,"terminal":"on","terminal_value":"200000","code_tab":"on"}"#;
+        assert_eq!(
+            parse_lean_status(raw),
+            Ok(LeanStatus {
+                enabled: true,
+                window: Some(200_000),
+                terminal_connected: true,
+                code_tab: "on".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_an_off_status_with_no_terminal_connection() {
+        let raw = r#"{"enabled":false,"window":null,"terminal":"not-connected","terminal_value":null,"code_tab":"not-installed"}"#;
+        assert_eq!(
+            parse_lean_status(raw),
+            Ok(LeanStatus {
+                enabled: false,
+                window: None,
+                terminal_connected: false,
+                code_tab: "not-installed".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_status_missing_a_field_is_an_error_not_a_guess() {
+        assert!(parse_lean_status(r#"{"window":200000}"#).is_err());
+        assert!(parse_lean_status(r#"{"enabled":true,"window":1,"terminal":"on"}"#).is_err());
+        assert!(parse_lean_status("not json").is_err());
+    }
+
+    #[test]
+    fn a_user_edited_terminal_value_is_reported_as_an_error_message() {
+        let raw = r#"{"window":200000,"terminal":"user-edited","code_tab":"on"}"#;
+        assert!(lean_change_error(raw).unwrap().contains("left alone"));
+        let ok = r#"{"window":200000,"terminal":"on","code_tab":"on"}"#;
+        assert_eq!(lean_change_error(ok), None);
+        assert_eq!(lean_change_error("not json"), None);
     }
 }
