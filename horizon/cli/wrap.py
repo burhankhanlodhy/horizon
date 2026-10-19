@@ -1297,7 +1297,7 @@ def _wrap_settings_lock(settings_path: Path) -> Any:
     """
     from contextlib import nullcontext
 
-    lock_path = settings_path.parent / ".horizon_wrap_settings.lock"
+    lock_path = _wrap_settings_lock_path(settings_path)
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = open(lock_path, "a+b")  # noqa: SIM115
@@ -1306,6 +1306,23 @@ def _wrap_settings_lock(settings_path: Path) -> Any:
         # degraded, not unusable.
         return nullcontext()
     return _locked_file(lock_file)
+
+
+def _wrap_settings_lock_path(settings_path: Path) -> Path:
+    """The lock file for ``settings_path``, kept in the Horizon workspace.
+
+    One file per settings file, named by a hash of its path, so every caller
+    that edits the same file takes the same lock. It lives outside the user's
+    folders: a lock beside ``~/.claude/settings.json`` would outlast every
+    unwrap and disconnect.
+    """
+    import hashlib
+
+    from horizon.paths import workspace_dir
+
+    key = os.path.normcase(os.path.abspath(settings_path))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return workspace_dir() / "locks" / f"settings-{digest}.lock"
 
 
 @contextmanager

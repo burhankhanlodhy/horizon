@@ -994,3 +994,23 @@ def test_locked_file_waits_for_another_process_on_windows(tmp_path) -> None:
         assert waited >= 0.5
     finally:
         holder.wait(timeout=10)
+
+
+def test_settings_lock_lives_in_the_workspace_not_beside_the_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wrap, unwrap and Connect leave no lock file in ~/.claude or the project."""
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(workspace))
+    settings = tmp_path / "home" / ".claude" / "settings.json"
+    other = tmp_path / "proj" / ".claude" / "settings.local.json"
+
+    with wrap_mod._wrap_settings_lock(settings):
+        pass
+
+    assert not (settings.parent).exists() or list(settings.parent.iterdir()) == []
+    lock = wrap_mod._wrap_settings_lock_path(settings)
+    assert lock.parent == workspace / "locks" and lock.exists()
+    # The same file always maps to the same lock; different files do not share one.
+    assert wrap_mod._wrap_settings_lock_path(settings.parent / "." / "settings.json") == lock
+    assert wrap_mod._wrap_settings_lock_path(other) != lock
