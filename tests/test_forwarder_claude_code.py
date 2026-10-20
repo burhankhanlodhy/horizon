@@ -68,6 +68,27 @@ def _stream_handler(seen: dict, body: bytes = STREAM, extra: dict | None = None)
     return handler
 
 
+def test_list_price_counts_content_that_stays_removed_on_later_turns(tmp_path: Path) -> None:
+    """x-horizon-tokens-saved counts only first-time removals; the list figure
+    prices everything the request no longer carries (before minus after)."""
+    seen: dict = {}
+    stats = ClaudeCodeStats(tmp_path / "claude-code")
+    handler = _stream_handler(seen, extra={"x-horizon-tokens-saved": "40"})
+    client = TestClient(_app(handler, stats=stats))
+
+    client.post(
+        "/v1/messages",
+        json={"model": "claude-sonnet-4-5", "stream": True},
+        headers={"x-claude-code-session-id": "sess-later"},
+    )
+    stats.close()
+    status = json.loads((tmp_path / "claude-code" / "status.json").read_text(encoding="utf-8"))
+    session = status["sessions"]["sess-later"]
+    price = list_input_price_per_token("claude-sonnet-4-5")
+    assert price is not None
+    assert session["trimmed_list_usd"] == pytest.approx(400 * price, rel=1e-4)
+
+
 # ----------------------------------------------------------------- SSE comment filter
 
 

@@ -643,10 +643,16 @@ class RequestRecorder:
         if self._buffer:
             cache_written = cache_written or body_has_cache_write(bytes(self._buffer))
 
-        price = list_input_price_per_token(model) if saved > 0 else None
-        unpriced = saved > 0 and price is None
-        priced = saved > 0 and price is not None
-        list_usd = saved * price if price is not None else 0.0
+        # The list-price figure prices what this request no longer carries:
+        # before minus after. ``x-horizon-tokens-saved`` counts only content
+        # removed for the first time, so a removal that stays removed on every
+        # later turn was priced once and then read as nothing (a 4% trim showed
+        # as $0.00). The header is the fallback when the counts are missing.
+        trimmed = max(before - after, 0) if before > 0 else saved
+        price = list_input_price_per_token(model) if trimmed > 0 else None
+        unpriced = trimmed > 0 and price is None
+        priced = trimmed > 0 and price is not None
+        list_usd = trimmed * price if price is not None else 0.0
         self.stats.record(
             session_id=self.session_id,
             model=model,
