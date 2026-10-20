@@ -6,7 +6,8 @@
   sign.ps1 <file> [<file> ...]
 
   Tauri calls it with one path per file (bundle.windows.signCommand in
-  app\src-tauri\tauri.signing.conf.json); build-installer.ps1 calls it for the
+  app\src-tauri\tauri.signing.generated.json, written by build-installer.ps1);
+  build-installer.ps1 also calls it directly for the
   bundled helper exes and client files.
 
   Signing is configured when all of these are set:
@@ -36,6 +37,8 @@
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Files)
 
 $ErrorActionPreference = "Stop"
+# Tauri's signCommand hides this script's output; CS_SIGN_LOG keeps a copy.
+if ($env:CS_SIGN_LOG) { Start-Transcript -LiteralPath $env:CS_SIGN_LOG -Append | Out-Null }
 $required = @("CS_SIGN_ENDPOINT", "CS_SIGN_ACCOUNT", "CS_SIGN_PROFILE")
 $present = @($required | Where-Object { [Environment]::GetEnvironmentVariable($_) })
 if ($present.Count -eq 0) {

@@ -43,7 +43,8 @@ if ($PyInstaller) {
 # Active only when all three CS_SIGN_* variables are set; otherwise nothing here runs.
 # Signs the helper exes and the client's files that are not already validly
 # signed (PSF/Microsoft files are left alone) before tauri packs them. Tauri
-# signs the app exe and installer itself via src-tauri\tauri.signing.conf.json.
+# signs the app exe and installer itself through the signCommand written below
+# (src-tauri\tauri.signing.generated.json, git-ignored).
 $signingConfig = @()
 if ($env:CS_SIGN_ENDPOINT -and $env:CS_SIGN_ACCOUNT -and $env:CS_SIGN_PROFILE) {
     $helperDir = Join-Path $PSScriptRoot "claude-code-tools\target\release"
@@ -56,7 +57,21 @@ if ($env:CS_SIGN_ENDPOINT -and $env:CS_SIGN_ACCOUNT -and $env:CS_SIGN_PROFILE) {
             ForEach-Object { $_.FullName }
     )
     if ($toSign.Count) { & (Join-Path $PSScriptRoot "sign.ps1") @toSign }
-    $signingConfig = @("--config", "src-tauri/tauri.signing.conf.json")
+    # Tauri runs signCommand without a shell and hides its output. Give it the
+    # same PowerShell that runs this script (pwsh when available), the script's
+    # absolute path as separate arguments (paths may contain spaces), and a log
+    # that is printed below if packaging fails.
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+    $env:CS_SIGN_LOG = Join-Path ([IO.Path]::GetTempPath()) "cs-tauri-sign.log"
+    Remove-Item -LiteralPath $env:CS_SIGN_LOG -ErrorAction SilentlyContinue
+    $generated = Join-Path $PSScriptRoot "app\src-tauri\tauri.signing.generated.json"
+    $signCommand = [ordered]@{
+        cmd  = $shell
+        args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "sign.ps1"), "%1")
+    }
+    $config = [ordered]@{ bundle = [ordered]@{ windows = [ordered]@{ signCommand = $signCommand } } }
+    [IO.File]::WriteAllText($generated, ($config | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+    $signingConfig = @("--config", "src-tauri/tauri.signing.generated.json")
 }
 
 Push-Location (Join-Path $PSScriptRoot "app")
@@ -65,7 +80,13 @@ try {
     npm ci
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     npx tauri build @updaterConfig @signingConfig
-    if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
+    if ($LASTEXITCODE -ne 0) {
+        if ($env:CS_SIGN_LOG -and (Test-Path $env:CS_SIGN_LOG)) {
+            "--- signCommand log ($env:CS_SIGN_LOG) ---"
+            Get-Content $env:CS_SIGN_LOG
+        }
+        throw "tauri build failed"
+    }
 }
 finally {
     Pop-Location

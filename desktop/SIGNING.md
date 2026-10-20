@@ -11,7 +11,7 @@ How it fits together:
 | Piece | Role |
 |---|---|
 | `desktop/sign.ps1` | Signs the files given (signtool + Artifact Signing dlib), or prints `Signing skipped (not configured)`. Verifies every signature. |
-| `desktop/app/src-tauri/tauri.signing.conf.json` | `bundle.windows.signCommand`: Tauri signs the app exe and installer through `sign.ps1`. |
+| `desktop/app/src-tauri/tauri.signing.generated.json` | Written by `build-installer.ps1` (git-ignored): `bundle.windows.signCommand`, so Tauri signs the app exe and installer through `sign.ps1`. |
 | `desktop/build-installer.ps1` | When configured, signs the helper exes and the client's files that are not already valid, then adds the signing config to `tauri build`. |
 | `.github/workflows/desktop.yml`, job `windows` | Azure OIDC login, dlib install, build, smoke test, signature check, upload. |
 
