@@ -56,6 +56,11 @@ Node.js. From PowerShell (not Git Bash):
 .\desktop\build-installer.ps1
 ```
 
+The GitHub Actions "Desktop app" workflow builds the same installer (job
+`windows`, artifact `contextshrink-windows-x86_64`). When the Azure Artifact
+Signing variables are set, the installer and helper exes are signed; see
+[SIGNING.md](SIGNING.md) for the setup, local signing and verification.
+
 Development run (uses the frozen client from `client\dist`):
 
 ```powershell
@@ -69,8 +74,13 @@ different dashboard origin or proxy.
 ## Publish to the Downloads page
 
 ```powershell
+gh run download <run-id> -n contextshrink-windows-x86_64 -D desktop\dist-windows
 .\desktop\publish-installer.ps1
 ```
+
+The Windows installer is taken from `desktop\dist-windows` when the CI artifact
+for this version is there, otherwise from the local build. Installers are never
+hosted on GitHub; the artifact is only a hand-off to this script.
 
 Uploads the installer and a `latest.json` (version, file, size, SHA-256, date)
 to the Pi 4 and prints one `ssh -t ... /tmp/cs-publish-release.sh` command that

@@ -18,9 +18,22 @@
   -Target pi4 is the old path: stage on the Pi 4 and print the one sudo
   command that installs into /var/www/contextshrink/releases.
 
-  Run after desktop\build-installer.ps1 and the macOS/Linux builds (GitHub
-  Actions "Desktop app" artifacts, unpacked into desktop\dist-macos and
-  desktop\dist-linux), from PowerShell. -Platforms limits what is published.
+  Release flow (the Windows installer is built and signed in CI):
+    1. Tag desktop-v<version> (or run "Desktop app" on Actions). The workflow
+       builds macOS, Linux and Windows and uploads one artifact per platform.
+    2. Download the artifacts into the folders this script reads:
+         gh run download <run-id> -n contextshrink-windows-x86_64 -D desktop\dist-windows
+         gh run download <run-id> -n contextshrink-macos-arm64 -D desktop\dist-macos
+         gh run download <run-id> -n contextshrink-linux-x86_64 -D desktop\dist-linux
+    3. .\desktop\publish-installer.ps1
+
+  The Windows installer comes from desktop\dist-windows when it is there for
+  this version, otherwise from the local build (desktop\build-installer.ps1,
+  app\src-tauri\target\release\bundle\nsis). Windows installers from CI are
+  signed with Azure Artifact Signing when the repo is configured (desktop\SIGNING.md);
+  this script warns if the installer it publishes has no valid Authenticode signature.
+
+  Run from PowerShell. -Platforms limits what is published.
 #>
 param(
     [ValidateSet("r2", "pi4")]
@@ -34,9 +47,21 @@ $ErrorActionPreference = "Stop"
 
 $app = Join-Path $PSScriptRoot "app"
 $version = (Get-Content (Join-Path $app "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
-$installer = Get-ChildItem (Join-Path $app "src-tauri\target\release\bundle\nsis\*_${version}_x64-setup.exe") |
+# Prefer the CI-built installer (desktop\dist-windows, see the release flow
+# above); fall back to the local build.
+$installer = Get-ChildItem (Join-Path $PSScriptRoot "dist-windows\*_${version}_x64-setup.exe") -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $installer) { throw "No installer for version $version. Run desktop\build-installer.ps1 first." }
+if (-not $installer) {
+    $installer = Get-ChildItem (Join-Path $app "src-tauri\target\release\bundle\nsis\*_${version}_x64-setup.exe") -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+if (-not $installer) {
+    throw "No Windows installer for version $version in desktop\dist-windows or the local build. Download the CI artifact or run desktop\build-installer.ps1."
+}
+"Windows installer: $($installer.FullName)"
+if ((Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status -ne "Valid") {
+    Write-Warning "$($installer.Name) has no valid Authenticode signature."
+}
 
 function Get-Asset([IO.FileInfo]$File, [string]$Os, [string]$Kind) {
     [ordered]@{
