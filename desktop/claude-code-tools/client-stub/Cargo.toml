@@ -1,0 +1,16 @@
+[package]
+name = "horizon-client-stub"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "horizon.exe for the Windows desktop client: runs the bundled embeddable Python with horizon_main.py"
+
+[[bin]]
+# Builds horizon.exe, the name the desktop app and the wrap scripts run.
+name = "horizon"
+path = "src/main.rs"
+
+[[bin]]
+# Test-only stand-in for the bundled python.exe (see tests/stub.rs).
+name = "stub-test-child"
+path = "src/bin/stub_test_child.rs"
