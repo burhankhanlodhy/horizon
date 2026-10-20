@@ -165,13 +165,19 @@ jobs:
         run: |
           $installer = @(Get-ChildItem -File "desktop\app\src-tauri\target\release\bundle\nsis\*.exe")
           if (-not $installer) { throw "No NSIS installer was built" }
-          $files = @(Get-ChildItem -File "desktop\app\src-tauri\target\release\*.exe", "desktop\claude-code-tools\target\release\*.exe" -ErrorAction SilentlyContinue)
+          # The shipped exes only (target\release also holds test-only children).
+          $files = @(Get-Item -LiteralPath "desktop\app\src-tauri\target\release\contextshrink-desktop.exe")
+          $files += @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe" |
+              ForEach-Object { Get-Item -LiteralPath (Join-Path "desktop\claude-code-tools\target\release" $_) })
           $files += $installer
           $files += @(Get-ChildItem "desktop\client\dist\horizon" -Recurse -File -Include *.exe, *.dll, *.pyd)
           $bad = @($files | Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" })
           "Checked $($files.Count) signed-candidate files"
           if ($bad) {
-              $bad | ForEach-Object { "Not Valid: $($_.FullName)" }
+              $bad | ForEach-Object {
+                  $sig = Get-AuthenticodeSignature -LiteralPath $_.FullName
+                  "Not Valid: $($_.FullName): $($sig.Status) $($sig.StatusMessage)"
+              }
               throw "$($bad.Count) file(s) do not have a valid signature"
           }
       - name: Report unsigned build

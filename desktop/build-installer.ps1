@@ -80,13 +80,15 @@ try {
     npm ci
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     npx tauri build @updaterConfig @signingConfig
-    if ($LASTEXITCODE -ne 0) {
-        if ($env:CS_SIGN_LOG -and (Test-Path $env:CS_SIGN_LOG)) {
-            "--- signCommand log ($env:CS_SIGN_LOG) ---"
-            Get-Content $env:CS_SIGN_LOG
-        }
-        throw "tauri build failed"
+    $tauriExit = $LASTEXITCODE
+    # Tauri hides what its signCommand prints; show the script's own record.
+    if ($env:CS_SIGN_LOG -and (Test-Path $env:CS_SIGN_LOG)) {
+        "--- signCommand log ($env:CS_SIGN_LOG) ---"
+        Get-Content $env:CS_SIGN_LOG
+    } elseif ($signingConfig) {
+        Write-Warning "Tauri's signCommand left no log at $($env:CS_SIGN_LOG): sign.ps1 may not have run."
     }
+    if ($tauriExit -ne 0) { throw "tauri build failed" }
 }
 finally {
     Pop-Location
