@@ -1,13 +1,27 @@
 //! Claude Code routing as the app sees it: the files the forwarder and the
 //! helpers share under `%LOCALAPPDATA%\ContextShrink\claude-code`, the tray's
 //! pause flag and savings line, the per-target results Connect shows, and the
-//! HKCU Run entry that starts the app in the tray while a tool is connected.
+//! Startup shortcut that starts the app in the tray while a tool is connected.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
+
+#[cfg(windows)]
+use windows::core::{Interface, PCWSTR};
+#[cfg(windows)]
+use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+#[cfg(windows)]
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READ,
+};
+#[cfg(windows)]
+use windows::Win32::UI::Shell::{
+    IShellLinkW, SHGetKnownFolderPath, ShellLink, FOLDERID_Startup, KF_FLAG_DEFAULT,
+};
 
 use crate::client::FORWARDER_PORT;
 
@@ -17,8 +31,17 @@ pub const ID: &str = "claude-code";
 const PLUGIN_KEY: &str = "contextshrink@contextshrink";
 /// The status line command the Connect step installs (`contextshrink-status.exe`).
 const STATUS_LINE_MARK: &str = "contextshrink-status";
-/// Under HKEY_CURRENT_USER.
+/// The sign-in shortcut in the user's Startup folder.
+#[cfg(windows)]
+const STARTUP_SHORTCUT: &str = "ContextShrink.lnk";
+/// Passed to the app when Windows starts it at sign-in: it opens in the tray.
+#[cfg(windows)]
+const STARTUP_ARGS: &str = "--background";
+/// Under HKEY_CURRENT_USER. Older installs started the app from this value;
+/// it is only ever removed now.
+#[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
 const RUN_VALUE: &str = "ContextShrink";
 
 /// The helper executables the Connect step and the status line run from here.
@@ -290,27 +313,190 @@ pub fn current_view() -> SettingsView {
     view(&read_user_settings(), FORWARDER_PORT)
 }
 
-/// Starts the app in the tray at sign-in while any tool is connected
-/// (`--background`), and removes that entry otherwise. Windows only.
+/// Starts the app in the tray at sign-in while any tool is connected, and stops
+/// that start otherwise. Windows only.
 ///
-/// Written through the registry API, and only when the value differs: the app
-/// calls this on every start and connect, and security tools flag programs that
-/// keep rewriting their Run entry (or run `reg.exe` to do it).
+/// The start is a shortcut in the user's Startup folder. Older installs used an
+/// HKCU Run value instead, which is removed here on every call. Each step is
+/// written only when it differs: the app calls this on every start and connect.
 #[cfg(windows)]
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let wanted = enabled.then(|| autostart_command(&exe));
-    sync_run_value(windows_registry::CURRENT_USER, RUN_KEY, RUN_VALUE, wanted.as_deref())
+    let shortcut = startup_folder().and_then(|folder| sync_startup_shortcut(&folder, &exe, enabled));
+    let legacy = sync_run_value(windows_registry::CURRENT_USER, RUN_KEY, RUN_VALUE, None);
+    shortcut.and(legacy)
 }
 
-/// The Run entry's command line for the app at `exe`.
+/// Where the user's Startup folder is, from the Known Folder API.
 #[cfg(windows)]
-fn autostart_command(exe: &Path) -> String {
-    format!("\"{}\" --background", exe.display())
+fn startup_folder() -> Result<PathBuf, String> {
+    let raw = unsafe { SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DEFAULT, None) }
+        .map_err(|e| format!("Could not find the Windows Startup folder: {e}"))?;
+    let folder = unsafe { raw.to_string() };
+    unsafe { CoTaskMemFree(Some(raw.0 as *const _)) };
+    folder
+        .map(PathBuf::from)
+        .map_err(|e| format!("Could not read the Windows Startup folder: {e}"))
+}
+
+/// What the Startup shortcut starts: the target, its arguments and its folder.
+#[cfg(windows)]
+#[derive(Debug)]
+struct Shortcut {
+    target: PathBuf,
+    args: String,
+    working_dir: PathBuf,
+}
+
+#[cfg(windows)]
+impl Shortcut {
+    /// The shortcut `set_autostart` wants for the app at `exe`.
+    fn for_exe(exe: &Path) -> Self {
+        Self {
+            target: exe.to_path_buf(),
+            args: STARTUP_ARGS.to_string(),
+            working_dir: exe.parent().map(Path::to_path_buf).unwrap_or_default(),
+        }
+    }
+
+    /// Windows paths are not case-sensitive, so a case-only difference is the same.
+    fn matches(&self, other: &Shortcut) -> bool {
+        fn same_text(a: &Path, b: &Path) -> bool {
+            a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+        }
+        same_text(&self.target, &other.target)
+            && self.args == other.args
+            && same_text(&self.working_dir, &other.working_dir)
+    }
+}
+
+/// Makes `folder\ContextShrink.lnk` start `exe` with `--background`, or removes
+/// it when `enabled` is false. The shortcut is written only when it is missing
+/// or differs, and a missing shortcut is fine when disabling.
+#[cfg(windows)]
+fn sync_startup_shortcut(folder: &Path, exe: &Path, enabled: bool) -> Result<(), String> {
+    let path = folder.join(STARTUP_SHORTCUT);
+    if !enabled {
+        return match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("Could not remove {}: {e}", path.display())),
+        };
+    }
+    let wanted = Shortcut::for_exe(exe);
+    if read_shortcut(&path).is_ok_and(|current| current.matches(&wanted)) {
+        return Ok(());
+    }
+    write_shortcut(&path, &wanted)
+}
+
+/// Reads the shortcut at `path` back: where it points and how it starts.
+#[cfg(windows)]
+fn read_shortcut(path: &Path) -> Result<Shortcut, String> {
+    let _com = ComScope::new()?;
+    let link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
+        .map_err(|e| format!("Could not open the shortcut helper: {e}"))?;
+    let file: IPersistFile = link.cast().map_err(|e| e.to_string())?;
+    let wide_path = wide(&path.to_string_lossy());
+    unsafe { file.Load(PCWSTR(wide_path.as_ptr()), STGM_READ) }
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    Ok(Shortcut {
+        target: PathBuf::from(link_text(|buf| unsafe {
+            link.GetPath(buf, std::ptr::null_mut(), 0)
+        })?),
+        args: link_text(|buf| unsafe { link.GetArguments(buf) })?,
+        working_dir: PathBuf::from(link_text(|buf| unsafe {
+            link.GetWorkingDirectory(buf)
+        })?),
+    })
+}
+
+/// Writes `shortcut` to `path` through a temp file that is renamed into place,
+/// so a failed save never leaves a half-written shortcut.
+#[cfg(windows)]
+fn write_shortcut(path: &Path, shortcut: &Shortcut) -> Result<(), String> {
+    let _com = ComScope::new()?;
+    let link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
+        .map_err(|e| format!("Could not open the shortcut helper: {e}"))?;
+    let target = wide(&shortcut.target.to_string_lossy());
+    let args = wide(&shortcut.args);
+    let working_dir = wide(&shortcut.working_dir.to_string_lossy());
+    let description = wide("ContextShrink");
+    let set = |result: windows::core::Result<()>| {
+        result.map_err(|e| format!("Could not write {}: {e}", path.display()))
+    };
+    unsafe {
+        set(link.SetPath(PCWSTR(target.as_ptr())))?;
+        set(link.SetArguments(PCWSTR(args.as_ptr())))?;
+        set(link.SetWorkingDirectory(PCWSTR(working_dir.as_ptr())))?;
+        set(link.SetDescription(PCWSTR(description.as_ptr())))?;
+    }
+    let file: IPersistFile = link.cast().map_err(|e| e.to_string())?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let tmp = path.with_file_name(format!("{name}.new"));
+    let wide_tmp = wide(&tmp.to_string_lossy());
+    if let Err(e) = unsafe { file.Save(PCWSTR(wide_tmp.as_ptr()), false) } {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Could not write {}: {e}", path.display()));
+    }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Could not write {}: {e}", path.display())
+    })
+}
+
+/// A UTF-16 string with the terminating NUL, for the Win32 calls.
+#[cfg(windows)]
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Runs one of the shortcut's text getters and returns what it wrote.
+#[cfg(windows)]
+fn link_text(
+    get: impl FnOnce(&mut [u16]) -> windows::core::Result<()>,
+) -> Result<String, String> {
+    let mut buf = vec![0u16; 1024];
+    get(&mut buf).map_err(|e| e.to_string())?;
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Ok(String::from_utf16_lossy(&buf[..len]))
+}
+
+/// Initializes COM on this thread for as long as the guard lives. A thread that
+/// already uses COM in another mode keeps it, and is not uninitialized here.
+#[cfg(windows)]
+struct ComScope {
+    initialized: bool,
+}
+
+#[cfg(windows)]
+impl ComScope {
+    fn new() -> Result<Self, String> {
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr == RPC_E_CHANGED_MODE {
+            Ok(Self { initialized: false })
+        } else if hr.is_ok() {
+            // S_OK, or S_FALSE when this thread already had COM: both balance with uninit.
+            Ok(Self { initialized: true })
+        } else {
+            Err(format!("Could not start COM: {hr:?}"))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ComScope {
+    fn drop(&mut self) {
+        if self.initialized {
+            unsafe { CoUninitialize() };
+        }
+    }
 }
 
 /// Makes `name` under `parent\path` hold `wanted` (or be absent for `None`),
-/// writing only when it does not already.
+/// writing only when it does not already. The Run value is only removed now;
+/// the key is opened read-only first so an install without the value is never
+/// written to.
 #[cfg(windows)]
 fn sync_run_value(
     parent: &windows_registry::Key,
@@ -331,12 +517,16 @@ fn sync_run_value(
         }
         None => {
             // A missing key or value is the state we want.
+            let present = parent
+                .open(path)
+                .and_then(|key| key.get_value(name))
+                .is_ok();
+            if !present {
+                return Ok(());
+            }
             let Ok(key) = parent.options().read().write().open(path) else {
                 return Ok(());
             };
-            if key.get_value(name).is_err() {
-                return Ok(());
-            }
             failed(key.remove_value(name))
         }
     }
@@ -464,13 +654,65 @@ mod tests {
         hkcu.remove_tree(&path).unwrap();
     }
 
+    /// A throwaway folder under the temp dir. The real Startup folder is never
+    /// used by these tests.
+    #[cfg(windows)]
+    fn scratch_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("cs-startup-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[cfg(windows)]
     #[test]
-    fn autostart_command_quotes_the_exe_and_starts_in_the_tray() {
-        let exe = Path::new(r"C:\Program Files\ContextShrink\contextshrink-desktop.exe");
-        assert_eq!(
-            autostart_command(exe),
-            r#""C:\Program Files\ContextShrink\contextshrink-desktop.exe" --background"#
-        );
+    fn startup_shortcut_is_created_once_and_follows_the_exe() {
+        let folder = scratch_folder("create");
+        let lnk = folder.join(STARTUP_SHORTCUT);
+        let exe_a = folder.join("bin-a").join("contextshrink-desktop.exe");
+        let exe_b = folder.join("bin-b").join("contextshrink-desktop.exe");
+
+        sync_startup_shortcut(&folder, &exe_a, true).unwrap();
+        let read = read_shortcut(&lnk).unwrap();
+        assert_eq!(read.target, exe_a);
+        assert_eq!(read.args, STARTUP_ARGS);
+        assert_eq!(read.working_dir, exe_a.parent().unwrap());
+        assert!(!folder.join("ContextShrink.lnk.new").exists(), "the temp file is renamed away");
+
+        // The same exe leaves the shortcut alone.
+        let modified = fs::metadata(&lnk).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        sync_startup_shortcut(&folder, &exe_a, true).unwrap();
+        assert_eq!(fs::metadata(&lnk).unwrap().modified().unwrap(), modified);
+
+        // A different exe rewrites it.
+        sync_startup_shortcut(&folder, &exe_b, true).unwrap();
+        assert_eq!(read_shortcut(&lnk).unwrap().target, exe_b);
+
+        sync_startup_shortcut(&folder, &exe_b, false).unwrap();
+        assert!(!lnk.exists());
+        sync_startup_shortcut(&folder, &exe_b, false).unwrap(); // already gone
+
+        let _ = fs::remove_dir_all(&folder);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_shortcut_with_other_arguments_is_rewritten() {
+        let folder = scratch_folder("args");
+        let exe = folder.join("contextshrink-desktop.exe");
+        let lnk = folder.join(STARTUP_SHORTCUT);
+        write_shortcut(
+            &lnk,
+            &Shortcut { target: exe.clone(), args: String::new(), working_dir: folder.clone() },
+        )
+        .unwrap();
+
+        sync_startup_shortcut(&folder, &exe, true).unwrap();
+        let read = read_shortcut(&lnk).unwrap();
+        assert_eq!(read.args, STARTUP_ARGS);
+        assert_eq!(read.working_dir, folder);
+
+        let _ = fs::remove_dir_all(&folder);
     }
 }
