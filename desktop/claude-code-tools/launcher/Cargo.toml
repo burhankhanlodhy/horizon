@@ -17,3 +17,8 @@ path = "src/bin/cs_test_child.rs"
 
 [dependencies]
 serde_json = "1"
+
+[[bin]]
+# Test-only stand-in for contextshrink-codetab.exe, used by the self-heal tests.
+name = "cs-test-helper"
+path = "src/bin/cs_test_helper.rs"

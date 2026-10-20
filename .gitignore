@@ -301,3 +301,4 @@ desktop/dist-windows/
 # Price rows the frozen desktop client ships (written by desktop/client/build_pricing.py)
 horizon/pricing/_model_prices.json
 desktop/app/src-tauri/tauri.signing.generated.json
+desktop/dist-claude-code-tools/

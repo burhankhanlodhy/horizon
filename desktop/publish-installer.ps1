@@ -34,6 +34,20 @@
   this script warns if the installer it publishes has no valid Authenticode signature.
 
   Run from PowerShell. -Platforms limits what is published.
+
+  -ClaudeCodeTools <dir> also publishes the npx Code-tab tools (for
+  npx contextshrink-claude): claude-code-launcher.exe, contextshrink-codetab.exe
+  and manifest.json from <dir>, for example the CI artifact
+  contextshrink-claude-code-tools-windows, downloaded into desktop\dist-claude-code-tools:
+    gh run download <run-id> -n contextshrink-claude-code-tools-windows -D desktop\dist-claude-code-tools
+    .\desktop\publish-installer.ps1 -ClaudeCodeTools desktop\dist-claude-code-tools
+  Both exes must have a Valid Authenticode signature and match manifest.json, or
+  nothing is uploaded. They go to <Bucket>/claude-code-tools/<version>/ (the version is
+  the one in manifest.json) and are served at
+  https://app.contextshrink.com/releases/claude-code-tools/<version>/<file>. -Target r2 only.
+  The installer for the current version is still required in the same run, unless
+  -ToolsOnly is given: then only the tools are uploaded and latest.json, updater.json
+  and the installers are left exactly as they are.
 #>
 param(
     [ValidateSet("r2", "pi4")]
@@ -41,9 +55,60 @@ param(
     [string]$Bucket = "contextshrink-releases",
     [string]$Pi4 = "raspberrypi4@192.168.0.64",
     [ValidateSet("windows", "macos", "linux")]
-    [string[]]$Platforms = @("windows", "macos", "linux")
+    [string[]]$Platforms = @("windows", "macos", "linux"),
+    # Folder with claude-code-launcher.exe, contextshrink-codetab.exe and manifest.json.
+    [string]$ClaudeCodeTools,
+    # Upload only the -ClaudeCodeTools files; leave the installers and manifests alone.
+    [switch]$ToolsOnly
 )
 $ErrorActionPreference = "Stop"
+
+# Code-tab tools: checked before anything is uploaded, so a bad signature or a
+# mismatch refuses the whole run.
+$toolsFiles = @()
+$toolsVersion = ""
+if ($ClaudeCodeTools) {
+    if ($Target -ne "r2") { throw "-ClaudeCodeTools publishes to R2 only: use -Target r2." }
+    $toolsDir = (Resolve-Path -LiteralPath $ClaudeCodeTools -ErrorAction Stop).Path
+    $manifestFile = Join-Path $toolsDir "manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestFile)) { throw "No manifest.json in $toolsDir." }
+    $toolsManifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
+    $toolsVersion = [string]$toolsManifest.version
+    if ($toolsVersion -notmatch '^\d+\.\d+\.\d+$') { throw "manifest.json has no usable version: '$toolsVersion'." }
+    foreach ($name in "claude-code-launcher.exe", "contextshrink-codetab.exe") {
+        $path = Join-Path $toolsDir $name
+        if (-not (Test-Path -LiteralPath $path)) { throw "$name is missing from $toolsDir." }
+        $signature = Get-AuthenticodeSignature -LiteralPath $path
+        if ($signature.Status -ne "Valid") {
+            throw "$name has no valid Authenticode signature ($($signature.Status)); nothing was uploaded."
+        }
+        $entry = $toolsManifest.files.$name
+        if (-not $entry) { throw "manifest.json does not list $name; nothing was uploaded." }
+        $item = Get-Item -LiteralPath $path
+        $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
+        if ($sha -ne ([string]$entry.sha256).ToLower() -or $item.Length -ne [long]$entry.size) {
+            throw "$name does not match manifest.json (sha256 or size); nothing was uploaded."
+        }
+        $toolsFiles += $item
+    }
+    # The manifest goes last, so it never points at a file that is not there yet.
+    $toolsFiles += Get-Item -LiteralPath $manifestFile
+    "Code-tab tools $toolsVersion from ${toolsDir}: $(($toolsFiles | ForEach-Object Name) -join ', ')"
+}
+
+if ($ToolsOnly) {
+    if (-not $ClaudeCodeTools) { throw "-ToolsOnly needs -ClaudeCodeTools <dir>." }
+    . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
+    Use-CloudflareToken
+    foreach ($f in $toolsFiles) {
+        $key = "claude-code-tools/$toolsVersion/$($f.Name)"
+        $type = if ($f.Extension -eq ".json") { "application/json" } else { "application/vnd.microsoft.portable-executable" }
+        "Uploading $key"
+        Invoke-Wrangler r2 object put "$Bucket/$key" --file $f.FullName --content-type $type --remote
+    }
+    "Published Code-tab tools ${toolsVersion}: https://app.contextshrink.com/releases/claude-code-tools/$toolsVersion/manifest.json"
+    return
+}
 
 $app = Join-Path $PSScriptRoot "app"
 $version = (Get-Content (Join-Path $app "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json).version
@@ -145,6 +210,15 @@ if ($Target -eq "r2") {
         ".dmg" = "application/x-apple-diskimage"
         ".deb" = "application/vnd.debian.binary-package"
         ".rpm" = "application/x-rpm"
+    }
+    foreach ($f in $toolsFiles) {
+        $key = "claude-code-tools/$toolsVersion/$($f.Name)"
+        $type = if ($f.Extension -eq ".json") { "application/json" } else { "application/vnd.microsoft.portable-executable" }
+        "Uploading $key"
+        Invoke-Wrangler r2 object put "$Bucket/$key" --file $f.FullName --content-type $type --remote
+    }
+    if ($toolsFiles.Count) {
+        "Published Code-tab tools ${toolsVersion}: https://app.contextshrink.com/releases/claude-code-tools/$toolsVersion/manifest.json"
     }
     foreach ($f in $files) {
         $type = $types[$f.Extension.ToLower()]

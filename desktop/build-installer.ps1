@@ -48,8 +48,10 @@ if ($PyInstaller) {
 $signingConfig = @()
 if ($env:CS_SIGN_ENDPOINT -and $env:CS_SIGN_ACCOUNT -and $env:CS_SIGN_PROFILE) {
     $helperDir = Join-Path $PSScriptRoot "claude-code-tools\target\release"
+    # contextshrink-codetab.exe is not bundled in the installer; it is signed here
+    # so the Code-tab tools artifact (desktop.yml) ships signed.
     $toSign = @(
-        @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe") |
+        @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe", "contextshrink-codetab.exe") |
             ForEach-Object { Join-Path $helperDir $_ } |
             Where-Object { (Test-Path $_) -and (Get-AuthenticodeSignature -LiteralPath $_).Status -ne "Valid" }
         Get-ChildItem (Join-Path $PSScriptRoot "client\dist\horizon") -Recurse -File -Include *.exe, *.dll, *.pyd |
