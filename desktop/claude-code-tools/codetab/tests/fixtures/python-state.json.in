@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "launcher_sha256": [
+    "f03611839f04f4baaca043e700b4a2bb737f64c0a336d6dc8ec4637227b4dfd3"
+  ],
+  "folders": {
+    "__FOLDER__": {
+      "real_sha256": "e3b87a4138c3cc3017bcaba479c2cecbab77784d8abddf66fa8bcbdff76bbc35",
+      "launcher_sha256": "f03611839f04f4baaca043e700b4a2bb737f64c0a336d6dc8ec4637227b4dfd3",
+      "patched_at": "2026-10-20T17:38:07.867901+00:00"
+    }
+  }
+}

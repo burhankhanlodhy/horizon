@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "enabled": true,
+  "base_url": "http://127.0.0.1:18788",
+  "env": {},
+  "health_port": 18788
+}

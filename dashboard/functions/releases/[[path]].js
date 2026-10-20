@@ -1,9 +1,13 @@
 // Desktop installers and latest.json at app.contextshrink.com/releases/*,
 // streamed from the private R2 bucket bound as RELEASES (dashboard/wrangler.toml).
-// The bucket is never public: this function is the only way in, and it serves
-// single flat file names only. Uploads come from desktop/publish-installer.ps1.
+// The bucket is never public: this function is the only way in. It serves single
+// flat file names, plus the three Code-tab tools under claude-code-tools/<version>/
+// (npx contextshrink-claude) and nothing else. Uploads come from
+// desktop/publish-installer.ps1.
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+const TOOLS =
+  /^claude-code-tools\/\d+\.\d+\.\d+\/(claude-code-launcher\.exe|contextshrink-codetab\.exe|manifest\.json)$/;
 
 const TYPES = {
   json: "application/json",
@@ -27,8 +31,11 @@ export async function onRequest({ request, env, params }) {
     return text(405, "Method Not Allowed", { Allow: "GET, HEAD" });
   }
   const parts = Array.isArray(params.path) ? params.path : [params.path];
-  const key = parts.length === 1 ? parts[0] : "";
-  if (!key || !NAME.test(key)) return text(404, "Not Found");
+  const joined = parts.join("/");
+  let key = "";
+  if (parts.length === 1 && NAME.test(joined)) key = joined;
+  else if (TOOLS.test(joined)) key = joined;
+  if (!key) return text(404, "Not Found");
 
   let object;
   try {

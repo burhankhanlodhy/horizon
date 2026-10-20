@@ -3,10 +3,10 @@
 # Deliberately NOT a member of the root Cargo.toml workspace.
 [workspace]
 resolver = "2"
-members = ["launcher", "status", "client-stub"]
+members = ["launcher", "status", "client-stub", "codetab"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 

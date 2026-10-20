@@ -174,7 +174,7 @@ jobs:
           if (-not $app) { throw "contextshrink-desktop.exe not found inside $($installer[0].Name)" }
           $files = @($app)
           # The shipped helpers only (target\release also holds test-only children).
-          $files += @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe" |
+          $files += @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe", "contextshrink-codetab.exe" |
               ForEach-Object { Get-Item -LiteralPath (Join-Path "desktop\claude-code-tools\target\release" $_) })
           $files += $installer
           $files += @(Get-ChildItem "desktop\client\dist\horizon" -Recurse -File -Include *.exe, *.dll, *.pyd)
@@ -203,5 +203,45 @@ jobs:
         with:
           name: contextshrink-windows-x86_64
           path: desktop/dist-windows/*
+          if-no-files-found: error
+          retention-days: 7
+      # The npx Code-tab tools (not bundled in the installer). publish-installer.ps1
+      # -ClaudeCodeTools uploads these three files to R2 under claude-code-tools/<version>/.
+      - name: Stage the Code-tab tools for publish-installer.ps1 (-ClaudeCodeTools)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = "desktop\claude-code-tools\target\release"
+          $out = "desktop\dist-claude-code-tools"
+          Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # The version is the workspace version in desktop/claude-code-tools/Cargo.toml.
+          $cargo = Get-Content "desktop\claude-code-tools\Cargo.toml" -Raw
+          if ($cargo -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion = "(\d+\.\d+\.\d+)"') {
+              throw "No workspace version in desktop\claude-code-tools\Cargo.toml"
+          }
+          $version = $Matches[1]
+          $files = [ordered]@{}
+          foreach ($name in @("claude-code-launcher.exe", "contextshrink-codetab.exe")) {
+              Copy-Item (Join-Path $bin $name) $out -ErrorAction Stop
+              $copy = Join-Path $out $name
+              if ($env:CS_SIGN_ENDPOINT) {
+                  $sig = Get-AuthenticodeSignature -LiteralPath $copy
+                  if ($sig.Status -ne "Valid") { throw "$name is not validly signed: $($sig.Status)" }
+              } else {
+                  Write-Output "::warning::$name is unsigned (Artifact Signing is not configured); publish-installer.ps1 will refuse it"
+              }
+              $files[$name] = [ordered]@{
+                  sha256 = (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToLower()
+                  size   = (Get-Item -LiteralPath $copy).Length
+              }
+          }
+          $manifest = [ordered]@{ version = $version; files = $files }
+          [IO.File]::WriteAllText((Join-Path $out "manifest.json"), ($manifest | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+          Get-ChildItem $out | ForEach-Object { "Staged $($_.Name)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextshrink-claude-code-tools-windows
+          path: desktop/dist-claude-code-tools/*
           if-no-files-found: error
           retention-days: 7
