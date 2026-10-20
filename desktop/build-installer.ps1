@@ -13,6 +13,12 @@
   installed apps update themselves. Without it the installer still builds,
   but installed apps are not offered that version.
 #>
+[CmdletBinding()]
+param(
+    # Freeze the client with PyInstaller (client\build-client.ps1) instead of the
+    # embeddable Python build. Kept for a rollback only.
+    [switch]$PyInstaller
+)
 $ErrorActionPreference = "Stop"
 
 $updaterConfig = @()
@@ -27,7 +33,11 @@ if ($env:TAURI_SIGNING_PRIVATE_KEY) {
     Write-Warning "No updater signing key: installed apps will not be offered this build."
 }
 
-& (Join-Path $PSScriptRoot "client\build-client.ps1")
+if ($PyInstaller) {
+    & (Join-Path $PSScriptRoot "client\build-client.ps1")
+} else {
+    & (Join-Path $PSScriptRoot "client\build-client-embed.ps1")
+}
 
 Push-Location (Join-Path $PSScriptRoot "app")
 try {

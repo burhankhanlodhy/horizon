@@ -1,6 +1,8 @@
 # Frozen Horizon client build output (rebuilt by client/build-client.ps1)
 client/build/
 client/dist/
+# Embeddable Python download cache (build-client-embed.ps1; SHA-256 pinned)
+client/.cache/
 client/*.spec
 
 # Tauri / Vite build output
