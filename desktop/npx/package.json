@@ -1,9 +1,19 @@
 {
   "name": "contextshrink",
   "version": "0.1.0",
-  "description": "Route Claude Code in a terminal through the ContextShrink proxy.",
+  "description": "Connect Claude Code to the ContextShrink proxy: compression and a warm prompt cache, with nothing running in the background.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "proxy",
+    "compression",
+    "prompt-cache",
+    "contextshrink"
+  ],
+  "homepage": "https://contextshrink.com",
   "license": "Apache-2.0",
-  "private": true,
+  "author": "ContextShrink",
   "bin": {
     "contextshrink": "bin/contextshrink.js"
   },
