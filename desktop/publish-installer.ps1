@@ -45,7 +45,9 @@
   nothing is uploaded. They go to <Bucket>/claude-code-tools/<version>/ (the version is
   the one in manifest.json) and are served at
   https://app.contextshrink.com/releases/claude-code-tools/<version>/<file>. -Target r2 only.
-  The installer for the current version is still required in the same run.
+  The installer for the current version is still required in the same run, unless
+  -ToolsOnly is given: then only the tools are uploaded and latest.json, updater.json
+  and the installers are left exactly as they are.
 #>
 param(
     [ValidateSet("r2", "pi4")]
@@ -55,7 +57,9 @@ param(
     [ValidateSet("windows", "macos", "linux")]
     [string[]]$Platforms = @("windows", "macos", "linux"),
     # Folder with claude-code-launcher.exe, contextshrink-codetab.exe and manifest.json.
-    [string]$ClaudeCodeTools
+    [string]$ClaudeCodeTools,
+    # Upload only the -ClaudeCodeTools files; leave the installers and manifests alone.
+    [switch]$ToolsOnly
 )
 $ErrorActionPreference = "Stop"
 
@@ -90,6 +94,20 @@ if ($ClaudeCodeTools) {
     # The manifest goes last, so it never points at a file that is not there yet.
     $toolsFiles += Get-Item -LiteralPath $manifestFile
     "Code-tab tools $toolsVersion from ${toolsDir}: $(($toolsFiles | ForEach-Object Name) -join ', ')"
+}
+
+if ($ToolsOnly) {
+    if (-not $ClaudeCodeTools) { throw "-ToolsOnly needs -ClaudeCodeTools <dir>." }
+    . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
+    Use-CloudflareToken
+    foreach ($f in $toolsFiles) {
+        $key = "claude-code-tools/$toolsVersion/$($f.Name)"
+        $type = if ($f.Extension -eq ".json") { "application/json" } else { "application/vnd.microsoft.portable-executable" }
+        "Uploading $key"
+        Invoke-Wrangler r2 object put "$Bucket/$key" --file $f.FullName --content-type $type --remote
+    }
+    "Published Code-tab tools ${toolsVersion}: https://app.contextshrink.com/releases/claude-code-tools/$toolsVersion/manifest.json"
+    return
 }
 
 $app = Join-Path $PSScriptRoot "app"
