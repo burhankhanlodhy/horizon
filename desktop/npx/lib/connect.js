@@ -244,7 +244,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     } else if (!force) {
       throw new Refusal(
         'Claude Code settings changed since contextshrink connected them. ' +
-          'Run "contextshrink disconnect" to restore them, or add --force to connect again. Nothing was changed.'
+          'Run "npx contextshrink-claude disconnect" to restore them, or add --force to connect again. Nothing was changed.'
       );
     }
   } else {
@@ -392,7 +392,7 @@ async function status(ctx) {
       ctx.out(`Connected to ${host} (keep-alive id ${idPrefix}).`);
     } else {
       ctx.out(`Changed: settings.json no longer matches what contextshrink wrote (${host}).`);
-      ctx.out('Run "contextshrink disconnect" to restore them.');
+      ctx.out('Run "npx contextshrink-claude disconnect" to restore them.');
     }
   } else if (hasText(block[cfg.BASE_URL_KEY])) {
     ctx.out(`Not connected by contextshrink. ANTHROPIC_BASE_URL points at ${displayHost(block[cfg.BASE_URL_KEY])}.`);

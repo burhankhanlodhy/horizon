@@ -1,6 +1,6 @@
 'use strict';
 
-// Command line for `contextshrink`: parses arguments, runs one command and maps
+// Command line for `npx contextshrink-claude`: parses arguments, runs one command and maps
 // the outcome to an exit code. Output never includes the account key.
 
 const { Refusal, connect, disconnect, status, logout } = require('./connect');
@@ -8,14 +8,14 @@ const { ApiError } = require('./api');
 const { FileError } = require('./files');
 const { Cancelled, createPrompter } = require('./prompt');
 
-const USAGE = `contextshrink ${require('../package.json').version}
+const USAGE = `contextshrink-claude ${require('../package.json').version}
 
 Usage:
-  contextshrink [connect] [--force]   Sign in and route Claude Code through ContextShrink
-  contextshrink login [--key]         Make a new account key for this computer (--key: paste one)
-  contextshrink disconnect            Restore the settings that connect changed
-  contextshrink status                Show whether Claude Code is connected
-  contextshrink logout                Disconnect and revoke this computer's account key
+  npx contextshrink-claude [connect] [--force]   Sign in and route Claude Code through ContextShrink
+  npx contextshrink-claude login [--key]         Make a new account key for this computer (--key: paste one)
+  npx contextshrink-claude disconnect            Restore the settings that connect changed
+  npx contextshrink-claude status                Show whether Claude Code is connected
+  npx contextshrink-claude logout                Disconnect and revoke this computer's account key
 
 Options:
   --force    Replace another gateway or existing header (disconnect restores it)

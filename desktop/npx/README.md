@@ -1,4 +1,4 @@
-# contextshrink
+# contextshrink-claude
 
 Connects Claude Code (in a terminal or VS Code) to the
 [ContextShrink](https://contextshrink.com) hosted proxy, which compresses what
@@ -13,19 +13,19 @@ For the Claude Desktop Code tab, use the ContextShrink desktop app instead.
 Requires Node 18 or newer and a ContextShrink account.
 
 ```
-npx contextshrink              # sign in, then connect
-npx contextshrink status       # connected or not, the proxy host, tool search
-npx contextshrink disconnect   # put back the settings it changed
-npx contextshrink logout       # disconnect, then revoke this computer's account key
+npx contextshrink-claude              # sign in, then connect
+npx contextshrink-claude status       # connected or not, the proxy host, tool search
+npx contextshrink-claude disconnect   # put back the settings it changed
+npx contextshrink-claude logout       # disconnect, then revoke this computer's account key
 ```
 
 Start a new Claude Code session afterwards; open sessions keep the old settings.
 
 Other commands:
 
-- `npx contextshrink login` makes a new account key for this computer and connects
+- `npx contextshrink-claude login` makes a new account key for this computer and connects
   it. It also revokes the key that connect made before.
-- `npx contextshrink login --key` reads an account key from stdin instead of
+- `npx contextshrink-claude login --key` reads an account key from stdin instead of
   signing in. A key added this way is not revoked by logout.
 - `--force` replaces another gateway or an existing header. Disconnect restores
   the old value.
@@ -64,11 +64,11 @@ Everything else in `settings.json` is kept, including key order and indentation.
 
 ## How to undo it
 
-Run `npx contextshrink disconnect`. It restores each key only if its value is still
+Run `npx contextshrink-claude disconnect`. It restores each key only if its value is still
 the one this tool wrote; a key you edited since is left alone, and the output says
 so. If the settings file did not exist before connect, disconnect removes it.
 
-To revoke the account key as well, run `npx contextshrink logout`. It asks you to
+To revoke the account key as well, run `npx contextshrink-claude logout`. It asks you to
 sign in again, because revoking a key needs your account session. You can also
 revoke keys on the API Keys page of the ContextShrink dashboard.
 
