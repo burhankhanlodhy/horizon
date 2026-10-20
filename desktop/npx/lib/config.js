@@ -22,7 +22,16 @@ const SETTINGS_FILE = 'settings.json';
 
 const BASE_URL_KEY = 'ANTHROPIC_BASE_URL';
 const HEADERS_KEY = 'ANTHROPIC_CUSTOM_HEADERS';
+// The two keys that route Claude Code through the proxy. Connect refuses to
+// replace a value of these unless --force, and a connection needs both.
 const MANAGED_KEYS = [BASE_URL_KEY, HEADERS_KEY];
+// Claude Code's own MCP tool search. A gateway in ANTHROPIC_BASE_URL makes Claude
+// Code switch it off, and the proxy then defers the tools itself, which is not a
+// real saving. Connect sets it to "true" only when the user has not set it.
+const TOOL_SEARCH_KEY = 'ENABLE_TOOL_SEARCH';
+const TOOL_SEARCH_VALUE = 'true';
+// Every key connect may write. Only MANAGED_KEYS are required for "connected".
+const OWNED_KEYS = [...MANAGED_KEYS, TOOL_SEARCH_KEY];
 
 // The header the hosted proxy reads the account key from (horizon/proxy/server.py,
 // read_proxy_token). Same spelling as the dashboard's manual setup page.
@@ -86,6 +95,9 @@ module.exports = {
   BASE_URL_KEY,
   HEADERS_KEY,
   MANAGED_KEYS,
+  TOOL_SEARCH_KEY,
+  TOOL_SEARCH_VALUE,
+  OWNED_KEYS,
   PROXY_TOKEN_HEADER,
   KEY_PREFIX,
   KEY_SCOPES,

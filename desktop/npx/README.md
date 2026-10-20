@@ -2,7 +2,7 @@
 
 Connects Claude Code in a terminal to the ContextShrink hosted proxy. It is one
 plain JavaScript file run by Node, with no dependencies, no unsigned binary and
-no background process. It writes two keys into Claude Code's settings file and
+no background process. It writes three keys into Claude Code's settings file and
 nothing else.
 
 This package is a prototype. It is marked `private`, so it is not published to npm.
@@ -13,7 +13,7 @@ Requires Node 18 or newer and a ContextShrink account.
 
 ```
 npx contextshrink            # sign in, then connect
-contextshrink status         # connected or not, host and keep-alive id prefix
+contextshrink status         # connected or not, host, keep-alive id prefix, tool search
 contextshrink disconnect     # restore the settings it changed
 contextshrink logout         # disconnect, then revoke this computer's account key
 ```
@@ -33,16 +33,34 @@ is a pipe, the answers are read in order, one per line.
 ## What it changes
 
 Claude Code reads its user settings from `$CLAUDE_CONFIG_DIR/settings.json`, or
-`~/.claude/settings.json` when that variable is not set. Connect adds two keys under `env`:
+`~/.claude/settings.json` when that variable is not set. Connect adds three keys under `env`:
 
 | Key | Value |
 | --- | --- |
 | `ANTHROPIC_BASE_URL` | `https://proxy.contextshrink.com/k/<keep-alive id>` |
 | `ANTHROPIC_CUSTOM_HEADERS` | `X-Horizon-Proxy-Token: <account key>` |
+| `ENABLE_TOOL_SEARCH` | `true`, only when the key is not set yet |
 
 The proxy reads the key from that header (`horizon/proxy/server.py`, `read_proxy_token`).
 The `/k/<id>` segment is the keep-alive route the desktop app also uses. The
 gateway allow-list (`deploy/pi5-webtier/Caddyfile`) accepts it.
+
+Why the third key: with a gateway in `ANTHROPIC_BASE_URL`, Claude Code turns its own
+MCP tool search off. The proxy then defers the tools itself. That is not a real
+saving, because plain Claude Code defers them natively. Setting `ENABLE_TOOL_SEARCH`
+to `true` keeps Claude Code's own tool search on. The rules:
+
+- Not set yet: connect sets it to `true` and records that it did.
+- Already `true`: connect leaves it and does not record it, so disconnect keeps it.
+- Set to anything else (for example `false`): connect leaves your value, prints one
+  line saying tool search is off by your choice, and the savings figures will include
+  tool-schema deferral. `--force` does not change this.
+
+`contextshrink status` prints one line saying whether tool search is on, off by your
+choice, or not set.
+
+An install connected by an earlier version of this tool gets the key the next time
+`contextshrink` runs, with no sign-in.
 
 Connect also writes two more files:
 
@@ -57,6 +75,8 @@ Everything else in `settings.json` is kept, including key order and indentation.
 
 Run `contextshrink disconnect`. It restores each key only if its value is still
 the one this tool wrote. A key you edited is left alone, and the output says so.
+`ENABLE_TOOL_SEARCH` follows the same rule: disconnect removes it only when connect
+added it, and puts back any value it had before.
 If the settings file did not exist before connect, disconnect removes it again.
 
 To revoke the account key too, run `contextshrink logout`. It needs a sign-in,

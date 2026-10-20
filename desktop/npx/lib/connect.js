@@ -5,9 +5,11 @@
 // What connect writes, in settings.json under "env":
 //   ANTHROPIC_BASE_URL       <proxy>/k/<keep-alive id>
 //   ANTHROPIC_CUSTOM_HEADERS X-Horizon-Proxy-Token: <account key>
+//   ENABLE_TOOL_SEARCH       "true"   (only when the user has not set it)
 //
 // Before writing, connect records the previous value of each key, and the
-// values it wrote, in a state file next to settings.json. Disconnect restores
+// values it wrote, in a state file next to settings.json. A key that connect
+// did not write has no entry in the state's "written" map. Disconnect restores
 // a key only while it still holds the value this installer wrote.
 
 const crypto = require('node:crypto');
@@ -51,8 +53,9 @@ function isContextShrinkHost(value, proxyUrl) {
   return url.hostname === 'contextshrink.com' || url.hostname.endsWith('.contextshrink.com');
 }
 
+// True when every key this installer wrote still holds its value.
 function matchesWritten(block, written) {
-  return cfg.MANAGED_KEYS.every((key) => hasOwn(block, key) && block[key] === written[key]);
+  return Object.keys(written).every((key) => hasOwn(block, key) && block[key] === written[key]);
 }
 
 function entryOf(block, key) {
@@ -71,12 +74,18 @@ function envBlockOf(payload, settingsFile) {
 function readState(file) {
   const state = files.readOwnJson(file, 'contextshrink state file');
   if (!state) return null;
+  // Files from before tool search was added have no record for ENABLE_TOOL_SEARCH.
+  // That is accepted: a missing record means connect never wrote the key.
   const ok =
     state.version === STATE_VERSION &&
     files.isPlainObject(state.written) &&
     files.isPlainObject(state.previous) &&
-    cfg.MANAGED_KEYS.every(
-      (key) => typeof state.written[key] === 'string' && files.isPlainObject(state.previous[key])
+    cfg.MANAGED_KEYS.every((key) => hasOwn(state.written, key)) &&
+    Object.keys(state.written).every(
+      (key) =>
+        cfg.OWNED_KEYS.includes(key) &&
+        typeof state.written[key] === 'string' &&
+        files.isPlainObject(state.previous[key])
     );
   if (!ok) {
     throw new Refusal(`${file} is not in a format this version knows. Nothing was changed.`);
@@ -123,6 +132,78 @@ function refuseIfForeign(paths, block, state, force) {
   }
 }
 
+// Decides what connect does with ENABLE_TOOL_SEARCH. --force does not change this.
+//   keep        connect wrote it earlier and still records it
+//   write       the key is absent: connect sets it to "true" and records that it did
+//   leave-true  the user set it to "true": left as it is, and not recorded
+//   leave-user  the user set it to anything else: left as it is, and reported
+function toolSearchPlan(block, state) {
+  if (state && hasOwn(state.written, cfg.TOOL_SEARCH_KEY)) return { action: 'keep' };
+  if (block && hasOwn(block, cfg.TOOL_SEARCH_KEY)) {
+    return { action: block[cfg.TOOL_SEARCH_KEY] === cfg.TOOL_SEARCH_VALUE ? 'leave-true' : 'leave-user' };
+  }
+  return { action: 'write' };
+}
+
+function reportToolSearch(ctx, plan) {
+  if (plan.action === 'leave-user') {
+    ctx.out(
+      'Tool search is off by your choice (ENABLE_TOOL_SEARCH in settings.json is not "true"), ' +
+        'so the savings figures will include tool-schema deferral.'
+    );
+  }
+}
+
+// The keys this run writes, and the previous value of each key it writes.
+// `gateway` holds the two proxy keys. The previous values of a fresh connect come
+// from settings.json; a re-connect keeps the values recorded by the first one.
+function planWrite({ block, state, gateway, plan }) {
+  const written = { ...gateway };
+  const previous = state ? { ...state.previous } : {};
+  if (!state) {
+    for (const k of cfg.MANAGED_KEYS) previous[k] = entryOf(block || {}, k);
+  }
+  if (plan.action === 'write') {
+    written[cfg.TOOL_SEARCH_KEY] = cfg.TOOL_SEARCH_VALUE;
+    previous[cfg.TOOL_SEARCH_KEY] = entryOf(block || {}, cfg.TOOL_SEARCH_KEY);
+  } else if (plan.action === 'keep') {
+    written[cfg.TOOL_SEARCH_KEY] = state.written[cfg.TOOL_SEARCH_KEY];
+  }
+  return { written, previous };
+}
+
+function nextStateOf(paths, settings, block, state, written, previous) {
+  return {
+    version: STATE_VERSION,
+    settings_existed: state ? state.settings_existed : settings.exists,
+    env_existed: state ? state.env_existed : block !== undefined,
+    previous,
+    written,
+    proxy_host: new URL(paths.proxyUrl).host,
+    connected_at: new Date().toISOString(),
+  };
+}
+
+function withKeys(block, written) {
+  const next = block || {};
+  for (const k of Object.keys(written)) next[k] = written[k];
+  return next;
+}
+
+// Writes the state, then settings.json. The state goes first, so a settings write
+// that fails leaves a state that matches the file; the old state is put back then.
+function persist(paths, settings, state, nextState, nextBlock) {
+  settings.payload.env = nextBlock;
+  files.writePrivateJson(paths.state, nextState);
+  try {
+    files.writeSettings(paths.settings, settings);
+  } catch (err) {
+    if (state) files.writePrivateJson(paths.state, state);
+    else files.removeFile(paths.state);
+    throw err;
+  }
+}
+
 /**
  * Connects Claude Code to the hosted proxy. `login` always mints a new key, even
  * when already connected; `keyFromStdin` uses a key the user pastes instead of
@@ -141,11 +222,23 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
   const block = envBlockOf(settings.payload, paths.settings);
   const state = readState(paths.state);
   const home = readHome(paths);
+  const plan = toolSearchPlan(block, state);
 
   if (state) {
     if (matchesWritten(block || {}, state.written)) {
       if (!login) {
+        if (plan.action === 'write') {
+          // Connected by an earlier version, which did not set tool search. Add it
+          // now. The proxy keys stay as they are, so no sign-in is needed.
+          const gateway = Object.fromEntries(cfg.MANAGED_KEYS.map((k) => [k, state.written[k]]));
+          const { written, previous } = planWrite({ block, state, gateway, plan });
+          const nextBlock = withKeys(block, written);
+          persist(paths, settings, state, nextStateOf(paths, settings, block, state, written, previous), nextBlock);
+          ctx.out('Turned on Claude Code tool search (ENABLE_TOOL_SEARCH=true).');
+          return 0;
+        }
         ctx.out('Already connected. Nothing to change.');
+        reportToolSearch(ctx, plan);
         return 0;
       }
     } else if (!force) {
@@ -180,26 +273,13 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
       typeof home.keepalive_id === 'string' && KEEPALIVE_SHAPE.test(home.keepalive_id)
         ? home.keepalive_id
         : newKeepaliveId();
-    const written = {
+    const gateway = {
       [cfg.BASE_URL_KEY]: `${paths.proxyUrl}/k/${keepalive}`,
       [cfg.HEADERS_KEY]: `${cfg.PROXY_TOKEN_HEADER}: ${key}`,
     };
-    const previous = state
-      ? state.previous
-      : Object.fromEntries(cfg.MANAGED_KEYS.map((k) => [k, entryOf(block || {}, k)]));
-    const nextState = {
-      version: STATE_VERSION,
-      settings_existed: state ? state.settings_existed : settings.exists,
-      env_existed: state ? state.env_existed : block !== undefined,
-      previous,
-      written,
-      proxy_host: new URL(paths.proxyUrl).host,
-      connected_at: new Date().toISOString(),
-    };
-
-    const nextBlock = block || {};
-    for (const k of cfg.MANAGED_KEYS) nextBlock[k] = written[k];
-    settings.payload.env = nextBlock;
+    const { written, previous } = planWrite({ block, state, gateway, plan });
+    const nextState = nextStateOf(paths, settings, block, state, written, previous);
+    const nextBlock = withKeys(block, written);
 
     // The key id is recorded first, so a failure below can still be cleaned up.
     files.writePrivateJson(paths.home, {
@@ -208,15 +288,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
       device_key_id: deviceKeyId,
       updated_at: new Date().toISOString(),
     });
-    // State before settings: a settings write that fails leaves a state that matches the file.
-    files.writePrivateJson(paths.state, nextState);
-    try {
-      files.writeSettings(paths.settings, settings);
-    } catch (err) {
-      if (state) files.writePrivateJson(paths.state, state);
-      else files.removeFile(paths.state);
-      throw err;
-    }
+    persist(paths, settings, state, nextState, nextBlock);
 
     // A key from an earlier connect is ours. Revoke it now the new one is in place.
     if (token && home.device_key_id && home.device_key_id !== deviceKeyId) {
@@ -245,6 +317,8 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
 
   ctx.out(login ? 'Saved a new account key for this computer.' : 'Connected.');
   ctx.out(`Claude Code now sends its requests to ${new URL(paths.proxyUrl).host}.`);
+  if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
+  reportToolSearch(ctx, plan);
   ctx.out('Start a new Claude Code session to use the connection.');
   return 0;
 }
@@ -263,7 +337,9 @@ async function disconnect(ctx) {
   const work = block || {};
   const restored = [];
   const left = [];
-  for (const key of cfg.MANAGED_KEYS) {
+  for (const key of cfg.OWNED_KEYS) {
+    // No record means connect never wrote this key (or an older version did not set it).
+    if (!hasOwn(state.written, key)) continue;
     if (hasOwn(work, key) && work[key] === state.written[key]) {
       const prev = state.previous[key];
       if (prev.present) work[key] = prev.value;
@@ -318,14 +394,21 @@ async function status(ctx) {
       ctx.out(`Changed: settings.json no longer matches what contextshrink wrote (${host}).`);
       ctx.out('Run "contextshrink disconnect" to restore them.');
     }
-    return 0;
-  }
-  if (hasText(block[cfg.BASE_URL_KEY])) {
+  } else if (hasText(block[cfg.BASE_URL_KEY])) {
     ctx.out(`Not connected by contextshrink. ANTHROPIC_BASE_URL points at ${displayHost(block[cfg.BASE_URL_KEY])}.`);
-    return 0;
+  } else {
+    ctx.out('Not connected.');
   }
-  ctx.out('Not connected.');
+  ctx.out(toolSearchLine(block));
   return 0;
+}
+
+function toolSearchLine(block) {
+  if (block[cfg.TOOL_SEARCH_KEY] === cfg.TOOL_SEARCH_VALUE) return 'Tool search: on (ENABLE_TOOL_SEARCH is "true").';
+  if (hasOwn(block, cfg.TOOL_SEARCH_KEY)) {
+    return 'Tool search: off by your choice (ENABLE_TOOL_SEARCH is not "true" in settings.json).';
+  }
+  return 'Tool search: not set (ENABLE_TOOL_SEARCH is absent; connect sets it to "true").';
 }
 
 /**

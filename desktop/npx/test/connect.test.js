@@ -30,7 +30,7 @@ function assertNoKeyLeak(api, outputs) {
   }
 }
 
-test('connect writes exactly the two keys and keeps every other setting', () =>
+test('connect writes exactly the three keys and keeps every other setting', () =>
   withSandbox(async ({ api, sb }) => {
     const original = [
       '{',
@@ -51,11 +51,19 @@ test('connect writes exactly the two keys and keeps every other setting', () =>
     assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env']);
     assert.deepStrictEqual(settings.permissions, { allow: ['Bash(npm test)'] });
     assert.strictEqual(settings.model, 'opus');
-    assert.deepStrictEqual(Object.keys(settings.env), ['FOO', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS']);
+    assert.deepStrictEqual(Object.keys(settings.env), [
+      'FOO',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_CUSTOM_HEADERS',
+      'ENABLE_TOOL_SEARCH',
+    ]);
     assert.strictEqual(settings.env.FOO, 'bar');
     assert.match(settings.env.ANTHROPIC_BASE_URL, BASE_RE);
     assert.match(settings.env.ANTHROPIC_CUSTOM_HEADERS, HEADER_RE);
-    assert.strictEqual(Object.keys(settings.env).length, 3);
+    assert.strictEqual(settings.env.ENABLE_TOOL_SEARCH, 'true');
+    assert.strictEqual(Object.keys(settings.env).length, 4);
+    assert.match(res.stdout, /Tool search is on \(ENABLE_TOOL_SEARCH=true\)/);
+    assert.deepStrictEqual(readJson(sb.state).written.ENABLE_TOOL_SEARCH, 'true');
 
     const raw = fs.readFileSync(sb.settings, 'utf8');
     assert.ok(raw.startsWith('{\n    "model"'), 'indentation of the file was not kept');
@@ -218,12 +226,14 @@ test('status shows the host and the keep-alive prefix, never the key', () =>
     const before = await runCli(sb, ['status']);
     assert.strictEqual(before.code, 0);
     assert.match(before.stdout, /Not connected/);
+    assert.match(before.stdout, /Tool search: not set/);
 
     const res = await runCli(sb, [], { input: SIGN_IN });
     assert.strictEqual(res.code, 0, res.output);
     const status = await runCli(sb, ['status']);
     assert.strictEqual(status.code, 0, status.output);
     assert.match(status.stdout, /Connected to 127\.0\.0\.1:9 \(keep-alive id [0-9a-f]{4}\.\.\.\)/);
+    assert.match(status.stdout, /Tool search: on/);
     assertNoKeyLeak(api, [status.stdout, status.stderr]);
   }));
 
@@ -268,6 +278,141 @@ test('login mints a new key and revokes the one connect made', () =>
     assert.notStrictEqual(newHeader, oldHeader);
     assert.strictEqual(api.live.size, 1, 'the old key was not revoked');
     assertNoKeyLeak(api, [again.stdout, again.stderr]);
+  }));
+
+// Rewrites a connected sandbox the way the prototype before tool search left it:
+// no ENABLE_TOOL_SEARCH in settings.json and no record of it in the state file.
+function makePrototypeState(sb) {
+  const settings = readJson(sb.settings);
+  delete settings.env.ENABLE_TOOL_SEARCH;
+  fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
+  const state = readJson(sb.state);
+  delete state.written.ENABLE_TOOL_SEARCH;
+  delete state.previous.ENABLE_TOOL_SEARCH;
+  fs.writeFileSync(sb.state, JSON.stringify(state, null, 2) + '\n');
+}
+
+test('ENABLE_TOOL_SEARCH already "true" is left alone, not recorded, and kept by disconnect', () =>
+  withSandbox(async ({ sb }) => {
+    writeSettingsFile(sb, JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'true' } }, null, 2) + '\n');
+    const res = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(res.code, 0, res.output);
+    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'true');
+    assert.ok(!res.output.includes('Tool search is off'), 'a "true" value was reported as off');
+    assert.ok(!('ENABLE_TOOL_SEARCH' in readJson(sb.state).written), 'the user value was recorded as ours');
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.deepStrictEqual(readJson(sb.settings), { env: { ENABLE_TOOL_SEARCH: 'true' } });
+  }));
+
+test('ENABLE_TOOL_SEARCH set to another value is left alone, reported, and --force does not change it', () =>
+  withSandbox(async ({ sb }) => {
+    writeSettingsFile(
+      sb,
+      JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'false', ANTHROPIC_CUSTOM_HEADERS: 'X-Corp-Trace: 1' } }, null, 2) + '\n'
+    );
+    const forced = await runCli(sb, ['--force'], { input: SIGN_IN });
+    assert.strictEqual(forced.code, 0, forced.output);
+    assert.match(forced.stdout, /Tool search is off by your choice/);
+    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'false');
+    assert.ok(!('ENABLE_TOOL_SEARCH' in readJson(sb.state).written), 'the user value was recorded as ours');
+
+    const status = await runCli(sb, ['status']);
+    assert.match(status.stdout, /Tool search: off by your choice/);
+
+    const again = await runCli(sb, ['connect'], { input: '' });
+    assert.strictEqual(again.code, 0, again.output);
+    assert.match(again.stdout, /Tool search is off by your choice/);
+    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'false');
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    const after = readJson(sb.settings).env;
+    assert.strictEqual(after.ENABLE_TOOL_SEARCH, 'false');
+    assert.strictEqual(after.ANTHROPIC_CUSTOM_HEADERS, 'X-Corp-Trace: 1');
+  }));
+
+test('disconnect removes the ENABLE_TOOL_SEARCH that connect added', () =>
+  withSandbox(async ({ sb }) => {
+    writeSettingsFile(sb, JSON.stringify({ env: { FOO: 'bar' } }, null, 2) + '\n');
+    const res = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(res.code, 0, res.output);
+    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'true');
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.deepStrictEqual(readJson(sb.settings), { env: { FOO: 'bar' } });
+  }));
+
+test('disconnect leaves an ENABLE_TOOL_SEARCH the user changed, and reports it', () =>
+  withSandbox(async ({ sb }) => {
+    const res = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(res.code, 0, res.output);
+
+    const settings = readJson(sb.settings);
+    settings.env.ENABLE_TOOL_SEARCH = 'false';
+    fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.match(off.stdout, /Left alone because they changed since connect: ENABLE_TOOL_SEARCH/);
+    const after = readJson(sb.settings);
+    assert.strictEqual(after.env.ENABLE_TOOL_SEARCH, 'false');
+    assert.ok(!('ANTHROPIC_BASE_URL' in after.env), 'our unedited base URL was not removed');
+  }));
+
+test('a state file from before tool search disconnects cleanly', () =>
+  withSandbox(async ({ sb }) => {
+    const res = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(res.code, 0, res.output);
+    makePrototypeState(sb);
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.doesNotMatch(off.stdout, /Left alone/);
+    assert.ok(!fs.existsSync(sb.settings), 'settings.json was left behind');
+    assert.ok(!fs.existsSync(sb.state), 'state file was left behind');
+  }));
+
+test('a state file from before tool search keeps a tool search value the user set later', () =>
+  withSandbox(async ({ sb }) => {
+    const res = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(res.code, 0, res.output);
+    makePrototypeState(sb);
+    const settings = readJson(sb.settings);
+    settings.env.ENABLE_TOOL_SEARCH = 'true';
+    fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.deepStrictEqual(readJson(sb.settings), { env: { ENABLE_TOOL_SEARCH: 'true' } });
+  }));
+
+test('connect on an install from before tool search turns it on without signing in again', () =>
+  withSandbox(async ({ api, sb }) => {
+    const first = await runCli(sb, [], { input: SIGN_IN });
+    assert.strictEqual(first.code, 0, first.output);
+    makePrototypeState(sb);
+    const callsBefore = api.calls.length;
+    const headerBefore = readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS;
+
+    const res = await runCli(sb, [], { input: '' });
+    assert.strictEqual(res.code, 0, res.output);
+    assert.match(res.stdout, /Turned on Claude Code tool search/);
+    assert.strictEqual(api.calls.length, callsBefore, 'the API was called to add tool search');
+    const after = readJson(sb.settings).env;
+    assert.strictEqual(after.ENABLE_TOOL_SEARCH, 'true');
+    assert.strictEqual(after.ANTHROPIC_CUSTOM_HEADERS, headerBefore, 'the account key changed');
+    assert.strictEqual(readJson(sb.state).written.ENABLE_TOOL_SEARCH, 'true');
+
+    const again = await runCli(sb, [], { input: '' });
+    assert.match(again.stdout, /Already connected/);
+    assert.strictEqual(api.calls.length, callsBefore);
+
+    const off = await runCli(sb, ['disconnect']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.ok(!fs.existsSync(sb.settings), 'settings.json was left behind');
   }));
 
 test('unknown commands and options exit with code 2', () =>
