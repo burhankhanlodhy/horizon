@@ -1,0 +1,20 @@
+{
+  "name": "contextshrink",
+  "version": "0.1.0",
+  "description": "Route Claude Code in a terminal through the ContextShrink proxy.",
+  "license": "Apache-2.0",
+  "private": true,
+  "bin": {
+    "contextshrink": "bin/contextshrink.js"
+  },
+  "files": [
+    "bin/",
+    "lib/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

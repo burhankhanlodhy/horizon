@@ -76,6 +76,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!desktop/npx/lib/
 lib64/
 parts/
 sdist/
