@@ -439,7 +439,7 @@ pub fn tools() -> Vec<ToolInfo> {
 /// Whether Code-tab installs turn on tool search (`--tool-search`). Off until a
 /// live check of the hosted proxy's tool-search betas is recorded; flip this
 /// one constant to enable it.
-pub const CODE_TAB_TOOL_SEARCH: bool = false;
+pub const CODE_TAB_TOOL_SEARCH: bool = true;
 
 /// Arguments for `horizon codetab install`, with `--watch` when `watch` is set.
 pub fn codetab_install_args(watch: bool) -> Vec<&'static str> {
@@ -1100,13 +1100,16 @@ mod health_tests {
 mod codetab_args_tests {
     use super::*;
 
-    /// Pins the install arguments while tool search is off. Flipping
-    /// `CODE_TAB_TOOL_SEARCH` must come with a recorded live check and an update here.
+    /// Pins the install arguments with Code-tab tool search on (a test build for
+    /// the live check; see `CODE_TAB_TOOL_SEARCH`).
     #[test]
-    fn tool_search_stays_off_until_recorded() {
-        assert!(!CODE_TAB_TOOL_SEARCH);
-        assert_eq!(codetab_install_args(false), vec!["codetab", "install"]);
-        assert_eq!(codetab_install_args(true), vec!["codetab", "install", "--watch"]);
+    fn code_tab_installs_pass_tool_search() {
+        assert!(CODE_TAB_TOOL_SEARCH);
+        assert_eq!(codetab_install_args(false), vec!["codetab", "install", "--tool-search"]);
+        assert_eq!(
+            codetab_install_args(true),
+            vec!["codetab", "install", "--tool-search", "--watch"]
+        );
     }
 }
 
