@@ -1,5 +1,5 @@
 {
-  "name": "contextshrink",
+  "name": "contextshrink-claude",
   "version": "0.1.0",
   "description": "Connect Claude Code to the ContextShrink proxy: compression and a warm prompt cache, with nothing running in the background.",
   "keywords": [
@@ -15,6 +15,7 @@
   "license": "Apache-2.0",
   "author": "ContextShrink",
   "bin": {
+    "contextshrink-claude": "bin/contextshrink.js",
     "contextshrink": "bin/contextshrink.js"
   },
   "files": [
