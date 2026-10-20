@@ -1308,6 +1308,12 @@ def _wrap_settings_lock(settings_path: Path) -> Any:
     return _locked_file(lock_file)
 
 
+#: Where the settings lock files go; ``None`` means ``<workspace>/locks``. Tests
+#: point it at a temp folder (tests/conftest.py) so they never write locks into
+#: the developer's real ~/.horizon.
+_SETTINGS_LOCKS_DIR: Path | None = None
+
+
 def _wrap_settings_lock_path(settings_path: Path) -> Path:
     """The lock file for ``settings_path``, kept in the Horizon workspace.
 
@@ -1322,7 +1328,8 @@ def _wrap_settings_lock_path(settings_path: Path) -> Path:
 
     key = os.path.normcase(os.path.abspath(settings_path))
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-    return workspace_dir() / "locks" / f"settings-{digest}.lock"
+    locks = _SETTINGS_LOCKS_DIR if _SETTINGS_LOCKS_DIR is not None else workspace_dir() / "locks"
+    return locks / f"settings-{digest}.lock"
 
 
 @contextmanager
