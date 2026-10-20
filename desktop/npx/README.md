@@ -3,10 +3,9 @@
 Connects Claude Code (in a terminal or VS Code) to the
 [ContextShrink](https://contextshrink.com) hosted proxy, which compresses what
 Claude Code sends and keeps its prompt cache warm. It is plain JavaScript run by
-Node: no dependencies, no binary, no background process. It changes three keys in
-Claude Code's settings file and nothing else.
-
-For the Claude Desktop Code tab, use the ContextShrink desktop app instead.
+Node: no dependencies, no background process. In a terminal setup it changes three
+keys in Claude Code's settings file and nothing else. On Windows it also sets up the
+Claude Desktop Code tab, which is described below.
 
 ## Use
 
@@ -29,6 +28,7 @@ Other commands:
   signing in. A key added this way is not revoked by logout.
 - `--force` replaces another gateway or an existing header. Disconnect restores
   the old value.
+- `--no-code-tab` (connect and login) skips the Claude Desktop Code tab on Windows.
 
 Sign-in asks for your email and password. The password is not shown as you type.
 When stdin is a pipe, the answers are read in order, one per line.
@@ -62,11 +62,44 @@ Connect also writes two small files:
 
 Everything else in `settings.json` is kept, including key order and indentation.
 
+## Claude Desktop Code tab (Windows)
+
+Claude Desktop's Code tab ignores `settings.json`, so on Windows connect also routes
+it through ContextShrink. To do that it changes files that Claude Desktop uses:
+
+- In each Claude Desktop Claude Code folder (under `%LOCALAPPDATA%\Packages\Claude_*`
+  and `%APPDATA%\Claude`), `claude.exe` is replaced by a small launcher with the
+  publisher's signature. The real binary is kept beside it as `claude.cs-real.exe`.
+  Nothing is deleted.
+- `%LOCALAPPDATA%\ContextShrink\claude-code\codetab.json` holds the proxy address and
+  the account key, in plain text. The launcher reads it.
+- `%LOCALAPPDATA%\ContextShrink\claude-code\npx-bin\` holds the launcher and
+  `contextshrink-codetab.exe`, the helper that patches and restores the folders.
+- A shortcut in your Startup folder runs the helper at sign-in. A Claude Desktop
+  update creates a new folder, and the helper patches it then.
+
+The two files come from `app.contextshrink.com`. Each one must match the SHA-256 pinned
+in this package and carry the publisher's Authenticode signature before it is used.
+
+When Claude Desktop is not installed, or on a system other than Windows, connect
+prints one line saying the Code tab is not set up, and exits normally.
+
+To undo it, run `npx contextshrink-claude disconnect`. It restores the real binaries,
+removes the startup shortcut and the files above, and leaves other files alone. If
+Claude Desktop is running a session, a Claude Code folder can be in use. Disconnect
+then keeps the Code tab files, says so, and you run disconnect again after you close
+Claude Desktop.
+
+If the ContextShrink desktop app manages the Code tab (its `codetab.json` does not have
+`"owner": "npx"`), connect leaves the Code tab alone, and disconnect does too. Use
+`--no-code-tab` to skip the Code tab on connect or login.
+
 ## How to undo it
 
 Run `npx contextshrink-claude disconnect`. It restores each key only if its value is still
 the one this tool wrote; a key you edited since is left alone, and the output says
-so. If the settings file did not exist before connect, disconnect removes it.
+so. If the settings file did not exist before connect, disconnect removes it. On
+Windows it also restores the Code tab, as described above.
 
 To revoke the account key as well, run `npx contextshrink-claude logout`. It asks you to
 sign in again, because revoking a key needs your account session. You can also
@@ -75,8 +108,10 @@ revoke keys on the API Keys page of the ContextShrink dashboard.
 ## Security
 
 The account key is stored in plain text in `settings.json`, and a copy is in
-`.contextshrink-npx.json` next to it. Anyone who can read those files can use the
-key. If either file leaks, revoke the key on the API Keys page.
+`.contextshrink-npx.json` next to it. On Windows it is also in the Code tab's
+`codetab.json`. Anyone who can read those files can use the key, and any program you
+run as your Windows user can read them. If any of these files leaks, revoke the key on
+the API Keys page.
 
 ## When it refuses
 
@@ -89,12 +124,19 @@ Connect changes nothing, and says why, when:
 
 `--force` overrides the second and third cases.
 
+On Windows, the Code tab part stops with an error, and the terminal part stays
+connected, when `codetab.json` exists but is not valid JSON, or when a download, the
+hash check or the signature check fails. Nothing is installed in those cases.
+
 ## Limitations
 
-- The Claude Desktop Code tab ignores `settings.json`, so it needs the desktop app.
-- There is no live savings bar in Claude Code. Your savings are on the
-  ContextShrink dashboard.
-- The keep-alive id is one per computer, shared by its Claude Code sessions.
+- The Code tab is set up on Windows only. On macOS and Linux, use the desktop app.
+- Until the first release of the Code tab files is published, connect sets up the
+  terminal part and says the Code tab is not released yet.
+- There is no live savings bar in Claude Code or in the Code tab. Your savings are on
+  the ContextShrink dashboard.
+- The keep-alive id is one per computer, shared by its Claude Code sessions and by the
+  Code tab.
 
 ## Development
 
@@ -107,5 +149,6 @@ npm test
 ```
 
 Set `CONTEXTSHRINK_API_URL` and `CONTEXTSHRINK_PROXY_URL` to point the CLI at other
-hosts. `e2e/run-live-test.ps1` (in the repository) runs a live test on Windows in an
+hosts. The Code tab tests use test-only overrides (`CONTEXTSHRINK_NPX_TEST=1` and
+`CONTEXTSHRINK_NPX_*`); the CLI ignores them unless that variable is set. `e2e/run-live-test.ps1` (in the repository) runs a live test on Windows in an
 isolated Claude Code folder.

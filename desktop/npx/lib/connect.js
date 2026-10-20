@@ -19,6 +19,7 @@ const cfg = require('./config');
 const files = require('./files');
 const api = require('./api');
 const { Cancelled } = require('./prompt');
+const codetab = require('./codetab');
 
 /** A refusal: the message is shown as is, and nothing was changed. */
 class Refusal extends Error {}
@@ -207,9 +208,9 @@ function persist(paths, settings, state, nextState, nextBlock) {
 /**
  * Connects Claude Code to the hosted proxy. `login` always mints a new key, even
  * when already connected; `keyFromStdin` uses a key the user pastes instead of
- * signing in.
+ * signing in. `codeTab` false skips the Claude Desktop Code tab part (Windows).
  */
-async function connect(ctx, { force = false, login = false, keyFromStdin = false } = {}) {
+async function connect(ctx, { force = false, login = false, keyFromStdin = false, codeTab = true } = {}) {
   const paths = cfg.resolvePaths(ctx.env);
   if (fs.existsSync(paths.desktopState)) {
     throw new Refusal(
@@ -235,11 +236,11 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
           const nextBlock = withKeys(block, written);
           persist(paths, settings, state, nextStateOf(paths, settings, block, state, written, previous), nextBlock);
           ctx.out('Turned on Claude Code tool search (ENABLE_TOOL_SEARCH=true).');
-          return 0;
+          return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
         }
         ctx.out('Already connected. Nothing to change.');
         reportToolSearch(ctx, plan);
-        return 0;
+        return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
       }
     } else if (!force) {
       throw new Refusal(
@@ -320,11 +321,21 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
   if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
   reportToolSearch(ctx, plan);
   ctx.out('Start a new Claude Code session to use the connection.');
-  return 0;
+  return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
 }
 
-/** Restores the settings this installer changed. A key the user edited is left alone. */
+/**
+ * Restores the Code tab (Windows) and the settings this installer changed. The Code
+ * tab is restored first, and a key the user edited is left alone.
+ */
 async function disconnect(ctx) {
+  const paths = cfg.resolvePaths(ctx.env);
+  const codeTabCode = await codetab.undoCodeTab(ctx);
+  const terminalCode = await disconnectTerminal(ctx);
+  return codeTabCode || terminalCode;
+}
+
+async function disconnectTerminal(ctx) {
   const paths = cfg.resolvePaths(ctx.env);
   const state = readState(paths.state);
   if (!state) {
@@ -400,6 +411,7 @@ async function status(ctx) {
     ctx.out('Not connected.');
   }
   ctx.out(toolSearchLine(block));
+  await codetab.codeTabStatus(ctx);
   return 0;
 }
 
@@ -417,7 +429,11 @@ function toolSearchLine(block) {
  */
 async function logout(ctx) {
   const paths = cfg.resolvePaths(ctx.env);
-  await disconnect(ctx);
+  const undone = await disconnect(ctx);
+  if (undone !== 0) {
+    ctx.err('Logout stopped before revoking the key, because the Code tab is still set up. Run logout again after fixing it.');
+    return undone;
+  }
   const saved = files.readOwnJson(paths.home, 'contextshrink account file');
   if (!saved) {
     ctx.out('No saved contextshrink state to remove.');

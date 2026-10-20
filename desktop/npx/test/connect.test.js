@@ -424,7 +424,7 @@ test('unknown commands and options exit with code 2', () =>
 
 test('the lib directory keeps no absolute user paths', () => {
   const root = path.join(__dirname, '..');
-  for (const file of ['bin/contextshrink.js', 'lib/cli.js', 'lib/config.js', 'lib/connect.js', 'lib/files.js', 'lib/api.js', 'lib/prompt.js']) {
+  for (const file of ['bin/contextshrink.js', 'lib/cli.js', 'lib/config.js', 'lib/connect.js', 'lib/files.js', 'lib/api.js', 'lib/prompt.js', 'lib/codetab.js', 'lib/codetab-manifest.json']) {
     const text = fs.readFileSync(path.join(root, file), 'utf8');
     assert.ok(!/C:\\Users\\|\/Users\/|\/home\/[a-z]/i.test(text), `${file} contains a personal path`);
   }

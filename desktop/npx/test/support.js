@@ -89,6 +89,11 @@ function makeSandbox(api, { proxyUrl = 'http://127.0.0.1:9' } = {}) {
   const home = path.join(root, 'home');
   const configDir = path.join(home, '.claude');
   fs.mkdirSync(configDir, { recursive: true });
+  // The Windows folders the Code tab reads are inside the temp root too, so no test
+  // can see or patch the real Claude Desktop folders.
+  const localAppData = path.join(root, 'LocalAppData');
+  const appData = path.join(root, 'AppData');
+  const dataDir = path.join(root, 'ContextShrinkData');
   const env = {
     PATH: process.env.PATH || '',
     SystemRoot: process.env.SystemRoot || '',
@@ -97,6 +102,9 @@ function makeSandbox(api, { proxyUrl = 'http://127.0.0.1:9' } = {}) {
     HOME: home,
     USERPROFILE: home,
     CLAUDE_CONFIG_DIR: configDir,
+    LOCALAPPDATA: localAppData,
+    APPDATA: appData,
+    CONTEXTSHRINK_DATA_DIR: dataDir,
     CONTEXTSHRINK_API_URL: api.url,
     CONTEXTSHRINK_PROXY_URL: proxyUrl,
   };
@@ -104,6 +112,9 @@ function makeSandbox(api, { proxyUrl = 'http://127.0.0.1:9' } = {}) {
     root,
     home,
     configDir,
+    localAppData,
+    appData,
+    dataDir,
     settings: path.join(configDir, 'settings.json'),
     state: path.join(configDir, '.contextshrink-npx.json'),
     desktopState: path.join(configDir, '.horizon-vscode-claude.json'),
