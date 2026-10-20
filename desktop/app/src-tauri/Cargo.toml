@@ -1,6 +1,6 @@
 [package]
 name = "contextshrink-desktop"
-version = "0.7.4"
+version = "0.7.5"
 description = "ContextShrink desktop launcher: run coding tools through the ContextShrink proxy"
 authors = ["ContextShrink"]
 edition = "2021"
@@ -32,8 +32,10 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
-# The HKCU Run entry, written through the registry API rather than by running reg.exe.
+# Removes the HKCU Run value older installs wrote. Registry API, not reg.exe.
 windows-registry = "0.6"
+# The sign-in Startup shortcut (IShellLinkW) and the known-folder lookup.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

@@ -361,7 +361,7 @@ fn restore_claude_code(state: &AppState) -> Vec<String> {
     errors
 }
 
-/// After a disconnect: keep the autostart entry only while something is
+/// After a disconnect: keep the sign-in start only while something is
 /// connected, and stop the forwarder when nothing needs it any more.
 fn after_disconnect(state: &AppState) {
     let wanted = state.client.wanted_editors();
@@ -483,7 +483,7 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
 /// uninstall otherwise never touches, and a reinstall would sign straight
 /// back in as the previous account. It also stops the forwarder and the
 /// Code-tab watcher, so their files can be removed, and clears the sign-in
-/// start entry. No window opens; every step is best effort, since nothing may
+/// start. No window opens; every step is best effort, since nothing may
 /// stop the uninstall.
 pub fn uninstall_cleanup() {
     if let Some(state) = headless_state() {
