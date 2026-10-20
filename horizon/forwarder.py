@@ -33,7 +33,6 @@ import hashlib
 import ipaddress
 import json
 import logging
-import os
 import re
 import threading
 from collections import OrderedDict
@@ -47,6 +46,7 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from horizon.bundled_client import serving_pid
 from horizon.forwarder_stats import (
     HEARTBEAT_SECONDS,
     ClaudeCodeStats,
@@ -283,7 +283,7 @@ def build_app(
     base = remote_url.rstrip("/")
     fixed = parse_upstream(upstream) if upstream else None
     started = started_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    forwarder_info = {"pid": os.getpid(), "version": _forwarder_version(), "port": port}
+    forwarder_info = {"pid": serving_pid(), "version": _forwarder_version(), "port": port}
     app = FastAPI(title="Horizon Forwarder", docs_url=None, redoc_url=None, openapi_url=None)
     client = httpx.AsyncClient(
         base_url=base,
@@ -697,7 +697,7 @@ def run_forwarder(
 
     root = Path(state_dir) if state_dir else default_state_dir()
     stats = ClaudeCodeStats(claude_code_dir(root), pause_file=pause_file)
-    info = {"pid": os.getpid(), "version": _forwarder_version(), "port": port}
+    info = {"pid": serving_pid(), "version": _forwarder_version(), "port": port}
     stats.flush(forwarder=info)
     stop = threading.Event()
     threading.Thread(
