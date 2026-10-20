@@ -25,6 +25,8 @@ from typing import Any
 
 import httpx
 
+from horizon.bundled_client import cli_command
+
 API_URL_ENV = "CONTEXTSHRINK_API_URL"
 PROXY_URL_ENV = "CONTEXTSHRINK_PROXY_URL"
 APP_URL_ENV = "CONTEXTSHRINK_APP_URL"
@@ -220,11 +222,7 @@ def _listening(port: int) -> bool:
 
 def relay_command(port: int) -> list[str]:
     """The ``horizon forward start`` command for a hosted relay on ``port``."""
-    if getattr(sys, "frozen", False):  # the bundled client is its own executable
-        cmd = [sys.executable]
-    else:
-        cmd = [sys.executable, "-m", "horizon.cli"]
-    cmd += ["forward", "start", "--remote", proxy_url(), "--port", str(port)]
+    cmd = [*cli_command(), "forward", "start", "--remote", proxy_url(), "--port", str(port)]
     upstream = relay_upstream(port)
     if upstream:
         cmd += ["--upstream", upstream]

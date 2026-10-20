@@ -91,6 +91,19 @@ def _isolate_mcp_ledger(monkeypatch, tmp_path_factory):
     monkeypatch.setattr(ledger, "ledger_path", lambda: ledger_file)
 
 
+# wrap/unwrap and Connect lock settings files through ``<workspace>/locks``, and
+# the scrub above leaves the workspace at the real home, so every test that edits
+# a settings file left a lock file in the developer's ~/.horizon. Redirect it.
+@pytest.fixture(autouse=True)
+def _isolate_settings_locks(monkeypatch, tmp_path_factory):
+    try:
+        from horizon.cli import wrap
+    except ModuleNotFoundError:
+        return
+
+    monkeypatch.setattr(wrap, "_SETTINGS_LOCKS_DIR", tmp_path_factory.mktemp("settings-locks"))
+
+
 # The Copilot "routed to Copilot" flag is a module-global ContextVar that
 # build_copilot_upstream_url() sets as a side effect. Unit tests that call that
 # builder directly (or otherwise run in the shared root context) would leave it

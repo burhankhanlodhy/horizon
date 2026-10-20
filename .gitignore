@@ -294,5 +294,9 @@ desktop/mcp/prepared-vault/
 desktop/mcp/extension/build/
 desktop/mcp/extension/dist/
 
+# Windows installer downloaded from the desktop CI artifact for publish-installer.ps1
+desktop/dist-windows/
+
 # Price rows the frozen desktop client ships (written by desktop/client/build_pricing.py)
 horizon/pricing/_model_prices.json
+desktop/app/src-tauri/tauri.signing.generated.json

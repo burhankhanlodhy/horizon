@@ -1,8 +1,9 @@
-# Standalone workspace for the Claude Code Code-tab launcher and status helper.
+# Standalone workspace for the Claude Code Code-tab launcher, the status helper and
+# the Windows desktop client stub (horizon.exe).
 # Deliberately NOT a member of the root Cargo.toml workspace.
 [workspace]
 resolver = "2"
-members = ["launcher", "status"]
+members = ["launcher", "status", "client-stub"]
 
 [workspace.package]
 version = "0.1.0"

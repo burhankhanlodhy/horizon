@@ -29,8 +29,9 @@ through the hosted ContextShrink proxy. Supported tools: Claude Code, Codex and 
      transport plugin, which reroutes every provider. The forwarder sends model
      calls to the proxy and everything else (sign-in, catalogues) direct.
 
-The installer ships only ContextShrink's own pieces: the app and a frozen
-Horizon client (Python runtime included). The tools it launches, such as
+The installer ships only ContextShrink's own pieces: the app and the Horizon
+client, which carries its own Python runtime (the official embeddable Python,
+run by a small `horizon.exe` launcher). The tools it launches, such as
 OpenCode, are never bundled; the app detects them on `PATH` and links to their
 install page when missing.
 
@@ -38,7 +39,9 @@ install page when missing.
 
 | Path | What |
 |---|---|
-| `client/horizon_client.py`, `client/build-client.ps1` | Frozen Horizon CLI (PyInstaller, one-folder) |
+| `client/build-client-embed.ps1`, `client/horizon_main.py`, `client/embed-requirements.txt` | Horizon client on the pinned, PSF-signed embeddable Python (default on Windows) |
+| `claude-code-tools/client-stub` | `horizon.exe`: the launcher that runs the bundled `python.exe` |
+| `client/horizon_client.py`, `client/build-client.ps1` | Frozen Horizon CLI (PyInstaller), kept for `build-installer.ps1 -PyInstaller` |
 | `app/src-tauri/src/api.rs` | Control-plane API calls (login, device key, account) |
 | `app/src-tauri/src/secrets.rs` | Session token and device-key ID in Credential Manager |
 | `app/src-tauri/src/client.rs` | Bundled client: vault, forwarder, tool registry and launch |
@@ -49,17 +52,21 @@ and `unwrap` arguments.
 
 ## Build
 
-Requires the repo `.venv` (with PyInstaller), Rust, the MSVC build tools and
-Node.js. From PowerShell (not Git Bash):
+Requires the repo `.venv`, Rust, the MSVC build tools and Node.js. From PowerShell (not Git Bash):
 
 ```powershell
 .\desktop\build-installer.ps1
 ```
 
+The GitHub Actions "Desktop app" workflow builds the same installer (job
+`windows`, artifact `contextshrink-windows-x86_64`). When the Azure Artifact
+Signing variables are set, the installer and helper exes are signed; see
+[SIGNING.md](SIGNING.md) for the setup, local signing and verification.
+
 Development run (uses the frozen client from `client\dist`):
 
 ```powershell
-.\desktop\client\build-client.ps1
+.\desktop\client\build-client-embed.ps1
 cd desktop\app; npm install; npx tauri dev
 ```
 
@@ -69,8 +76,13 @@ different dashboard origin or proxy.
 ## Publish to the Downloads page
 
 ```powershell
+gh run download <run-id> -n contextshrink-windows-x86_64 -D desktop\dist-windows
 .\desktop\publish-installer.ps1
 ```
+
+The Windows installer is taken from `desktop\dist-windows` when the CI artifact
+for this version is there, otherwise from the local build. Installers are never
+hosted on GitHub; the artifact is only a hand-off to this script.
 
 Uploads the installer and a `latest.json` (version, file, size, SHA-256, date)
 to the Pi 4 and prints one `ssh -t ... /tmp/cs-publish-release.sh` command that

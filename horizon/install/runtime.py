@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from horizon._subprocess import pid_alive, run
+from horizon.bundled_client import bundled_client_command
 
 from .health import probe_ready
 from .models import DeploymentManifest, InstallPreset, RuntimeKind, SupervisorKind
@@ -95,10 +96,11 @@ def _deployment_env(manifest: DeploymentManifest) -> dict[str, str]:
 def resolve_horizon_command() -> list[str]:
     """Resolve the most reliable command to invoke horizon."""
 
-    # A frozen build (e.g. the desktop app's bundled client) is itself the CLI,
-    # and has no `-m` support; never defer to a different horizon on PATH.
-    if getattr(sys, "frozen", False):
-        return [sys.executable]
+    # A bundled desktop client (frozen, or the embedded launcher) is itself the
+    # CLI and has no `-m` support; never defer to a different horizon on PATH.
+    bundled = bundled_client_command()
+    if bundled is not None:
+        return bundled
     horizon_bin = shutil.which("horizon")
     if horizon_bin:
         return [horizon_bin]

@@ -1002,6 +1002,7 @@ def test_settings_lock_lives_in_the_workspace_not_beside_the_settings(
     """Wrap, unwrap and Connect leave no lock file in ~/.claude or the project."""
     workspace = tmp_path / "workspace"
     monkeypatch.setenv("HORIZON_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(wrap_mod, "_SETTINGS_LOCKS_DIR", None)  # the real default
     settings = tmp_path / "home" / ".claude" / "settings.json"
     other = tmp_path / "proj" / ".claude" / "settings.local.json"
 
