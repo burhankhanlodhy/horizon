@@ -9,7 +9,7 @@ const http = require('node:http');
 const https = require('node:https');
 const { KEY_PREFIX, KEY_SCOPES } = require('./config');
 
-const USER_AGENT = 'contextshrink-npx/0.1.0';
+const USER_AGENT = 'contextshrink-npx/0.2.0';
 const TIMEOUT_MS = 20000;
 const UNREACHABLE = 'Cannot reach ContextShrink. Check your internet connection. Nothing was changed.';
 
@@ -115,4 +115,4 @@ async function signOut(baseUrl, token) {
   }
 }
 
-module.exports = { ApiError, signIn, createDeviceKey, revokeDeviceKey, signOut };
+module.exports = { ApiError, USER_AGENT, signIn, createDeviceKey, revokeDeviceKey, signOut };

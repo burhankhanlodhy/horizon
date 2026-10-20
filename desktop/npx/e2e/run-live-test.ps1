@@ -8,6 +8,8 @@ or logout. Claude Code reads and writes only a new folder under %TEMP%
 (CLAUDE_CONFIG_DIR). The child processes also get HOME and USERPROFILE pointing at a
 folder inside it, so ~/.contextshrink is isolated too. The real ~/.claude is never
 written: its settings.json hash is recorded before the run and compared at the end.
+LOCALAPPDATA, APPDATA and the ContextShrink data folder point into the test folder as
+well, so connect's Code tab part finds no real Claude Desktop folder and patches nothing.
 
 You type your email and password at the connect prompt yourself. This script never
 reads, logs or echoes them, and it never prints a key, a header or a settings value.
@@ -174,6 +176,11 @@ try {
     Set-ProcessEnv 'CLAUDE_CONFIG_DIR' $root
     Set-ProcessEnv 'HOME' $tempHome
     Set-ProcessEnv 'USERPROFILE' $tempHome
+    # The Code tab part of connect reads these folders. Pointing them into the test
+    # folder means no real Claude Desktop folder can be found or patched by this run.
+    Set-ProcessEnv 'LOCALAPPDATA' (Join-Path $root 'LocalAppData')
+    Set-ProcessEnv 'APPDATA' (Join-Path $root 'AppData')
+    Set-ProcessEnv 'CONTEXTSHRINK_DATA_DIR' (Join-Path $root 'ContextShrinkData')
     $removed = Clear-InheritedClaudeEnv
     if ($removed.Count -gt 0) {
         Show-Note ('removed for the test processes only: ' + ($removed -join ', '))
@@ -181,11 +188,14 @@ try {
         Show-Ok 'no Claude Code variables were inherited'
     }
 
-    $probe = "var e=process.env;var r={config_dir_is_test:e.CLAUDE_CONFIG_DIR===process.argv[1],home_is_test:e.USERPROFILE===process.argv[2],base_url_inherited:('ANTHROPIC_BASE_URL' in e),headers_inherited:('ANTHROPIC_CUSTOM_HEADERS' in e),tool_search_inherited:('ENABLE_TOOL_SEARCH' in e)};console.log(JSON.stringify(r));"
+    $probe = "var e=process.env;var r={config_dir_is_test:e.CLAUDE_CONFIG_DIR===process.argv[1],home_is_test:e.USERPROFILE===process.argv[2],local_appdata_is_test:String(e.LOCALAPPDATA).startsWith(process.argv[1]),appdata_is_test:String(e.APPDATA).startsWith(process.argv[1]),base_url_inherited:('ANTHROPIC_BASE_URL' in e),headers_inherited:('ANTHROPIC_CUSTOM_HEADERS' in e),tool_search_inherited:('ENABLE_TOOL_SEARCH' in e)};console.log(JSON.stringify(r));"
     $probeRaw = & node -e $probe $root $tempHome
     $seen = ($probeRaw -join '') | ConvertFrom-Json
     if ((Get-Prop $seen 'config_dir_is_test') -ne $true) { throw 'A child process does not see the test CLAUDE_CONFIG_DIR.' }
     if ((Get-Prop $seen 'home_is_test') -ne $true) { throw 'A child process does not see the test HOME folder.' }
+    if (((Get-Prop $seen 'local_appdata_is_test') -ne $true) -or ((Get-Prop $seen 'appdata_is_test') -ne $true)) {
+        throw 'A child process sees the real LOCALAPPDATA or APPDATA, so the Code tab could reach Claude Desktop.'
+    }
     if ((Get-Prop $seen 'base_url_inherited') -or (Get-Prop $seen 'headers_inherited') -or (Get-Prop $seen 'tool_search_inherited')) {
         throw 'A ContextShrink or tool search variable still reaches the child processes.'
     }

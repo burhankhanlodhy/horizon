@@ -13,14 +13,15 @@ const USAGE = `contextshrink-claude ${require('../package.json').version}
 Usage:
   npx contextshrink-claude [connect] [--force]   Sign in and route Claude Code through ContextShrink
   npx contextshrink-claude login [--key]         Make a new account key for this computer (--key: paste one)
-  npx contextshrink-claude disconnect            Restore the settings that connect changed
-  npx contextshrink-claude status                Show whether Claude Code is connected
+  npx contextshrink-claude disconnect            Restore the settings and the Code tab that connect changed
+  npx contextshrink-claude status                Show whether Claude Code and the Code tab are connected
   npx contextshrink-claude logout                Disconnect and revoke this computer's account key
 
 Options:
-  --force    Replace another gateway or existing header (disconnect restores it)
-  --key      Read an account key from stdin instead of signing in
-  -h, --help Show this help
+  --force        Replace another gateway or existing header (disconnect restores it)
+  --key          Read an account key from stdin instead of signing in
+  --no-code-tab  Do not set up Claude Desktop's Code tab (Windows; connect and login)
+  -h, --help     Show this help
 `;
 
 const COMMANDS = new Set(['connect', 'login', 'disconnect', 'status', 'logout', 'help']);
@@ -30,7 +31,7 @@ function parseArgs(argv) {
   let command = 'connect';
   if (args.length && !args[0].startsWith('-')) command = args.shift();
   const flags = new Set(args);
-  const known = new Set(['--force', '--key', '-h', '--help', '--version', '-v']);
+  const known = new Set(['--force', '--key', '--no-code-tab', '-h', '--help', '--version', '-v']);
   const unknown = args.filter((a) => !known.has(a));
   return { command, flags, unknown };
 }
@@ -66,6 +67,10 @@ async function run(argv, io) {
     err('--key only applies to login.');
     return 2;
   }
+  if (flags.has('--no-code-tab') && !['connect', 'login'].includes(command)) {
+    err('--no-code-tab only applies to connect and login.');
+    return 2;
+  }
 
   const ctx = {
     env: io.env,
@@ -77,12 +82,13 @@ async function run(argv, io) {
   try {
     switch (command) {
       case 'connect':
-        return await connect(ctx, { force: flags.has('--force') });
+        return await connect(ctx, { force: flags.has('--force'), codeTab: !flags.has('--no-code-tab') });
       case 'login':
         return await connect(ctx, {
           force: flags.has('--force'),
           login: true,
           keyFromStdin: flags.has('--key'),
+          codeTab: !flags.has('--no-code-tab'),
         });
       case 'disconnect':
         return await disconnect(ctx);
