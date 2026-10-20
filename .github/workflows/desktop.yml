@@ -1,6 +1,7 @@
-# Build the ContextShrink desktop app for macOS (Apple Silicon) and Linux
-# (x86_64), smoke-test the bundled client, and keep the packages as artifacts.
-# Windows is still built locally (desktop/build-installer.ps1).
+# Build the ContextShrink desktop app for macOS (Apple Silicon), Linux
+# (x86_64) and Windows (x86_64), smoke-test the bundled client, and keep the
+# packages as artifacts. The Windows installer is signed with Azure Artifact
+# Signing once the repo variables in desktop/SIGNING.md are set.
 #
 # Runs on demand (Actions tab, or `gh workflow run desktop.yml`) and for tags
 # named desktop-v*.
@@ -77,3 +78,117 @@ jobs:
           path: desktop/dist-linux/*
           if-no-files-found: error
           retention-days: 30
+
+  windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    # The Azure federated credential trusts this environment only (desktop/SIGNING.md).
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Python venv for the frozen client (.venv, as build-client.ps1 expects)
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[proxy,vault]" "pyinstaller>=6.10"
+      - name: Build the Code-tab helpers (claude-code-tools)
+        shell: pwsh
+        working-directory: desktop/claude-code-tools
+        run: cargo build --release --locked
+      - name: .NET 8 runtime for the signing dlib
+        if: vars.AZURE_CLIENT_ID != ''
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Azure sign-in (OIDC, no client secret)
+        if: vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Artifact Signing settings and client dlib
+        if: vars.AZURE_CLIENT_ID != ''
+        shell: pwsh
+        env:
+          SIGN_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          SIGN_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          SIGN_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          foreach ($n in "SIGN_ENDPOINT", "SIGN_ACCOUNT", "SIGN_PROFILE") {
+              if (-not [Environment]::GetEnvironmentVariable($n)) { throw "Repo variable for $n is empty (see desktop/SIGNING.md)." }
+          }
+          # Pinned Artifact Signing Client Tools dlib (NuGet package Microsoft.ArtifactSigning.Client).
+          $version = "1.0.146"
+          $pkg = Join-Path $env:RUNNER_TEMP "ArtifactSigning"
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client/$version" -OutFile "$pkg.zip"
+          Expand-Archive "$pkg.zip" -DestinationPath $pkg -Force
+          $dlib = Join-Path $pkg "bin\x64\Azure.CodeSigning.Dlib.dll"
+          if (-not (Test-Path $dlib)) { throw "Azure.CodeSigning.Dlib.dll not found in package $version" }
+          "Dlib $version Authenticode status: $((Get-AuthenticodeSignature -LiteralPath $dlib).Status)"
+          Add-Content -Path $env:GITHUB_ENV -Value "CS_SIGN_ENDPOINT=$env:SIGN_ENDPOINT"
+          Add-Content -Path $env:GITHUB_ENV -Value "CS_SIGN_ACCOUNT=$env:SIGN_ACCOUNT"
+          Add-Content -Path $env:GITHUB_ENV -Value "CS_SIGN_PROFILE=$env:SIGN_PROFILE"
+          Add-Content -Path $env:GITHUB_ENV -Value "CS_SIGN_DLIB=$dlib"
+      - name: Build the installer (desktop/build-installer.ps1)
+        shell: pwsh
+        run: .\desktop\build-installer.ps1
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Smoke-test the bundled client
+        shell: pwsh
+        run: |
+          $horizon = "desktop\client\dist\horizon\horizon.exe"
+          & $horizon --version
+          if ($LASTEXITCODE -ne 0) { throw "horizon --version failed" }
+          & $horizon codetab --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "horizon codetab --help failed" }
+      - name: Verify Authenticode signatures
+        if: vars.AZURE_CLIENT_ID != ''
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File "desktop\app\src-tauri\target\release\bundle\nsis\*.exe")
+          if (-not $installer) { throw "No NSIS installer was built" }
+          $files = @(Get-ChildItem -File "desktop\app\src-tauri\target\release\*.exe", "desktop\claude-code-tools\target\release\*.exe" -ErrorAction SilentlyContinue)
+          $files += $installer
+          $files += @(Get-ChildItem "desktop\client\dist\horizon" -Recurse -File -Include *.exe, *.dll, *.pyd)
+          $bad = @($files | Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" })
+          "Checked $($files.Count) signed-candidate files"
+          if ($bad) {
+              $bad | ForEach-Object { "Not Valid: $($_.FullName)" }
+              throw "$($bad.Count) file(s) do not have a valid signature"
+          }
+      - name: Report unsigned build
+        if: vars.AZURE_CLIENT_ID == ''
+        shell: pwsh
+        run: Write-Output "::warning::unsigned build (AZURE_CLIENT_ID is not set; Artifact Signing skipped)"
+      - name: Stage the installer for publish-installer.ps1
+        shell: pwsh
+        run: |
+          $nsis = "desktop\app\src-tauri\target\release\bundle\nsis"
+          New-Item -ItemType Directory -Force "desktop\dist-windows" | Out-Null
+          Copy-Item "$nsis\*.exe" "desktop\dist-windows" -ErrorAction Stop
+          Copy-Item "$nsis\*.exe.sig" "desktop\dist-windows" -ErrorAction SilentlyContinue
+          Get-ChildItem "desktop\dist-windows" | ForEach-Object { "Staged $($_.Name)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextshrink-windows-x86_64
+          path: desktop/dist-windows/*
+          if-no-files-found: error
+          retention-days: 7

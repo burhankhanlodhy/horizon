@@ -39,12 +39,32 @@ if ($PyInstaller) {
     & (Join-Path $PSScriptRoot "client\build-client-embed.ps1")
 }
 
+# Code signing (Azure Artifact Signing, see desktop\sign.ps1 and SIGNING.md).
+# Active only when all three CS_SIGN_* variables are set; otherwise nothing here runs.
+# Signs the helper exes and the client's files that are not already validly
+# signed (PSF/Microsoft files are left alone) before tauri packs them. Tauri
+# signs the app exe and installer itself via src-tauri\tauri.signing.conf.json.
+$signingConfig = @()
+if ($env:CS_SIGN_ENDPOINT -and $env:CS_SIGN_ACCOUNT -and $env:CS_SIGN_PROFILE) {
+    $helperDir = Join-Path $PSScriptRoot "claude-code-tools\target\release"
+    $toSign = @(
+        @("claude-code-launcher.exe", "contextshrink-status.exe", "horizon.exe") |
+            ForEach-Object { Join-Path $helperDir $_ } |
+            Where-Object { (Test-Path $_) -and (Get-AuthenticodeSignature -LiteralPath $_).Status -ne "Valid" }
+        Get-ChildItem (Join-Path $PSScriptRoot "client\dist\horizon") -Recurse -File -Include *.exe, *.dll, *.pyd |
+            Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" } |
+            ForEach-Object { $_.FullName }
+    )
+    if ($toSign.Count) { & (Join-Path $PSScriptRoot "sign.ps1") @toSign }
+    $signingConfig = @("--config", "src-tauri/tauri.signing.conf.json")
+}
+
 Push-Location (Join-Path $PSScriptRoot "app")
 try {
     $ErrorActionPreference = "Continue"
     npm ci
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-    npx tauri build @updaterConfig
+    npx tauri build @updaterConfig @signingConfig
     if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 }
 finally {
