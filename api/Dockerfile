@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Every API module must be listed here, or the API fails to start.
 COPY main.py db.py security.py schema.sql analytics.py billing.py contact.py \
-     mailer.py account_email.py turnstile.py stripe_setup.py ./
+     mailer.py account_email.py turnstile.py stripe_setup.py savings_ledger.py ./
 
 EXPOSE 8788
 

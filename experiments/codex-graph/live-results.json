@@ -1,0 +1,168 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "prices": {
+    "input": 2,
+    "cachedInput": 0.1,
+    "output": 10,
+    "units": "USD per million tokens",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-21"
+  },
+  "sourceFiles": 2659,
+  "sourceBytes": 32234672,
+  "sourceFingerprint": "fb9d7b133a1f97fe36ef788ff9b4e603cab35a095025e70217d27ea4c3ec331e",
+  "graphVersion": "0.2.3",
+  "scope": "live Codex sessions: initial review plus 20 follow-ups; same prompts and frozen source, one run per arm, no production proxy",
+  "costCaveat": "API list-price equivalent from actual engine usage; ChatGPT subscription does not imply a per-token invoice. Cached tokens are a subset of input. Reasoning tokens are a subset of output, not added twice.",
+  "arms": {
+    "A": {
+      "initialReview": {
+        "turns": 1,
+        "input_tokens": 289718,
+        "cached_input_tokens": 243200,
+        "output_tokens": 2676,
+        "reasoning_output_tokens": 204,
+        "uncached_input_tokens": 46518,
+        "input_usd": 0.117356,
+        "output_usd": 0.02676,
+        "total_usd": 0.144116,
+        "no_cache_list_price_usd": 0.606196
+      },
+      "next20": {
+        "turns": 20,
+        "input_tokens": 15467094,
+        "cached_input_tokens": 15141888,
+        "output_tokens": 28513,
+        "reasoning_output_tokens": 4000,
+        "uncached_input_tokens": 325206,
+        "input_usd": 2.1646007999999997,
+        "output_usd": 0.28513,
+        "total_usd": 2.4497307999999998,
+        "no_cache_list_price_usd": 31.219318
+      },
+      "combined": {
+        "turns": 21,
+        "input_tokens": 15756812,
+        "cached_input_tokens": 15385088,
+        "output_tokens": 31189,
+        "reasoning_output_tokens": 4204,
+        "uncached_input_tokens": 371724,
+        "input_usd": 2.2819567999999997,
+        "output_usd": 0.31189,
+        "total_usd": 2.5938467999999997,
+        "no_cache_list_price_usd": 31.825514
+      },
+      "graphToolCalls": 0,
+      "failedShellCalls": 5
+    },
+    "B": {
+      "initialReview": {
+        "turns": 1,
+        "input_tokens": 376280,
+        "cached_input_tokens": 300160,
+        "output_tokens": 3409,
+        "reasoning_output_tokens": 394,
+        "uncached_input_tokens": 76120,
+        "input_usd": 0.182256,
+        "output_usd": 0.03409,
+        "total_usd": 0.216346,
+        "no_cache_list_price_usd": 0.78665
+      },
+      "next20": {
+        "turns": 20,
+        "input_tokens": 15116879,
+        "cached_input_tokens": 14818560,
+        "output_tokens": 28683,
+        "reasoning_output_tokens": 5419,
+        "uncached_input_tokens": 298319,
+        "input_usd": 2.078494,
+        "output_usd": 0.28683,
+        "total_usd": 2.365324,
+        "no_cache_list_price_usd": 30.520588
+      },
+      "combined": {
+        "turns": 21,
+        "input_tokens": 15493159,
+        "cached_input_tokens": 15118720,
+        "output_tokens": 32092,
+        "reasoning_output_tokens": 5813,
+        "uncached_input_tokens": 374439,
+        "input_usd": 2.26075,
+        "output_usd": 0.32092,
+        "total_usd": 2.58167,
+        "no_cache_list_price_usd": 31.307238
+      },
+      "graphToolCalls": 3,
+      "failedShellCalls": 3
+    }
+  },
+  "comparisons": {
+    "initialReview": {
+      "inputTokensAvoided": -86562,
+      "inputReductionPercent": -29.87801931533422,
+      "outputTokensAvoided": -733,
+      "dollarsAvoided": -0.07223000000000002,
+      "dollarReductionPercent": -50.11934830275613,
+      "noCacheDollarsAvoided": -0.180454
+    },
+    "next20": {
+      "inputTokensAvoided": 350215,
+      "inputReductionPercent": 2.2642585607871784,
+      "outputTokensAvoided": -170,
+      "dollarsAvoided": 0.08440679999999956,
+      "dollarReductionPercent": 3.445554099250398,
+      "noCacheDollarsAvoided": 0.6987300000000012
+    },
+    "combined": {
+      "inputTokensAvoided": 263653,
+      "inputReductionPercent": 1.6732636017996534,
+      "outputTokensAvoided": -903,
+      "dollarsAvoided": 0.012176799999999766,
+      "dollarReductionPercent": 0.46944946787141656,
+      "noCacheDollarsAvoided": 0.5182759999999966
+    }
+  },
+  "quality": {
+    "A": {
+      "sourceUnchanged": true,
+      "markdownFileLineCitations": 234,
+      "distinctCitedFiles": 61,
+      "invalidFileLineCitations": [],
+      "failedToolItems": 5,
+      "permissionOrQuotaBlockedTurns": [],
+      "scope": "Citation checks verify file/line existence, not the semantic correctness or equal completeness of the answers. Nonzero shell exits may mean no search matches."
+    },
+    "B": {
+      "sourceUnchanged": true,
+      "markdownFileLineCitations": 235,
+      "distinctCitedFiles": 59,
+      "invalidFileLineCitations": [],
+      "failedToolItems": 4,
+      "permissionOrQuotaBlockedTurns": [],
+      "scope": "Citation checks verify file/line existence, not the semantic correctness or equal completeness of the answers. Nonzero shell exits may mean no search matches."
+    }
+  },
+  "method": {
+    "initialTurns": 1,
+    "followUpTurns": 20,
+    "modelRequestsCanExceedTurns": true,
+    "sourceFrozenAndSameBeforeGraphIntegration": true,
+    "fileCount": 2659,
+    "sourceManifestDigest": "566c1b9551cabef57a571389b9af0703f975ed29f10b14a0eb2b8c193e87210d",
+    "providerUsageBasis": "Deltas of the engine's cumulative provider usage after each resumed turn, verified to sum to final cumulative totals. CLI turn.completed usage on resume is cumulative and must not be summed directly.",
+    "cacheControl": "Automatic actual cache hits; order alternated A/B per step. Cache state was not forced equal. One pair of stochastic model sessions, no confidence interval or proof of equal answer quality.",
+    "permissionMode": "documented automatic approval review in temporary source copies",
+    "billingScope": "Main-model API list-price equivalent, not a ChatGPT subscription invoice. Auxiliary approval-review usage is not exposed here.",
+    "sourceScope": "Git-visible eligible source per the graph filter; ignored, sensitive, generated, binary and oversized files excluded in both arms.",
+    "sourceRoot": "%USERPROFILE%\\OneDrive\\Desktop\\ContextShrink\\.claude\\worktrees\\phase-c-review-orchestrate-54e903",
+    "graphIndexBuildUsesModelTokens": false,
+    "pilot": {
+      "includedInComparison": false,
+      "reason": "No source could be read because the no-approval pilot blocked retrieval",
+      "listPriceEquivalentUsd": 0.1613076
+    },
+    "interface": "Installed Codex CLI engine with fresh isolated profiles, not automated desktop UI chats. Both profiles use the same model, effort and source snapshot.",
+    "temporaryAuthRemoved": true
+  }
+}

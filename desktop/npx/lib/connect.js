@@ -6,6 +6,7 @@
 //   ANTHROPIC_BASE_URL       <proxy>/k/<keep-alive id>
 //   ANTHROPIC_CUSTOM_HEADERS X-Horizon-Proxy-Token: <account key>
 //   ENABLE_TOOL_SEARCH       "true"   (only when the user has not set it)
+// savings.js also manages the optional display entries outside the env block.
 //
 // Before writing, connect records the previous value of each key, and the
 // values it wrote, in a state file next to settings.json. A key that connect
@@ -20,6 +21,7 @@ const files = require('./files');
 const api = require('./api');
 const { Cancelled } = require('./prompt');
 const codetab = require('./codetab');
+const savings = require('./savings');
 
 /** A refusal: the message is shown as is, and nothing was changed. */
 class Refusal extends Error {}
@@ -182,6 +184,7 @@ function nextStateOf(paths, settings, block, state, written, previous) {
     written,
     proxy_host: new URL(paths.proxyUrl).host,
     connected_at: new Date().toISOString(),
+    ...(state && state.ui ? { ui: state.ui } : {}),
   };
 }
 
@@ -203,6 +206,12 @@ function persist(paths, settings, state, nextState, nextBlock) {
     else files.removeFile(paths.state);
     throw err;
   }
+}
+
+async function finishConnect(ctx, paths, options) {
+  const code = await codetab.setUpCodeTab(ctx, paths, options);
+  savings.ensure(ctx, paths, { codeTab: !options.skip });
+  return code;
 }
 
 /**
@@ -236,11 +245,11 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
           const nextBlock = withKeys(block, written);
           persist(paths, settings, state, nextStateOf(paths, settings, block, state, written, previous), nextBlock);
           ctx.out('Turned on Claude Code tool search (ENABLE_TOOL_SEARCH=true).');
-          return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
+          return finishConnect(ctx, paths, { skip: !codeTab });
         }
         ctx.out('Already connected. Nothing to change.');
         reportToolSearch(ctx, plan);
-        return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
+        return finishConnect(ctx, paths, { skip: !codeTab });
       }
     } else if (!force) {
       throw new Refusal(
@@ -321,7 +330,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
   if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
   reportToolSearch(ctx, plan);
   ctx.out('Start a new Claude Code session to use the connection.');
-  return codetab.setUpCodeTab(ctx, paths, { skip: !codeTab });
+  return finishConnect(ctx, paths, { skip: !codeTab });
 }
 
 /**
@@ -348,6 +357,7 @@ async function disconnectTerminal(ctx) {
   const work = block || {};
   const restored = [];
   const left = [];
+  const uiResult = savings.restore(settings.payload, state.ui);
   for (const key of cfg.OWNED_KEYS) {
     // No record means connect never wrote this key (or an older version did not set it).
     if (!hasOwn(state.written, key)) continue;
@@ -361,7 +371,7 @@ async function disconnectTerminal(ctx) {
     }
   }
 
-  if (restored.length) {
+  if (restored.length || uiResult.changed) {
     if (state.env_existed === false && Object.keys(work).length === 0) {
       delete settings.payload.env;
     } else {
@@ -374,12 +384,14 @@ async function disconnectTerminal(ctx) {
     }
   }
   files.removeFile(paths.state);
+  savings.cleanup(paths, settings.payload);
 
   if (restored.length) ctx.out(`Restored: ${restored.join(', ')}.`);
   else ctx.out('No settings needed restoring.');
   if (left.length) {
     ctx.out(`Left alone because they changed since connect: ${left.join(', ')}.`);
   }
+  if (uiResult.left.length) ctx.out('Kept savings-bar settings you changed since connect.');
   ctx.out('Your account key stays active until you run logout or revoke it on the API Keys page.');
   return 0;
 }
@@ -411,6 +423,7 @@ async function status(ctx) {
     ctx.out('Not connected.');
   }
   ctx.out(toolSearchLine(block));
+  if (state) ctx.out(savings.describe(settings.payload, state.ui));
   await codetab.codeTabStatus(ctx);
   return 0;
 }

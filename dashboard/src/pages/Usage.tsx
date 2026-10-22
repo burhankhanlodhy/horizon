@@ -420,6 +420,21 @@ export default function Usage() {
         </Card>
       )}
 
+      {t.graphEstimates > 0 && (
+        <Card className="p-6">
+          <SectionHeader eyebrow="Local code graph" title="Discovery diagnostics" />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Figure label="Estimated retrieval token difference" value={fmtCompact(t.graphTokensAvoided)}
+              sub="Bounded literal-search baseline, with graph overhead deducted" />
+            <Figure label="Savings credit" value={signedUsd(t.graphSavingsUsd)}
+              sub="No dollar credit until session savings are validated" />
+            <Figure label="Discovery estimates" value={fmtCompact(t.graphEstimates)}
+              sub="Counted once when consumed by a successful Codex request" />
+          </div>
+          <p className="mt-4 text-sm text-ink-3">These estimates compare retrieval outputs, not whole sessions. They remain in the savings ledger as diagnostics and are excluded from Est. savings dollars and savings-based fees. Negative retrieval differences are retained.</p>
+        </Card>
+      )}
+
       {/* sessions table */}
       <Card className="overflow-hidden">
         <div className="px-6 pb-1 pt-6">

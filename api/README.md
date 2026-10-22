@@ -22,6 +22,7 @@ metrics pipeline. Runs next to the horizon proxy as its own stack.
 | GET    | `/auth/me`       | bearer     | current user                     |
 | POST   | `/ingest/usage`  | `X-API-Key`| batched usage rows from proxies  |
 | GET    | `/usage/summary` | bearer     | totals + daily series (N days)   |
+| GET    | `/usage/key-summary` | bearer API key | today's UTC totals for that key only (npx savings bar) |
 
 ## Deploy on the Pi
 

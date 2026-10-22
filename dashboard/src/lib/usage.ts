@@ -18,6 +18,9 @@ interface LedgerTotals {
   fast_mode_savings_usd?: number;
   flex_savings_usd?: number;
   modernize_savings_usd?: number;
+  graph_estimates?: number;
+  graph_tokens_avoided?: number;
+  graph_savings_usd?: number;
 }
 interface UsageResponse {
   days: number;
@@ -130,6 +133,9 @@ const mapped = (r?: LedgerTotals) => ({
   fastModeSavingsUsd: Number(r?.fast_mode_savings_usd ?? 0),
   flexSavingsUsd: Number(r?.flex_savings_usd ?? 0),
   modernizeSavingsUsd: Number(r?.modernize_savings_usd ?? 0),
+  graphEstimates: Number(r?.graph_estimates ?? 0),
+  graphTokensAvoided: Number(r?.graph_tokens_avoided ?? 0),
+  graphSavingsUsd: Number(r?.graph_savings_usd ?? 0),
 });
 export const pct = (current: number, previous: number) =>
   previous > 0 ? ((current - previous) / previous) * 100 : undefined;

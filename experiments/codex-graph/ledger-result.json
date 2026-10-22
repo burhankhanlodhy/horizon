@@ -1,0 +1,12 @@
+{
+  "scope": "local end-to-end, real Node receipts -> proxy tokenizer -> SQLite outbox -> API schema",
+  "production_account_modified": false,
+  "inference_rows": 2,
+  "graph_rows_after_two_replays": 3,
+  "estimated_tokens_avoided": 5497,
+  "estimated_savings_usd": 0.0005497,
+  "pricing_basis": [
+    "graph-estimate:cache-floor:v1"
+  ],
+  "tokenizers_agree": true
+}

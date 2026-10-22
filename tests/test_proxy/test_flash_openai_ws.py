@@ -76,6 +76,33 @@ def flash_on(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_code_mode_shell_wrapper_is_flashed_over_websocket(flash_on) -> None:
+    frames = []
+    for turns in (1, 2):
+        frame = json.loads(_frame(turns))
+        for item in frame["response"]["input"]:
+            if item.get("type") == "function_call":
+                item["type"] = "custom_tool_call"
+                item["name"] = "exec"
+                item["input"] = (
+                    'text(await tools.exec_command({cmd:"pytest"})); // ' + item["call_id"]
+                )
+                item.pop("arguments")
+            elif item.get("type") == "function_call_output":
+                item["type"] = "custom_tool_call_output"
+        frames.append(json.dumps(frame))
+    sent = await _run(frames)
+    outputs = [
+        [i["output"] for i in p["input"] if i.get("type") == "custom_tool_call_output"]
+        for p in sent
+    ]
+    assert outputs[0][0].endswith(NOTICE)
+    assert outputs[1][0].startswith("[Horizon flash")
+    assert outputs[1][1].endswith(NOTICE)
+    assert sent[1]["input"][:3] == sent[0]["input"][:3]
+
+
+@pytest.mark.asyncio
 async def test_full_input_frames_are_flashed(flash_on) -> None:
     sent = await _run([_frame(1), _frame(2)])
     assert len(sent) == 2

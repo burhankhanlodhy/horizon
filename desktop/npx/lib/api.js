@@ -9,7 +9,7 @@ const http = require('node:http');
 const https = require('node:https');
 const { KEY_PREFIX, KEY_SCOPES } = require('./config');
 
-const USER_AGENT = 'contextshrink-npx/0.2.0';
+const USER_AGENT = `contextshrink-npx/${require('../package.json').version}`;
 const TIMEOUT_MS = 20000;
 const UNREACHABLE = 'Cannot reach ContextShrink. Check your internet connection. Nothing was changed.';
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from horizon.transforms.flash_observations import FlashHorizons, FlashPolicy
 from horizon.transforms.flash_openai import (
     DEFAULT_OPENAI_TOOLS,
@@ -20,6 +22,76 @@ from horizon.transforms.flash_openai import (
 
 POLICY = FlashPolicy(tools=frozenset(DEFAULT_OPENAI_TOOLS), min_chars=1000)
 LOG = "\n".join(f"tests/test_io.py::test_{i} PASSED" for i in range(200))
+
+
+def _code_mode_items(script: str) -> list[dict]:
+    return [
+        {"type": "message", "role": "user", "content": "run tests"},
+        {"type": "custom_tool_call", "name": "exec", "call_id": "code", "input": script},
+        {"type": "custom_tool_call_output", "call_id": "code", "output": LOG},
+        {"type": "reasoning", "id": "rs", "encrypted_content": "keep-exact"},
+        {"type": "message", "role": "assistant", "content": "tests passed"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        'text(await tools.exec_command({cmd: "pytest"}));',
+        'const r=await tools.exec_command({"cmd":"pytest"}); text(r.output);',
+        'text(await Promise.all([tools.exec_command({cmd:"pytest"}), tools.exec_command({cmd:"ruff check"})]));',
+    ],
+)
+def test_codex_shell_wrapper_is_shown_once_then_stubbed(script) -> None:
+    items = _code_mode_items(script)
+    original = copy.deepcopy(items)
+    first = apply_responses(items[:3], horizon=1, policy=POLICY)
+    assert first.flashed == 1 and first.stubbed == 0
+    assert first.messages[2]["output"] == LOG + NOTICE
+    later = apply_responses(items, horizon=1, policy=POLICY)
+    assert later.stubbed == 1 and later.flashed == 0
+    assert later.messages[2]["output"].startswith("[Horizon flash:")
+    assert len(later.messages[2]["output"]) < len(LOG) // 2
+    assert later.messages[:2] == first.messages[:2]
+    assert later.messages[3:] == items[3:]
+    assert items == original
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "text(await tools.web__run({search_query:[]}));",
+        'text(await tools.exec_command({cmd:"pytest"})); text(await tools.web__run({}));',
+        'text(await tools.exec_command({cmd:"pytest"})); image(await tools.view_image({path:"x"}));',
+        'const other=tools.web__run; text(await tools.exec_command({cmd:"pytest"})); text(await other({}));',
+        'text(await tools.exec_command({cmd:"pytest"})); text(await tools[name]({}));',
+        'const {other}=tools; text(await tools.exec_command({cmd:"pytest"}));',
+        'text(await tools.exec_command_extra({cmd:"pytest"}));',
+    ],
+)
+def test_codex_generic_or_mixed_tool_wrapper_stays_verbatim(script) -> None:
+    items = _code_mode_items(script)
+    result = apply_responses(items, horizon=0, policy=POLICY)
+    assert result.messages == items and not result.changed and result.flashed == 0
+
+
+def test_codex_shell_wrapper_respects_horizon_policy_and_nontext_outputs() -> None:
+    items = _code_mode_items('text(await tools.exec_command({cmd:"pytest"}));')
+    assert apply_responses(items, horizon=3, policy=POLICY).messages == items
+    no_shell = FlashPolicy(tools=frozenset({"shell"}), min_chars=1000)
+    assert apply_responses(items, horizon=0, policy=no_shell).messages == items
+    items[2]["output"] = [{"type": "input_image", "image_url": "data:image/png;base64,fake"}]
+    assert apply_responses(items, horizon=0, policy=POLICY).messages == items
+
+
+def test_codex_shell_wrapper_rerun_keeps_repeated_output_visible() -> None:
+    items = _code_mode_items('text(await tools.exec_command({cmd:"pytest"}));')
+    items += [
+        {**items[1], "call_id": "again"},
+        {**items[2], "call_id": "again"},
+    ]
+    result = apply_responses(items, horizon=0, policy=POLICY)
+    assert result.paused and result.messages[-1] == items[-1]
 
 
 def _responses(n: int, *, answered_last: bool = False, name: str = "shell") -> list[dict]:

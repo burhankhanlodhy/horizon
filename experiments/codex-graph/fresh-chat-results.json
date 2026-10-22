@@ -1,0 +1,1300 @@
+{
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "high",
+  "prices": {
+    "input": 2,
+    "cachedInput": 0.1,
+    "output": 10,
+    "units": "USD per million tokens",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-21"
+  },
+  "sourceFiles": 2659,
+  "graph": {
+    "nodes": 49379,
+    "edges": 315603,
+    "indexedFiles": 2660,
+    "buildSeconds": 7.861,
+    "modelTokens": 0
+  },
+  "arms": {
+    "A": {
+      "chats": 8,
+      "input_tokens": 1970002,
+      "cached_input_tokens": 1665152,
+      "output_tokens": 17662,
+      "reasoning_output_tokens": 1269,
+      "uncached_input_tokens": 304850,
+      "input_usd": 0.7762152,
+      "output_usd": 0.17662,
+      "total_usd": 0.9528352,
+      "no_cache_price_scenario_usd": 4.116624,
+      "seconds": 568.421,
+      "graphCalls": 0
+    },
+    "B": {
+      "chats": 8,
+      "input_tokens": 2678550,
+      "cached_input_tokens": 2301184,
+      "output_tokens": 19361,
+      "reasoning_output_tokens": 1890,
+      "uncached_input_tokens": 377366,
+      "input_usd": 0.9848504,
+      "output_usd": 0.19361,
+      "total_usd": 1.1784603999999999,
+      "no_cache_price_scenario_usd": 5.55071,
+      "seconds": 723.7040000000001,
+      "graphCalls": 12
+    }
+  },
+  "byTask": {
+    "architecture": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 603774,
+        "cached_input_tokens": 509184,
+        "output_tokens": 6483,
+        "reasoning_output_tokens": 303,
+        "uncached_input_tokens": 94590,
+        "input_usd": 0.2400984,
+        "output_usd": 0.06483,
+        "total_usd": 0.30492840000000004,
+        "no_cache_price_scenario_usd": 1.272378,
+        "seconds": 190.87,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 913846,
+        "cached_input_tokens": 797184,
+        "output_tokens": 7470,
+        "reasoning_output_tokens": 985,
+        "uncached_input_tokens": 116662,
+        "input_usd": 0.3130424,
+        "output_usd": 0.0747,
+        "total_usd": 0.38774240000000004,
+        "no_cache_price_scenario_usd": 1.902392,
+        "seconds": 259.004,
+        "graphCalls": 6
+      }
+    },
+    "request-flow": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 757379,
+        "cached_input_tokens": 645760,
+        "output_tokens": 5480,
+        "reasoning_output_tokens": 533,
+        "uncached_input_tokens": 111619,
+        "input_usd": 0.287814,
+        "output_usd": 0.0548,
+        "total_usd": 0.342614,
+        "no_cache_price_scenario_usd": 1.569558,
+        "seconds": 186.463,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 1000047,
+        "cached_input_tokens": 896768,
+        "output_tokens": 5928,
+        "reasoning_output_tokens": 363,
+        "uncached_input_tokens": 103279,
+        "input_usd": 0.29623479999999996,
+        "output_usd": 0.05928,
+        "total_usd": 0.35551479999999996,
+        "no_cache_price_scenario_usd": 2.059374,
+        "seconds": 225.74099999999999,
+        "graphCalls": 4
+      }
+    },
+    "savings-accounting": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 553458,
+        "cached_input_tokens": 473344,
+        "output_tokens": 4797,
+        "reasoning_output_tokens": 260,
+        "uncached_input_tokens": 80114,
+        "input_usd": 0.2075624,
+        "output_usd": 0.04797,
+        "total_usd": 0.2555324,
+        "no_cache_price_scenario_usd": 1.154886,
+        "seconds": 157.834,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 703603,
+        "cached_input_tokens": 586112,
+        "output_tokens": 5285,
+        "reasoning_output_tokens": 542,
+        "uncached_input_tokens": 117491,
+        "input_usd": 0.2935932,
+        "output_usd": 0.05285,
+        "total_usd": 0.3464432,
+        "no_cache_price_scenario_usd": 1.460056,
+        "seconds": 205.725,
+        "graphCalls": 2
+      }
+    },
+    "focused-control": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 55391,
+        "cached_input_tokens": 36864,
+        "output_tokens": 902,
+        "reasoning_output_tokens": 173,
+        "uncached_input_tokens": 18527,
+        "input_usd": 0.0407404,
+        "output_usd": 0.00902,
+        "total_usd": 0.0497604,
+        "no_cache_price_scenario_usd": 0.119802,
+        "seconds": 33.254000000000005,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 61054,
+        "cached_input_tokens": 21120,
+        "output_tokens": 678,
+        "reasoning_output_tokens": 0,
+        "uncached_input_tokens": 39934,
+        "input_usd": 0.08198,
+        "output_usd": 0.00678,
+        "total_usd": 0.08876,
+        "no_cache_price_scenario_usd": 0.128888,
+        "seconds": 33.234,
+        "graphCalls": 0
+      }
+    }
+  },
+  "failedAttempts": [
+    {
+      "arm": "B",
+      "index": 2,
+      "task": "savings-accounting",
+      "repetition": 0,
+      "threadId": "01a15f62-4f08-7d62-aada-e55e8d36608a",
+      "completed": false,
+      "exitCode": 1,
+      "timedOut": false,
+      "seconds": 40.334,
+      "usage": {
+        "input_tokens": 91209,
+        "cached_input_tokens": 57216,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 724,
+        "reasoning_output_tokens": 17,
+        "total_tokens": 91933
+      },
+      "cliUsage": null,
+      "toolCalls": [
+        {
+          "type": "command_execution",
+          "tool": null,
+          "server": null,
+          "exit_code": 0,
+          "status": "completed"
+        },
+        {
+          "type": "mcp_tool_call",
+          "tool": "graph_search",
+          "server": "contextshrink_graph",
+          "exit_code": null,
+          "status": "completed"
+        },
+        {
+          "type": "command_execution",
+          "tool": null,
+          "server": null,
+          "exit_code": 0,
+          "status": "completed"
+        },
+        {
+          "type": "command_execution",
+          "tool": null,
+          "server": null,
+          "exit_code": 0,
+          "status": "completed"
+        },
+        {
+          "type": "command_execution",
+          "tool": null,
+          "server": null,
+          "exit_code": 0,
+          "status": "completed"
+        },
+        {
+          "type": "command_execution",
+          "tool": null,
+          "server": null,
+          "exit_code": null,
+          "status": "declined"
+        }
+      ],
+      "answerWords": 19,
+      "failure": [
+        "{\"type\":\"error\",\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:38 PM.\"}",
+        "{\"type\":\"turn.failed\",\"error\":{\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:38 PM.\"}}"
+      ],
+      "cost": {
+        "uncached_input_tokens": 33993,
+        "input_usd": 0.07370760000000001,
+        "output_usd": 0.00724,
+        "total_usd": 0.08094760000000001,
+        "no_cache_price_scenario_usd": 0.189658
+      },
+      "archivedEvidence": "B\\chat-02.failed-attempt-1"
+    }
+  ],
+  "interruptedAttemptKnownUsd": 0.08094760000000001,
+  "comparisons": {
+    "combined": {
+      "inputTokensAvoided": -708548,
+      "inputReductionPercent": -35.966867038713666,
+      "outputTokensAvoided": -1699,
+      "dollarsAvoided": -0.22562519999999986,
+      "dollarReductionPercent": -23.679351896319517,
+      "noCacheScenarioDollarsAvoided": -1.4340859999999997
+    },
+    "byTask": {
+      "architecture": {
+        "inputTokensAvoided": -310072,
+        "inputReductionPercent": -51.35563969299771,
+        "outputTokensAvoided": -987,
+        "dollarsAvoided": -0.082814,
+        "dollarReductionPercent": -27.158506718298455,
+        "noCacheScenarioDollarsAvoided": -0.6300140000000001
+      },
+      "request-flow": {
+        "inputTokensAvoided": -242668,
+        "inputReductionPercent": -32.04049755802577,
+        "outputTokensAvoided": -448,
+        "dollarsAvoided": -0.01290079999999999,
+        "dollarReductionPercent": -3.7654036320757442,
+        "noCacheScenarioDollarsAvoided": -0.48981600000000003
+      },
+      "savings-accounting": {
+        "inputTokensAvoided": -150145,
+        "inputReductionPercent": -27.12852646451944,
+        "outputTokensAvoided": -488,
+        "dollarsAvoided": -0.09091080000000001,
+        "dollarReductionPercent": -35.57701489126233,
+        "noCacheScenarioDollarsAvoided": -0.30516999999999994
+      },
+      "focused-control": {
+        "inputTokensAvoided": -5663,
+        "inputReductionPercent": -10.223682547706305,
+        "outputTokensAvoided": 224,
+        "dollarsAvoided": -0.0389996,
+        "dollarReductionPercent": -78.37477190697824,
+        "noCacheScenarioDollarsAvoided": -0.009085999999999997
+      }
+    },
+    "byPair": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "inputTokensAvoided": -84121,
+        "inputReductionPercent": -32.10565887952124,
+        "outputTokensAvoided": -72,
+        "dollarsAvoided": -0.03252680000000002,
+        "dollarReductionPercent": -23.75002555587685,
+        "noCacheScenarioDollarsAvoided": -0.16896200000000006
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "inputTokensAvoided": -188002,
+        "inputReductionPercent": -49.26896638477081,
+        "outputTokensAvoided": -242,
+        "dollarsAvoided": -0.026999999999999996,
+        "dollarReductionPercent": -15.53738640444162,
+        "noCacheScenarioDollarsAvoided": -0.378424
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "inputTokensAvoided": -156484,
+        "inputReductionPercent": -65.43340999372779,
+        "outputTokensAvoided": -52,
+        "dollarsAvoided": -0.07174720000000001,
+        "dollarReductionPercent": -55.149428114623056,
+        "noCacheScenarioDollarsAvoided": -0.313488
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "inputTokensAvoided": -5288,
+        "inputReductionPercent": -19.092320467920715,
+        "outputTokensAvoided": 64,
+        "dollarsAvoided": -0.004585600000000002,
+        "dollarReductionPercent": -13.479922394026698,
+        "noCacheScenarioDollarsAvoided": -0.009935999999999993
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "inputTokensAvoided": -225951,
+        "inputReductionPercent": -66.11374615593938,
+        "outputTokensAvoided": -915,
+        "dollarsAvoided": -0.050287199999999976,
+        "dollarReductionPercent": -29.93756161682549,
+        "noCacheScenarioDollarsAvoided": -0.461052
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "inputTokensAvoided": -54666,
+        "inputReductionPercent": -14.546722157766448,
+        "outputTokensAvoided": -206,
+        "dollarsAvoided": 0.014099200000000006,
+        "dollarReductionPercent": 8.350647596890779,
+        "noCacheScenarioDollarsAvoided": -0.11139200000000005
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "inputTokensAvoided": 6339,
+        "inputReductionPercent": 2.016811535182051,
+        "outputTokensAvoided": -436,
+        "dollarsAvoided": -0.019163600000000003,
+        "dollarReductionPercent": -15.277543041732704,
+        "noCacheScenarioDollarsAvoided": 0.008318000000000048
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "inputTokensAvoided": -375,
+        "inputReductionPercent": -1.3540839170939554,
+        "outputTokensAvoided": 160,
+        "dollarsAvoided": -0.034414,
+        "dollarReductionPercent": -218.6070738896229,
+        "noCacheScenarioDollarsAvoided": 0.0008500000000000035
+      }
+    ],
+    "excludingQuotaInterruptedPairs": {
+      "excludedIndices": [
+        2
+      ],
+      "inputTokensAvoided": -552064,
+      "inputReductionPercent": -31.89550579714499,
+      "outputTokensAvoided": -1647,
+      "dollarsAvoided": -0.15387799999999985,
+      "dollarReductionPercent": -18.703132171166736,
+      "noCacheScenarioDollarsAvoided": -1.1205980000000002
+    }
+  },
+  "quality": {
+    "A": {
+      "sourceUnchanged": true,
+      "citations": 118,
+      "invalidCitations": [],
+      "citedFiles": [
+        "api/analytics.py",
+        "api/main.py",
+        "crates/horizon-core/src/ccr/mod.rs",
+        "crates/horizon-py/src/lib.rs",
+        "dashboard/src/lib/api.ts",
+        "dashboard/src/lib/usage.ts",
+        "dashboard/src/pages/Usage.tsx",
+        "desktop/app/src-tauri/src/lib.rs",
+        "desktop/npx-codex/lib/graph-estimates.cjs",
+        "desktop/npx-codex/lib/graph-policy.cjs",
+        "horizon/ccr/__init__.py",
+        "horizon/cli/savings.py",
+        "horizon/pricing/counterfactual.py",
+        "horizon/providers/openai_responses.py",
+        "horizon/providers/proxy_routes.py",
+        "horizon/proxy/account_analytics.py",
+        "horizon/proxy/auth_mode.py",
+        "horizon/proxy/graph_savings.py",
+        "horizon/proxy/handlers/anthropic.py",
+        "horizon/proxy/handlers/openai.py",
+        "horizon/proxy/outcome.py",
+        "horizon/proxy/savings_tracker.py",
+        "horizon/proxy/server.py",
+        "horizon/savings_ledger.py",
+        "horizon/transforms/pipeline.py",
+        "horizon/transforms/smart_crusher.py",
+        "pyproject.toml"
+      ],
+      "permissionOrQuotaBlocked": [],
+      "failedTools": [
+        {
+          "chat": 1,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 1,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 2,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 6,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        }
+      ]
+    },
+    "B": {
+      "sourceUnchanged": true,
+      "citations": 113,
+      "invalidCitations": [],
+      "citedFiles": [
+        "Cargo.toml",
+        "api/README.md",
+        "api/analytics.py",
+        "api/main.py",
+        "dashboard/src/lib/usage.ts",
+        "dashboard/src/main.tsx",
+        "dashboard/src/pages/Usage.tsx",
+        "desktop/README.md",
+        "desktop/app/src-tauri/src/main.rs",
+        "desktop/npx-codex/lib/graph-estimates.cjs",
+        "desktop/npx-codex/lib/graph-policy.cjs",
+        "horizon/cache/compression_store.py",
+        "horizon/cli/savings.py",
+        "horizon/providers/codex/runtime.py",
+        "horizon/providers/openai_responses.py",
+        "horizon/providers/proxy_routes.py",
+        "horizon/providers/route_specs.py",
+        "horizon/proxy/account_analytics.py",
+        "horizon/proxy/graph_savings.py",
+        "horizon/proxy/handlers/anthropic.py",
+        "horizon/proxy/handlers/openai.py",
+        "horizon/proxy/outcome.py",
+        "horizon/proxy/prometheus_metrics.py",
+        "horizon/proxy/savings_tracker.py",
+        "horizon/proxy/server.py",
+        "horizon/telemetry/reporter.py",
+        "horizon/transforms/smart_crusher.py",
+        "pyproject.toml"
+      ],
+      "permissionOrQuotaBlocked": [],
+      "failedTools": [
+        {
+          "chat": 0,
+          "type": "mcp_tool_call",
+          "tool": "graph_trace",
+          "exitCode": null,
+          "status": "failed"
+        },
+        {
+          "chat": 1,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 1,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 1,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 2,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 4,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        },
+        {
+          "chat": 4,
+          "type": "mcp_tool_call",
+          "tool": "graph_trace",
+          "exitCode": null,
+          "status": "failed"
+        },
+        {
+          "chat": 6,
+          "type": "command_execution",
+          "tool": null,
+          "exitCode": 1,
+          "status": "failed"
+        }
+      ]
+    }
+  },
+  "evidence": {
+    "A": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "shellCalls": 12,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 31222,
+        "answerWords": 406,
+        "usage": {
+          "input_tokens": 262013,
+          "cached_input_tokens": 219648,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3026,
+          "reasoning_output_tokens": 149,
+          "total_tokens": 265039
+        },
+        "cost": {
+          "uncached_input_tokens": 42365,
+          "input_usd": 0.1066948,
+          "output_usd": 0.03026,
+          "total_usd": 0.1369548,
+          "no_cache_price_scenario_usd": 0.554286
+        },
+        "seconds": 101.657
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "shellCalls": 12,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 38430,
+        "answerWords": 255,
+        "usage": {
+          "input_tokens": 381583,
+          "cached_input_tokens": 324864,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2785,
+          "reasoning_output_tokens": 152,
+          "total_tokens": 384368
+        },
+        "cost": {
+          "uncached_input_tokens": 56719,
+          "input_usd": 0.14592439999999998,
+          "output_usd": 0.02785,
+          "total_usd": 0.1737744,
+          "no_cache_price_scenario_usd": 0.791016
+        },
+        "seconds": 96.252
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "shellCalls": 13,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 45526,
+        "answerWords": 325,
+        "usage": {
+          "input_tokens": 239150,
+          "cached_input_tokens": 197760,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2754,
+          "reasoning_output_tokens": 160,
+          "total_tokens": 241904
+        },
+        "cost": {
+          "uncached_input_tokens": 41390,
+          "input_usd": 0.102556,
+          "output_usd": 0.02754,
+          "total_usd": 0.130096,
+          "no_cache_price_scenario_usd": 0.50584
+        },
+        "seconds": 96.148
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "shellCalls": 1,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 235,
+        "answerWords": 130,
+        "usage": {
+          "input_tokens": 27697,
+          "cached_input_tokens": 13440,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 416,
+          "reasoning_output_tokens": 59,
+          "total_tokens": 28113
+        },
+        "cost": {
+          "uncached_input_tokens": 14257,
+          "input_usd": 0.029858,
+          "output_usd": 0.00416,
+          "total_usd": 0.034018,
+          "no_cache_price_scenario_usd": 0.059554
+        },
+        "seconds": 16.013
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "shellCalls": 13,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 38644,
+        "answerWords": 375,
+        "usage": {
+          "input_tokens": 341761,
+          "cached_input_tokens": 289536,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3457,
+          "reasoning_output_tokens": 154,
+          "total_tokens": 345218
+        },
+        "cost": {
+          "uncached_input_tokens": 52225,
+          "input_usd": 0.1334036,
+          "output_usd": 0.03457,
+          "total_usd": 0.1679736,
+          "no_cache_price_scenario_usd": 0.718092
+        },
+        "seconds": 89.213
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "shellCalls": 29,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 67558,
+        "answerWords": 263,
+        "usage": {
+          "input_tokens": 375796,
+          "cached_input_tokens": 320896,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2695,
+          "reasoning_output_tokens": 381,
+          "total_tokens": 378491
+        },
+        "cost": {
+          "uncached_input_tokens": 54900,
+          "input_usd": 0.1418896,
+          "output_usd": 0.02695,
+          "total_usd": 0.1688396,
+          "no_cache_price_scenario_usd": 0.778542
+        },
+        "seconds": 90.211
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "shellCalls": 9,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 33948,
+        "answerWords": 312,
+        "usage": {
+          "input_tokens": 314308,
+          "cached_input_tokens": 275584,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2043,
+          "reasoning_output_tokens": 100,
+          "total_tokens": 316351
+        },
+        "cost": {
+          "uncached_input_tokens": 38724,
+          "input_usd": 0.1050064,
+          "output_usd": 0.02043,
+          "total_usd": 0.1254364,
+          "no_cache_price_scenario_usd": 0.649046
+        },
+        "seconds": 61.686
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "shellCalls": 1,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 235,
+        "answerWords": 145,
+        "usage": {
+          "input_tokens": 27694,
+          "cached_input_tokens": 23424,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 486,
+          "reasoning_output_tokens": 114,
+          "total_tokens": 28180
+        },
+        "cost": {
+          "uncached_input_tokens": 4270,
+          "input_usd": 0.0108824,
+          "output_usd": 0.00486,
+          "total_usd": 0.0157424,
+          "no_cache_price_scenario_usd": 0.060248
+        },
+        "seconds": 17.241
+      }
+    ],
+    "B": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "shellCalls": 9,
+        "graphCalls": 3,
+        "graphTools": [
+          {
+            "tool": "graph_overview",
+            "arguments": {
+              "budget_bytes": 7000
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "entry point server app proxy compress pipeline",
+              "intent": "discovery",
+              "limit": 10,
+              "budget_bytes": 4500
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_trace",
+            "arguments": {
+              "symbol": "horizon.proxy.server.HorizonProxy",
+              "budget_bytes": 2200
+            },
+            "status": "failed"
+          }
+        ],
+        "toolOutputTokens": 40715,
+        "answerWords": 389,
+        "usage": {
+          "input_tokens": 346134,
+          "cached_input_tokens": 291456,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3098,
+          "reasoning_output_tokens": 244,
+          "total_tokens": 349232
+        },
+        "cost": {
+          "uncached_input_tokens": 54678,
+          "input_usd": 0.1385016,
+          "output_usd": 0.03098,
+          "total_usd": 0.1694816,
+          "no_cache_price_scenario_usd": 0.723248
+        },
+        "seconds": 114.373
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "shellCalls": 13,
+        "graphCalls": 2,
+        "graphTools": [
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "responses",
+              "intent": "discovery",
+              "limit": 10,
+              "budget_bytes": 5500
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_trace",
+            "arguments": {
+              "symbol": "handle_openai_responses",
+              "budget_bytes": 5000
+            },
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 60265,
+        "answerWords": 247,
+        "usage": {
+          "input_tokens": 569585,
+          "cached_input_tokens": 509824,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3027,
+          "reasoning_output_tokens": 204,
+          "total_tokens": 572612
+        },
+        "cost": {
+          "uncached_input_tokens": 59761,
+          "input_usd": 0.1705044,
+          "output_usd": 0.03027,
+          "total_usd": 0.2007744,
+          "no_cache_price_scenario_usd": 1.16944
+        },
+        "seconds": 116.526
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "shellCalls": 14,
+        "graphCalls": 1,
+        "graphTools": [
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "savings",
+              "intent": "discovery",
+              "limit": 7,
+              "budget_bytes": 5000
+            },
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 45315,
+        "answerWords": 295,
+        "usage": {
+          "input_tokens": 395634,
+          "cached_input_tokens": 324992,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2806,
+          "reasoning_output_tokens": 341,
+          "total_tokens": 398440
+        },
+        "cost": {
+          "uncached_input_tokens": 70642,
+          "input_usd": 0.1737832,
+          "output_usd": 0.02806,
+          "total_usd": 0.2018432,
+          "no_cache_price_scenario_usd": 0.819328
+        },
+        "seconds": 112.46
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "shellCalls": 1,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 235,
+        "answerWords": 126,
+        "usage": {
+          "input_tokens": 32985,
+          "cached_input_tokens": 16256,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 352,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 33337
+        },
+        "cost": {
+          "uncached_input_tokens": 16729,
+          "input_usd": 0.0350836,
+          "output_usd": 0.00352,
+          "total_usd": 0.0386036,
+          "no_cache_price_scenario_usd": 0.06949
+        },
+        "seconds": 16.317
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "shellCalls": 11,
+        "graphCalls": 3,
+        "graphTools": [
+          {
+            "tool": "graph_overview",
+            "arguments": {
+              "budget_bytes": 6500
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "proxy request compression pipeline entrypoint",
+              "intent": "discovery",
+              "limit": 8,
+              "budget_bytes": 4200
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_trace",
+            "arguments": {
+              "symbol": "horizon.proxy.server.HorizonProxy",
+              "budget_bytes": 2200
+            },
+            "status": "failed"
+          }
+        ],
+        "toolOutputTokens": 46980,
+        "answerWords": 385,
+        "usage": {
+          "input_tokens": 567712,
+          "cached_input_tokens": 505728,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4372,
+          "reasoning_output_tokens": 741,
+          "total_tokens": 572084
+        },
+        "cost": {
+          "uncached_input_tokens": 61984,
+          "input_usd": 0.1745408,
+          "output_usd": 0.04372,
+          "total_usd": 0.21826079999999998,
+          "no_cache_price_scenario_usd": 1.179144
+        },
+        "seconds": 144.631
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "shellCalls": 11,
+        "graphCalls": 2,
+        "graphTools": [
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "responses",
+              "intent": "discovery",
+              "limit": 10,
+              "budget_bytes": 5500
+            },
+            "status": "completed"
+          },
+          {
+            "tool": "graph_trace",
+            "arguments": {
+              "symbol": "handle_openai_responses",
+              "budget_bytes": 6500
+            },
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 30162,
+        "answerWords": 311,
+        "usage": {
+          "input_tokens": 430462,
+          "cached_input_tokens": 386944,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2901,
+          "reasoning_output_tokens": 159,
+          "total_tokens": 433363
+        },
+        "cost": {
+          "uncached_input_tokens": 43518,
+          "input_usd": 0.1257304,
+          "output_usd": 0.02901,
+          "total_usd": 0.1547404,
+          "no_cache_price_scenario_usd": 0.889934
+        },
+        "seconds": 109.215
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "shellCalls": 13,
+        "graphCalls": 1,
+        "graphTools": [
+          {
+            "tool": "graph_search",
+            "arguments": {
+              "query": "graph savings receipts compression savings inference counts",
+              "intent": "discovery",
+              "limit": 7,
+              "budget_bytes": 6500
+            },
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 40490,
+        "answerWords": 323,
+        "usage": {
+          "input_tokens": 307969,
+          "cached_input_tokens": 261120,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2479,
+          "reasoning_output_tokens": 201,
+          "total_tokens": 310448
+        },
+        "cost": {
+          "uncached_input_tokens": 46849,
+          "input_usd": 0.11981,
+          "output_usd": 0.02479,
+          "total_usd": 0.1446,
+          "no_cache_price_scenario_usd": 0.640728
+        },
+        "seconds": 93.265
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "shellCalls": 1,
+        "graphCalls": 0,
+        "graphTools": [],
+        "toolOutputTokens": 235,
+        "answerWords": 118,
+        "usage": {
+          "input_tokens": 28069,
+          "cached_input_tokens": 4864,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 326,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 28395
+        },
+        "cost": {
+          "uncached_input_tokens": 23205,
+          "input_usd": 0.046896400000000005,
+          "output_usd": 0.00326,
+          "total_usd": 0.050156400000000004,
+          "no_cache_price_scenario_usd": 0.059398
+        },
+        "seconds": 16.917
+      }
+    ]
+  },
+  "retrieval": {
+    "A": {
+      "shellCalls": 90,
+      "graphCalls": 0,
+      "toolOutputTokens": 255798
+    },
+    "B": {
+      "shellCalls": 73,
+      "graphCalls": 12,
+      "toolOutputTokens": 264397
+    }
+  },
+  "manualQuality": {
+    "method": "Primary reviewer manually read all sixteen answers and spot-checked material claims against frozen-source implementations and the specified rubric. This was not blind or independently judged, and does not prove semantic equivalence or exhaustive correctness.",
+    "sourceReferences": {
+      "architecture": [
+        "pyproject.toml:375",
+        "horizon/proxy/server.py:3097",
+        "horizon/proxy/server.py:3985",
+        "horizon/proxy/server.py:4010",
+        "api/main.py:36",
+        "horizon/proxy/account_analytics.py:139",
+        "desktop/app/src-tauri/src/lib.rs:1"
+      ],
+      "request-flow": [
+        "horizon/providers/proxy_routes.py:165",
+        "horizon/proxy/account_analytics.py:410",
+        "horizon/proxy/handlers/openai.py:6094",
+        "horizon/proxy/handlers/openai.py:6512",
+        "horizon/proxy/handlers/openai.py:6580",
+        "horizon/proxy/handlers/openai.py:6812",
+        "horizon/proxy/handlers/openai.py:7280",
+        "horizon/proxy/handlers/openai.py:7437"
+      ],
+      "savings-accounting": [
+        "horizon/savings_ledger.py:375",
+        "horizon/proxy/outcome.py:681",
+        "horizon/proxy/outcome.py:755",
+        "horizon/proxy/savings_tracker.py:455",
+        "desktop/npx-codex/lib/graph-estimates.cjs:49",
+        "horizon/proxy/graph_savings.py:120",
+        "api/analytics.py:171",
+        "api/analytics.py:330",
+        "api/analytics.py:417"
+      ],
+      "focused-control": [
+        "desktop/npx-codex/lib/graph-policy.cjs:3",
+        "desktop/npx-codex/lib/graph-policy.cjs:5",
+        "desktop/npx-codex/lib/graph-policy.cjs:6",
+        "desktop/npx-codex/lib/graph-policy.cjs:7",
+        "desktop/npx-codex/lib/graph-policy.cjs:8",
+        "desktop/npx-codex/lib/graph-policy.cjs:11"
+      ]
+    },
+    "A": [
+      {
+        "index": 0,
+        "coverage": "partial",
+        "note": "Main proxy, transforms, control plane, dashboard, data flow and risks covered; final architecture overview omits desktop/client integration and explicitly excludes desktop internals."
+      },
+      {
+        "index": 1,
+        "coverage": "met",
+        "note": "Covers account and proxy gates, route selection, transformation, transport, outcomes/account reporting and 502 boundary."
+      },
+      {
+        "index": 2,
+        "coverage": "met",
+        "note": "Distinguishes usage and estimates, explains deduplication and main request counts, and identifies the separate per-key counter exception."
+      },
+      {
+        "index": 3,
+        "coverage": "met",
+        "note": "Correct discovery/lookup routing, direct reads for known locations, coverage and file-scoped estimate limitations."
+      },
+      {
+        "index": 4,
+        "coverage": "met",
+        "note": "Includes desktop integration and all principal architecture components, data flow and supported operational risks."
+      },
+      {
+        "index": 5,
+        "coverage": "met",
+        "note": "Covers authentication, routing, transformations, transport, durable account reporting and exception boundary."
+      },
+      {
+        "index": 6,
+        "coverage": "met",
+        "note": "Core ledger/usage distinctions, receipt deduplication and main totals covered. Does not mention the separate per-key counter caveat found in the first repetition."
+      },
+      {
+        "index": 7,
+        "coverage": "met",
+        "note": "Correct selective graph routing and limitations; one source-read tool call."
+      }
+    ],
+    "B": [
+      {
+        "index": 0,
+        "coverage": "met",
+        "note": "Covers proxy/native transforms, control plane, dashboard, desktop, data flow and supported risks; failed class trace retained in cost."
+      },
+      {
+        "index": 1,
+        "coverage": "partial",
+        "note": "Covers public API mode, proxy gate, routing, compression, forwarding, usage and failure boundary, but omits hosted account authorization/outbox and discusses optional legacy aggregate reporting instead."
+      },
+      {
+        "index": 2,
+        "coverage": "met",
+        "note": "Covers compression/usage distinction, graph counterfactual, signed estimates, replay protection, main request counts and per-key count exception."
+      },
+      {
+        "index": 3,
+        "coverage": "met",
+        "note": "Correct routing and coverage limitations; skipped graph tools for the known-file question."
+      },
+      {
+        "index": 4,
+        "coverage": "met",
+        "note": "Covers all principal architecture components and supported risks; repeated failed class trace included in cost."
+      },
+      {
+        "index": 5,
+        "coverage": "met",
+        "note": "Covers account/operator authentication, routing, compression, transport, outcome/account reporting and 502 boundary."
+      },
+      {
+        "index": 6,
+        "coverage": "met",
+        "note": "Core accounting and deduplication covered, with estimates separated from observed bills. Main inference counts correctly explained; per-key counter caveat omitted."
+      },
+      {
+        "index": 7,
+        "coverage": "met",
+        "note": "Correct discovery versus direct-read guidance and incomplete coverage limitations; skipped graph tools."
+      }
+    ],
+    "interpretation": "Both arms generally provided useful source-grounded answers. The observed omissions differ by case; this limited rubric review does not establish identical quality. A cheaper or shorter answer was not automatically treated as success.",
+    "traceDiagnostic": {
+      "isolation": "Reproduced against the older separate frozen B fixture, without touching the active benchmark index.",
+      "classArgument": "horizon.proxy.server.HorizonProxy",
+      "classExitCode": 1,
+      "nativeError": "function not found",
+      "functionArgument": "create_app",
+      "functionExitCode": 0,
+      "finding": "The native trace tool expects exact function/method names. The adapter describes a general symbol and replaces the missing-function diagnostic with a misleading refresh suggestion. This is a concrete defect; no savings from a future fix are claimed in this baseline."
+    },
+    "searchDiagnostic": "In B architecture case 0, the first five results for 'entry point server app proxy compress pipeline' were test symbols. Broad lexical queries can give poor discovery relevance. This observation does not establish that all search results are irrelevant."
+  },
+  "method": {
+    "cases": [
+      {
+        "id": "architecture",
+        "prompt": "Review the codebase in this folder. Explain architecture, key entry points, data flow and main risks, with source citations. Treat this as an initial architecture review, not an exhaustive audit of every file. Keep your answer within 400 words.",
+        "repetition": 0
+      },
+      {
+        "id": "request-flow",
+        "prompt": "Trace a public OpenAI Responses inference request from its HTTP entry point through authentication, routing, input transformation, provider forwarding and usage reporting. Identify the key functions and one failure-handling boundary. Use source citations and stay within 300 words.",
+        "repetition": 0
+      },
+      {
+        "id": "savings-accounting",
+        "prompt": "Explain how this codebase calculates and reports compression savings and graph estimated savings. Trace the main components and explain how duplicate graph receipts and inference counts are handled. Distinguish observed usage from estimates. Use source citations and stay within 300 words.",
+        "repetition": 0
+      },
+      {
+        "id": "focused-control",
+        "prompt": "In desktop/npx-codex/lib/graph-policy.cjs, find the guidance controlling when graph_search intent=discovery is appropriate and when direct source search is preferred. Explain the policy and its limitation, with line citations. Keep your answer within 180 words.",
+        "repetition": 0
+      },
+      {
+        "id": "architecture",
+        "prompt": "Review the codebase in this folder. Explain architecture, key entry points, data flow and main risks, with source citations. Treat this as an initial architecture review, not an exhaustive audit of every file. Keep your answer within 400 words.",
+        "repetition": 1
+      },
+      {
+        "id": "request-flow",
+        "prompt": "Trace a public OpenAI Responses inference request from its HTTP entry point through authentication, routing, input transformation, provider forwarding and usage reporting. Identify the key functions and one failure-handling boundary. Use source citations and stay within 300 words.",
+        "repetition": 1
+      },
+      {
+        "id": "savings-accounting",
+        "prompt": "Explain how this codebase calculates and reports compression savings and graph estimated savings. Trace the main components and explain how duplicate graph receipts and inference counts are handled. Distinguish observed usage from estimates. Use source citations and stay within 300 words.",
+        "repetition": 1
+      },
+      {
+        "id": "focused-control",
+        "prompt": "In desktop/npx-codex/lib/graph-policy.cjs, find the guidance controlling when graph_search intent=discovery is appropriate and when direct source search is preferred. Explain the policy and its limitation, with line citations. Keep your answer within 180 words.",
+        "repetition": 1
+      }
+    ],
+    "frozenSourceFiles": 2659,
+    "manifestDigest": "566c1b9551cabef57a571389b9af0703f975ed29f10b14a0eb2b8c193e87210d",
+    "graphVersion": "0.2.3",
+    "freshConversations": 16,
+    "graphBuiltOnce": true,
+    "observedGraphIndexTimes": [
+      "2026-10-21T16:45:05.895Z"
+    ],
+    "allSourceHashesUnchanged": true,
+    "temporaryAuthRemoved": true,
+    "graphBuildModelTokens": 0,
+    "cacheControl": "Actual automatic provider cache hits; no forced equal cache state. Alternating first arm by case, same first arm per task across repetitions.",
+    "billingScope": "Observed main-model standard API-price equivalents, not subscription invoices; auxiliary approval-review usage unavailable. Cached input is part of input; reasoning output is part of output.",
+    "limits": "Two repetitions per task, stochastic outcomes, no independent semantic judge or confidence guarantee. Citation checks establish file/line existence only. Tool-output token counts are single serialized outputs, not cumulative input. No production proxy, billing or ledger involved."
+  }
+}

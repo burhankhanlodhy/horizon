@@ -1,0 +1,41 @@
+{
+  "scope": "Locally tokenized serialized tool schemas plus project guidance and MCP initialization notes, o200k_base. Not provider input or proven whole-session savings; no model calls.",
+  "baselineRoot": "%USERPROFILE%\\AppData\\Local\\Temp\\cs-g21-5f25d0cd\\A\\repo",
+  "before": {
+    "tools": [
+      "graph_search",
+      "graph_overview",
+      "graph_trace",
+      "graph_query",
+      "graph_status",
+      "graph_refresh"
+    ],
+    "schemaTokens": 543,
+    "guidanceAndInitializationTokens": 163,
+    "combinedSerializedTokens": 706,
+    "sourceHashes": {
+      "graph-mcp.cjs": "acb98915696becca10e0c98076013ee7648bf925c64570f6881d956858c54ae4",
+      "graph-policy.cjs": "16b9998f6f491af540065c40c1847159859886c61c28a586021977f79ad25a1c"
+    }
+  },
+  "after": {
+    "tools": [
+      "graph_search",
+      "graph_overview",
+      "graph_trace"
+    ],
+    "schemaTokens": 363,
+    "guidanceAndInitializationTokens": 181,
+    "combinedSerializedTokens": 544,
+    "sourceHashes": {
+      "graph-mcp.cjs": "e8bb9c1fa951ad5020482c082719270788eb797c8d825c0e0b6db002e25ba179",
+      "graph-policy.cjs": "7e389d91cd2e496a3317a87231d6ad6405a78e5450193225111aba386c92fcfe"
+    }
+  },
+  "serializedOverheadReductionPercent": 22.94617563739377,
+  "defaults": {
+    "searchResults": 5,
+    "responseBytes": 3000,
+    "largerExplicitLimitsSupported": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "method": "Primary reviewer read all ten successful answer files and inspected relevant source implementations and tests. Limited coverage review, not independent blind scoring or proof of equal semantic quality. Citation existence is checked separately.",
+  "summary": "Both arms broadly completed the requested review with supported findings. A's request-flow answer narrowed to hosted-account mode and omitted the separately configured operator token gate; B covered that gate. No major unsupported claim was identified in this limited review. A smaller or cheaper answer is not automatically equally useful.",
+  "cases": [
+    {"turn":0,"task":"architecture","A":"met","B":"met","notes":"Both cover Python/Rust proxy/transforms, account/control plane, dashboard and desktop clients, request/analytics data flow and supported risks. B additionally identifies documentation drift. Neither claims an exhaustive security audit."},
+    {"turn":1,"task":"Responses request flow","A":"partial scope","B":"met","notes":"Both cover account authorization, routing, compression, transport, buffered usage/outbox and supported failure boundaries. A explicitly scopes to hosted mode and omits the separate configured non-loopback operator gate. B includes both authentication conditions. Streaming usage finalization is not comprehensively traced."},
+    {"turn":2,"task":"cache-aware savings pricing","A":"met","B":"met","notes":"Both explain live/prefix regions, cache-read/write prices, no-mix list fallback, unknown-price fallback versus unpriced, free-model zero pricing and usage versus estimates. B also flags the source comment calling list price an unconditional upper bound; cache-write premium tests support that concern. B completed this turn after a preserved capacity interruption."},
+    {"turn":3,"task":"graph ledger and fee accounting","A":"met","B":"met","notes":"Both correctly explain zero graph dollar credit, exclusion of signed historical graph rows from new monetary totals, zero inference counts, API normalization, retained already-recorded fees, account-scoped receipt identity and durable duplicate suppression. Their brief fee-threshold wording should be read with the cited billing formula, which charges 5% of full-cycle eligible savings once the $20 threshold is exceeded."},
+    {"turn":4,"task":"reuse/synthesis","A":"met","B":"met","notes":"Both use supported earlier findings and explicitly distinguish facts from efficiency hypotheses. Neither makes a new tool call. Recommendations do not claim proven runtime savings."}
+  ],
+  "executionCaveats": [
+    "One capacity-interrupted B attempt is retained with known cost; retrying the same conversation leaves extra partial context. Subsequent cache mix differed substantially. This prevents treating the full-session dollar difference as an isolated causal graph effect.",
+    "Both arms had two nonzero shell exits during request-flow inspection; those requests and outputs are retained and charged in totals, rather than silently removed.",
+    "Only B's first turn used the graph: one overview. All focused follow-ups used source, and both final syntheses reused context without tools. The selective policy worked in this pair, without delivering lower total usage or cost.",
+    "Native Codex memory database stage1_outputs and jobs were zero in both profiles at completion; no native generated-memory reuse was observed. The graph index timestamp remained unchanged."
+  ]
+}

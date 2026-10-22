@@ -20,6 +20,7 @@ import stripe
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+from savings_ledger import SAVINGS_USD
 
 logger = logging.getLogger("contextshrink.billing")
 
@@ -58,7 +59,7 @@ def savings_fee(savings: Decimal) -> Decimal:
 
 async def ledger_savings(user_id, start: datetime, end: datetime, connection=None) -> Decimal:
     value = await (connection if connection is not None else db._conn()).fetchval(
-        "SELECT COALESCE(SUM(NULLIF(data->>'savings_usd','')::numeric),0) "
+        f"SELECT {SAVINGS_USD} "
         "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
         user_id,
         start,
