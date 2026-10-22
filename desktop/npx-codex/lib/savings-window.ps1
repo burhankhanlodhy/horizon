@@ -59,7 +59,10 @@ function Update-Savings {
         $requests = [double]$data.requests
         if ([double]::IsNaN($money) -or [double]::IsInfinity($money) -or $percent -lt 0 -or $percent -gt 100 -or $requests -lt 0) { throw 'Invalid' }
         $term = if ($money -lt 0) { 'Net cost' } else { 'Net saved' }
-        $stats.Text = 'Trimmed ' + $percent.ToString('0', $invariant) + '%' + $dot + $term + ' $' + [Math]::Abs($money).ToString('F2', $invariant)
+        # Same rule as the npx savings line: cents from $0.01, up to four decimals below a cent.
+        $abs = [Math]::Abs($money)
+        $amount = if ($abs -eq 0) { '$0.00' } elseif ($abs -ge 0.005) { '$' + $abs.ToString('F2', $invariant) } elseif ($abs -ge 0.00005) { '$' + $abs.ToString('F4', $invariant).TrimEnd('0') } else { '<$0.0001' }
+        $stats.Text = 'Trimmed ' + $percent.ToString('0', $invariant) + '%' + $dot + $term + ' ' + $amount
         $scope.Text = $requests.ToString('0', $invariant) + ' requests' + $dot + 'This key today (UTC)'
         $updated.Text = 'Estimated token costs' + $dot + 'Updated ' + $stamp.ToLocalTime().ToString('HH:mm:ss')
         $stats.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#72DFBD')

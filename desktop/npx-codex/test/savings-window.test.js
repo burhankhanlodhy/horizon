@@ -47,3 +47,15 @@ test('window lifecycle hides the console, passes no credentials, and removes its
 test('unsupported platforms fail without opening a process or requesting totals', async () => {
   await assert.rejects(window.show(() => { throw new Error('should not run'); }, { out() {} }, { platform: 'linux' }), /Windows/);
 });
+
+test('savings amounts below a cent keep their real size', () => {
+  const { usd, format } = require('../lib/savings-summary.js');
+  assert.equal(usd(0), '$0.00');
+  assert.equal(usd(1.844), '$1.84');
+  assert.equal(usd(0.0099), '$0.01');
+  assert.equal(usd(0.0015), '$0.0015');
+  assert.equal(usd(0.001), '$0.001');
+  assert.equal(usd(-0.0029), '$0.0029');
+  assert.equal(usd(0.00004), '<$0.0001');
+  assert.match(format({ pct: 3, netUsd: 0.0015, requests: 11 }), /net saved \$0\.0015 · 11 req/);
+});

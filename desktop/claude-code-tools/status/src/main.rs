@@ -290,6 +290,24 @@ fn number(entry: &Value, key: &str) -> f64 {
     entry.get(key).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
+/// Dollars readable at any size, matching `usd` in horizon/forwarder_stats.py:
+/// cents from $0.01 up, up to four decimals below a cent ("$0.0015"), and
+/// "<$0.0001" below that. Formats the absolute amount; the sign is the caller's.
+fn usd(amount: f64) -> String {
+    let value = amount.abs();
+    if value == 0.0 || !value.is_finite() {
+        return "$0.00".to_string();
+    }
+    if value >= 0.005 {
+        return format!("${value:.2}");
+    }
+    if value >= 0.00005 {
+        let text = format!("{value:.4}");
+        return format!("${}", text.trim_end_matches('0'));
+    }
+    "<$0.0001".to_string()
+}
+
 fn trimmed_percent(entry: &Value) -> u64 {
     let before = number(entry, "tokens_before");
     let after = number(entry, "tokens_after");
@@ -307,18 +325,18 @@ fn verified_text(entry: &Value) -> String {
     }
     let verified = entry.get("verified_saved_usd").and_then(Value::as_f64).unwrap_or(0.0);
     if verified < 0.0 {
-        format!("cost ${:.2} verified", -verified)
+        format!("cost {} verified", usd(verified))
     } else {
-        format!("saved ${:.2} verified", verified)
+        format!("saved {} verified", usd(verified))
     }
 }
 
 fn render_counters_line(entry: &Value) -> String {
     let saved = verified_text(entry);
     format!(
-        "ContextShrink \u{2713} trimmed {}% \u{b7} ${:.2} of tokens at list price \u{b7} {} \u{b7} {} req",
+        "ContextShrink \u{2713} trimmed {}% \u{b7} {} of tokens at list price \u{b7} {} \u{b7} {} req",
         trimmed_percent(entry),
-        number(entry, "trimmed_list_usd"),
+        usd(number(entry, "trimmed_list_usd")),
         saved,
         number(entry, "requests") as u64,
     )
@@ -424,15 +442,15 @@ fn render_detail(session: Option<&str>) -> String {
     let rows: [Row; 4] = [
         ("trimmed %", |entry| format!("{}%", trimmed_percent(entry))),
         ("$ of tokens at list price", |entry| {
-            format!("${:.2}", number(entry, "trimmed_list_usd"))
+            usd(number(entry, "trimmed_list_usd"))
         }),
         ("saved $ (verified)", |entry| {
             if number(entry, "verified_requests") > 0.0 {
                 let verified = entry.get("verified_saved_usd").and_then(Value::as_f64).unwrap_or(0.0);
                 if verified < 0.0 {
-                    format!("-${:.2}", -verified)
+                    format!("-{}", usd(verified))
                 } else {
-                    format!("${:.2}", verified)
+                    usd(verified)
                 }
             } else {
                 "pending".to_string()
@@ -562,6 +580,18 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usd_keeps_small_amounts_readable() {
+        assert_eq!(usd(0.0), "$0.00");
+        assert_eq!(usd(1.844), "$1.84");
+        assert_eq!(usd(0.0099), "$0.01");
+        assert_eq!(usd(0.0015), "$0.0015");
+        assert_eq!(usd(0.0029), "$0.0029");
+        assert_eq!(usd(0.001), "$0.001");
+        assert_eq!(usd(-0.0015), "$0.0015");
+        assert_eq!(usd(0.00004), "<$0.0001");
+    }
 
     #[test]
     fn parses_session_id_from_full_json() {

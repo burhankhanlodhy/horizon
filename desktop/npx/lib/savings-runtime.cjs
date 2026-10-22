@@ -10,13 +10,23 @@ const https = require('node:https');
 const TTL = 30000;
 const UNAVAILABLE = 'ContextShrink · savings unavailable';
 
+// Dollars readable at any size (same rule as the desktop status line): cents
+// from $0.01 up, up to four decimals below a cent ("$0.0015"), "<$0.0001" below.
+function usd(amount) {
+  const value = Math.abs(Number(amount) || 0);
+  if (value === 0) return '$0.00';
+  if (value >= 0.005) return '$' + value.toFixed(2);
+  if (value >= 0.00005) return '$' + value.toFixed(4).replace(/0+$/, '');
+  return '<$0.0001';
+}
+
 function format(data) {
   if (!data || data.scope !== 'key' || data.period !== 'today_utc' ||
       !['requests', 'tokens_before', 'tokens_saved', 'savings_usd'].every(k => typeof data[k] === 'number' && Number.isFinite(data[k])) ||
       data.requests < 0 || data.tokens_before < 0 || data.tokens_saved < 0) return UNAVAILABLE;
   const pct = data.tokens_before > 0 ? Math.min(100, Math.round(data.tokens_saved / data.tokens_before * 100)) : 0;
-  const dollars = Math.abs(data.savings_usd).toFixed(2);
-  const money = data.savings_usd < 0 ? `net cost $${dollars}` : `net saved $${dollars}`;
+  const dollars = usd(data.savings_usd);
+  const money = data.savings_usd < 0 ? `net cost ${dollars}` : `net saved ${dollars}`;
   return `ContextShrink · trimmed ${pct}% · ${money} · ${data.requests} req · this key today (UTC)`;
 }
 

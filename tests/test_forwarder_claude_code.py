@@ -578,3 +578,22 @@ def test_malformed_entries_on_disk_are_dropped_at_load(tmp_path: Path) -> None:
     assert "bad" not in snap["sessions"]
     assert snap["sessions"]["fine"]["requests"] == 2
     assert snap["all_time"]["requests"] == 0
+
+
+@pytest.mark.parametrize(
+    ("amount", "text"),
+    [
+        (0, "$0.00"),
+        (1.844, "$1.84"),
+        (0.0099, "$0.01"),
+        (0.0015, "$0.0015"),
+        (0.00290, "$0.0029"),
+        (0.0010, "$0.001"),
+        (-0.0015, "$0.0015"),
+        (0.00004, "<$0.0001"),
+    ],
+)
+def test_usd_keeps_small_amounts_readable(amount: float, text: str) -> None:
+    from horizon.forwarder_stats import usd
+
+    assert usd(amount) == text
