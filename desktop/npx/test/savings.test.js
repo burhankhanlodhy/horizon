@@ -272,3 +272,12 @@ test('Code-tab hook renders the above-prompt band, preserves other content and r
   await timer();
   assert.equal(runs, 3); assert.equal(invalidations, 2);
 }));
+
+test('a saving below a cent shows its real size instead of $0.00', () => {
+  const { format } = require('../lib/savings-runtime.cjs');
+  const base = { scope: 'key', period: 'today_utc', requests: 11, tokens_before: 1000, tokens_saved: 30 };
+  assert.match(format({ ...base, savings_usd: 0.0015 }), /net saved \$0\.0015 · 11 req/);
+  assert.match(format({ ...base, savings_usd: -0.0029 }), /net cost \$0\.0029 · 11 req/);
+  assert.match(format({ ...base, savings_usd: 0.00004 }), /net saved <\$0\.0001 · 11 req/);
+  assert.match(format({ ...base, savings_usd: 1.844 }), /net saved \$1\.84 · 11 req/);
+});

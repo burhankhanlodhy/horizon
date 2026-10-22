@@ -275,6 +275,23 @@ def atomic_write_text(path: Path, text: str) -> None:
                 pass
 
 
+def usd(amount: float) -> str:
+    """Dollars for the status line, readable at any size.
+
+    Cents from $0.01 up; below a cent, up to four decimals ("$0.0015"), so a
+    real but small saving does not read as "$0.00"; below that, "<$0.0001".
+    The sign is the caller's: this formats the absolute amount.
+    """
+    value = abs(float(amount))
+    if value == 0:
+        return "$0.00"
+    if value >= 0.005:
+        return f"${value:.2f}"
+    if value >= 0.00005:
+        return "$" + f"{value:.4f}".rstrip("0")
+    return "<$0.0001"
+
+
 def render_status_line(status: dict[str, Any], now: float) -> str:
     """The one-line status for the latest session, as the status line shows it."""
     forwarder = status.get("forwarder") or {}
@@ -297,13 +314,13 @@ def render_status_line(status: dict[str, Any], now: float) -> str:
     if latest.get("unpriced"):
         money = "list price unknown"
     else:
-        money = f"${float(latest.get('trimmed_list_usd', 0.0)):.2f} of tokens at list price"
+        money = f"{usd(latest.get('trimmed_list_usd', 0.0))} of tokens at list price"
     if _as_int(latest.get("verified_requests")) > 0:
         verified = float(latest.get("verified_saved_usd", 0.0))
         if verified < 0:
-            saved = f"cost ${-verified:.2f} verified"
+            saved = f"cost {usd(verified)} verified"
         else:
-            saved = f"saved ${verified:.2f} verified"
+            saved = f"saved {usd(verified)} verified"
     else:
         saved = "saved pending verified"
     requests = _as_int(latest.get("requests"))

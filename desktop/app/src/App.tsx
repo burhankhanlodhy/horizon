@@ -73,8 +73,16 @@ interface Summary {
 
 const FOLDER_KEY = "cs_project_folder";
 const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
-const usd = (n: number) =>
-  `$${n.toLocaleString("en", { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
+// Below a cent, up to four decimals ("$0.0015") so a small saving does not read
+// as "$0.00"; the same rule as the Claude Code status line.
+const usd = (n: number) => {
+  const value = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (value > 0 && value < 0.005) {
+    return value < 0.00005 ? `${sign}<$0.0001` : `${sign}$${value.toFixed(4).replace(/0+$/, "")}`;
+  }
+  return `$${n.toLocaleString("en", { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
 const message = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "Something went wrong");
 
 function readFolder(): string {

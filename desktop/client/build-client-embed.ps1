@@ -108,6 +108,17 @@ if ($LASTEXITCODE -ne 0) { throw "Installing the embedded dependencies failed" }
 Get-ChildItem -LiteralPath $sitePackages -Recurse -Directory -Force |
     Where-Object { $_.Name -in @("tests", "test") } |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# Nor is anything else the client never loads (PyInstaller left these out too):
+# build tooling, the console-script launchers pip writes to bin\, pywin32's GUI
+# (Pythonwin) and help file, and type stubs.
+$unused = @("setuptools", "_distutils_hack", "pip", "bin", "pythonwin", "PyWin32.chm", "distutils-precedence.pth")
+foreach ($name in $unused) {
+    $item = Join-Path $sitePackages $name
+    if (Test-Path -LiteralPath $item) { Remove-Item -LiteralPath $item -Recurse -Force }
+}
+Get-ChildItem -LiteralPath $sitePackages -Directory -Filter "setuptools-*.dist-info" | Remove-Item -Recurse -Force
+Get-ChildItem -LiteralPath $sitePackages -Directory -Filter "pip-*.dist-info" | Remove-Item -Recurse -Force
+Get-ChildItem -LiteralPath $sitePackages -Recurse -File -Filter "*.pyi" | Remove-Item -Force
 
 # 4. The horizon package. The version and the price rows are written into the
 # repo for this copy and removed afterwards, as build-client.ps1 does.
@@ -137,9 +148,18 @@ Copy-Item -LiteralPath (Join-Path $clientDir "horizon_main.py") -Destination (Jo
 if ($LASTEXITCODE -ne 0) { throw "cargo build of the launcher failed" }
 Copy-Item -LiteralPath (Join-Path $tools "target\release\horizon.exe") -Destination (Join-Path $stage "horizon.exe")
 
-# 6. Byte-compile with the embedded interpreter; the sources stay too.
-& (Join-Path $py "python.exe") -m compileall -q -j 0 $app
+# 6. Byte-compile with the embedded interpreter and ship the bytecode only, as
+# PyInstaller did: -b writes each .pyc next to its source (the layout Python
+# imports without a source file), then the sources and __pycache__ folders go.
+# A source is removed only when its .pyc exists; the entry script stays source.
+& (Join-Path $py "python.exe") -m compileall -q -b -j 0 $app
 if ($LASTEXITCODE -ne 0) { throw "Byte-compiling app with the embedded Python failed" }
+$entry = Join-Path $app "horizon_main.py"
+$sources = Get-ChildItem -LiteralPath $app -Recurse -File -Filter "*.py" |
+    Where-Object { $_.FullName -ne $entry -and (Test-Path -LiteralPath ($_.FullName + "c")) }
+$sources | Remove-Item -Force
+Get-ChildItem -LiteralPath $app -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+Write-Output ("Shipping bytecode only: removed {0:N0} source files" -f @($sources).Count)
 
 # 7. Move the finished layout into dist.
 if (Test-Path $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
