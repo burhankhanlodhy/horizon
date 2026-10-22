@@ -21,6 +21,15 @@ export ANTHROPIC_BASE_URL=${PROXY_URL}
 export ANTHROPIC_CUSTOM_HEADERS="X-Horizon-Proxy-Token: cs_live_..."
 claude`;
 
+const CLAUDE_NPX = `npx contextshrink-claude@latest
+npx contextshrink-claude@latest status`;
+
+const CODEX_NPX = `npx contextshrink-codex@latest
+npx contextshrink-codex@latest status`;
+
+const CODEX_CHATS = `npx contextshrink-codex@latest chats list
+npx contextshrink-codex@latest chats migrate CHAT_ID`;
+
 const OPENAI_SDK = `from openai import OpenAI
 
 client = OpenAI(
@@ -189,6 +198,84 @@ export default function Documentation() {
         </Card>
       </div>
 
+      <section className="flex flex-col gap-4" aria-label="npx connectors">
+        <div>
+          <SectionHeader eyebrow="Command-line setup" title="Connect with npx" />
+          <p className="max-w-3xl text-sm leading-relaxed text-ink-3">
+            Requires Node.js 18+ and Claude Code or Codex already installed. Run the
+            commands in PowerShell or your terminal and sign in with your ContextShrink
+            account when prompted. Keep your usual provider login. The ContextShrink
+            desktop app is optional.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+          <Card hairline className="p-6">
+            <SectionHeader title="contextshrink-claude" />
+            <p className="mb-4 text-sm leading-relaxed text-ink-2">
+              Connects Claude Code in a terminal or VS Code. On Windows, it also
+              connects Claude Desktop&apos;s Code tab; close Claude Desktop before setup.
+              If the ContextShrink app already manages that tab, it keeps managing it.
+            </p>
+            <CodeBlock code={CLAUDE_NPX} />
+            <p className="mt-4 text-sm leading-relaxed text-ink-2">
+              After connecting, start a new Claude Code or Code-tab session. A savings
+              line is added where supported; an existing terminal status line is kept.
+            </p>
+            <p className="mb-2 mt-4 text-sm font-semibold text-ink">Disconnect</p>
+            <CodeBlock code="npx contextshrink-claude@latest disconnect" />
+          </Card>
+
+          <Card hairline className="p-6">
+            <SectionHeader title="contextshrink-codex" />
+            <p className="mb-4 text-sm leading-relaxed text-ink-2">
+              Connects local Codex CLI and Codex desktop chats using your existing
+              ChatGPT sign-in. Close Codex and its CLI sessions before setup. After
+              connecting, reopen Codex and start a new local chat.
+            </p>
+            <CodeBlock code={CODEX_NPX} />
+            <p className="mt-4 text-sm leading-relaxed text-ink-2">
+              Run <code className="font-mono text-ember">npx contextshrink-codex@latest savings</code>{" "}
+              for a savings summary, or replace <code className="font-mono text-ember">savings</code>{" "}
+              with <code className="font-mono text-ember">savings-window</code> for an
+              optional live Windows companion window.
+            </p>
+            <p className="mb-2 mt-4 text-sm font-semibold text-ink">Disconnect</p>
+            <CodeBlock code="npx contextshrink-codex@latest disconnect" />
+            <details className="mt-4 border-t border-ink/10 pt-4">
+              <summary className="cursor-pointer text-sm font-semibold text-ink">
+                Connect an existing Codex chat (experimental)
+              </summary>
+              <p className="my-3 text-sm leading-relaxed text-ink-2">
+                Requires Node.js 22.13+. Connect first, then close Codex, ChatGPT Desktop
+                and all Codex CLI sessions. List your chats and replace CHAT_ID below
+                with one chat&apos;s ID. The second command previews the change.
+              </p>
+              <CodeBlock code={CODEX_CHATS} />
+              <p className="my-3 text-sm leading-relaxed text-ink-2">
+                Check the preview, then apply it:
+              </p>
+              <CodeBlock code="npx contextshrink-codex@latest chats migrate CHAT_ID --apply" />
+              <p className="mt-3 text-xs leading-relaxed text-ink-3">
+                Reopen that same chat and verify its next request on Usage. Disconnect
+                restores migrated chats&apos; previous connection while preserving their
+                conversation history. Close Codex before disconnecting.
+              </p>
+            </details>
+          </Card>
+        </div>
+
+        <p className="max-w-3xl text-sm leading-relaxed text-ink-3">
+          To verify either connector, send a prompt and check{" "}
+          <Link to="/usage" className="font-semibold text-ember hover:underline">Usage</Link>.
+          Savings displays cover this connector&apos;s API key for today (UTC), across
+          its chats. Close your coding tool before disconnecting and reopen it
+          afterwards. Disconnect keeps the account key active; use the connector&apos;s{" "}
+          <code className="font-mono text-ember">logout</code>{" "}
+          command to disconnect and revoke the key it created.
+        </p>
+      </section>
+
       <Card hairline className="p-6">
         <SectionHeader
           eyebrow="Manual setup"
@@ -293,8 +380,8 @@ export default function Documentation() {
               Revoking a key on API Keys blocks it immediately for new requests.
             </li>
             <li>
-              The desktop app makes and manages its own key per computer; you only need
-              to create keys for manual setups.
+              The desktop app and npx connectors create their own keys per computer;
+              you only need to create keys yourself for manual setups.
             </li>
           </ul>
         </Card>
