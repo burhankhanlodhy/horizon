@@ -1,0 +1,1053 @@
+{
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "high",
+  "version": "0.2.4",
+  "prices": {
+    "input": 2,
+    "cachedInput": 0.1,
+    "output": 10,
+    "units": "USD per million tokens",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-21"
+  },
+  "sourceFiles": 2502,
+  "sourceManifestDigest": "d9033ff243ec39e2689b1a8f6e46f3844f59806396146f1add8a2f863b8e858f",
+  "graphBuild": {
+    "project": "%USERPROFILE%\\AppData\\Local\\Temp\\cs-s24-5f25d0cd\\B\\repo",
+    "indexedAt": "2026-10-21T23:19:28.827Z",
+    "nodes": 47590,
+    "edges": 302600,
+    "indexedFiles": 2503,
+    "skipped": {
+      "filtered": 1,
+      "large": 0,
+      "links": 0,
+      "longPaths": 0,
+      "unreadable": 0
+    },
+    "fresh": true,
+    "buildSeconds": 7.543,
+    "modelTokens": 0
+  },
+  "prompts": [
+    "Review the codebase in this folder. Explain its architecture, key entry points, data flow and main risks, with source citations. Treat this as an initial architecture review, not an exhaustive audit of every file. Keep the answer within 400 words.",
+    "Trace a public OpenAI Responses inference request from HTTP entry through authentication, routing, transformation, forwarding and usage reporting. Cite key functions and one supported failure boundary. Reuse evidence already found where possible. Keep the answer within 250 words.",
+    "Review horizon/proxy/savings_tracker.py and the relevant pricing tests. Explain how cached input affects estimated compression savings and what happens for unknown pricing. Distinguish actual usage from estimates. Use source citations and stay within 220 words.",
+    "Review api/savings_ledger.py, api/billing.py and horizon/proxy/graph_savings.py. Do graph retrieval estimates affect savings-based fees or inference counts in this version? Explain historical rows and receipt replay protection with source citations. Keep the answer within 220 words.",
+    "Summarize this review into three practical token-efficiency recommendations with source citations, distinguishing measured facts from hypotheses. Reuse earlier findings and read again only if evidence is missing. Stay within 180 words."
+  ],
+  "commonInstructions": "This is a read-only review of a frozen source snapshot. Do not edit files, install dependencies, access the network, inspect credentials/parent folders, call external APIs/models, or delegate/spawn agents. Use only local source and available retrieval tools. Prefer bounded reads and avoid dumping directories or huge files. Reuse evidence already in this conversation. Cite relative source paths and current line numbers using Markdown links ending #L<number>. State uncertainty and missing coverage honestly.",
+  "order": [
+    "AB",
+    "BA",
+    "AB",
+    "BA",
+    "AB"
+  ],
+  "arms": {
+    "A": {
+      "threadId": "01a1615e-b6ea-7f12-8ff2-7d17fcb55ea5",
+      "initialReview": {
+        "input_tokens": 281684,
+        "cached_input_tokens": 224512,
+        "output_tokens": 3257,
+        "reasoning_output_tokens": 345,
+        "uncached_input_tokens": 57172,
+        "input_usd": 0.1367952,
+        "output_usd": 0.03257,
+        "total_usd": 0.16936520000000002,
+        "seconds": 115.022,
+        "toolCalls": 13,
+        "graphCalls": 0
+      },
+      "uninterruptedFirstTwo": {
+        "input_tokens": 742150,
+        "cached_input_tokens": 659712,
+        "output_tokens": 5471,
+        "reasoning_output_tokens": 592,
+        "uncached_input_tokens": 82438,
+        "input_usd": 0.2308472,
+        "output_usd": 0.05471,
+        "total_usd": 0.2855572,
+        "seconds": 191.965,
+        "toolCalls": 20,
+        "graphCalls": 0
+      },
+      "followUps": {
+        "input_tokens": 1596092,
+        "cached_input_tokens": 1526016,
+        "output_tokens": 5877,
+        "reasoning_output_tokens": 878,
+        "uncached_input_tokens": 70076,
+        "input_usd": 0.2927536,
+        "output_usd": 0.05877,
+        "total_usd": 0.3515236,
+        "seconds": 217.33599999999998,
+        "toolCalls": 19,
+        "graphCalls": 0
+      },
+      "combined": {
+        "input_tokens": 1877776,
+        "cached_input_tokens": 1750528,
+        "output_tokens": 9134,
+        "reasoning_output_tokens": 1223,
+        "uncached_input_tokens": 127248,
+        "input_usd": 0.42954880000000006,
+        "output_usd": 0.09134,
+        "total_usd": 0.5208888,
+        "seconds": 332.358,
+        "toolCalls": 32,
+        "graphCalls": 0
+      },
+      "observedIncludingInterruptions": {
+        "input_tokens": 1877776,
+        "cached_input_tokens": 1750528,
+        "output_tokens": 9134,
+        "reasoning_output_tokens": 1223,
+        "uncached_input_tokens": 127248,
+        "input_usd": 0.42954880000000006,
+        "output_usd": 0.09134,
+        "total_usd": 0.5208888,
+        "seconds": 332.358,
+        "toolCalls": 32,
+        "graphCalls": 0
+      },
+      "turns": [
+        {
+          "index": 0,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 115.022,
+          "usage": {
+            "input_tokens": 281684,
+            "cached_input_tokens": 224512,
+            "output_tokens": 3257,
+            "reasoning_output_tokens": 345
+          },
+          "cliUsage": {
+            "input_tokens": 281684,
+            "cached_input_tokens": 224512,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 3257,
+            "reasoning_output_tokens": 345
+          },
+          "cumulativeUsage": {
+            "input_tokens": 281684,
+            "cached_input_tokens": 224512,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 3257,
+            "reasoning_output_tokens": 345,
+            "total_tokens": 284941
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 57172,
+            "input_usd": 0.1367952,
+            "output_usd": 0.03257,
+            "total_usd": 0.16936520000000002
+          }
+        },
+        {
+          "index": 1,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 76.943,
+          "usage": {
+            "input_tokens": 460466,
+            "cached_input_tokens": 435200,
+            "output_tokens": 2214,
+            "reasoning_output_tokens": 247
+          },
+          "cliUsage": {
+            "input_tokens": 742150,
+            "cached_input_tokens": 659712,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 5471,
+            "reasoning_output_tokens": 592
+          },
+          "cumulativeUsage": {
+            "input_tokens": 742150,
+            "cached_input_tokens": 659712,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 5471,
+            "reasoning_output_tokens": 592,
+            "total_tokens": 747621
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "failed",
+              "exitCode": 1
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "failed",
+              "exitCode": 1
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 25266,
+            "input_usd": 0.094052,
+            "output_usd": 0.02214,
+            "total_usd": 0.116192
+          }
+        },
+        {
+          "index": 2,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 62.9,
+          "usage": {
+            "input_tokens": 508850,
+            "cached_input_tokens": 482688,
+            "output_tokens": 1647,
+            "reasoning_output_tokens": 126
+          },
+          "cliUsage": {
+            "input_tokens": 1251000,
+            "cached_input_tokens": 1142400,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 7118,
+            "reasoning_output_tokens": 718
+          },
+          "cumulativeUsage": {
+            "input_tokens": 1251000,
+            "cached_input_tokens": 1142400,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 7118,
+            "reasoning_output_tokens": 718,
+            "total_tokens": 1258118
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 26162,
+            "input_usd": 0.1005928,
+            "output_usd": 0.01647,
+            "total_usd": 0.11706280000000001
+          }
+        },
+        {
+          "index": 3,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 56.061,
+          "usage": {
+            "input_tokens": 494851,
+            "cached_input_tokens": 478464,
+            "output_tokens": 1518,
+            "reasoning_output_tokens": 289
+          },
+          "cliUsage": {
+            "input_tokens": 1745851,
+            "cached_input_tokens": 1620864,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 8636,
+            "reasoning_output_tokens": 1007
+          },
+          "cumulativeUsage": {
+            "input_tokens": 1745851,
+            "cached_input_tokens": 1620864,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 8636,
+            "reasoning_output_tokens": 1007,
+            "total_tokens": 1754487
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 16387,
+            "input_usd": 0.0806204,
+            "output_usd": 0.01518,
+            "total_usd": 0.0958004
+          }
+        },
+        {
+          "index": 4,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 21.432,
+          "usage": {
+            "input_tokens": 131925,
+            "cached_input_tokens": 129664,
+            "output_tokens": 498,
+            "reasoning_output_tokens": 216
+          },
+          "cliUsage": {
+            "input_tokens": 1877776,
+            "cached_input_tokens": 1750528,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9134,
+            "reasoning_output_tokens": 1223
+          },
+          "cumulativeUsage": {
+            "input_tokens": 1877776,
+            "cached_input_tokens": 1750528,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9134,
+            "reasoning_output_tokens": 1223,
+            "total_tokens": 1886910
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 2261,
+            "input_usd": 0.0174884,
+            "output_usd": 0.00498,
+            "total_usd": 0.022468400000000003
+          }
+        }
+      ]
+    },
+    "B": {
+      "threadId": "01a16160-7965-7242-ac50-ef5cd1bb54b0",
+      "initialReview": {
+        "input_tokens": 423708,
+        "cached_input_tokens": 363520,
+        "output_tokens": 3795,
+        "reasoning_output_tokens": 509,
+        "uncached_input_tokens": 60188,
+        "input_usd": 0.156728,
+        "output_usd": 0.03795,
+        "total_usd": 0.194678,
+        "seconds": 139.454,
+        "toolCalls": 11,
+        "graphCalls": 1
+      },
+      "uninterruptedFirstTwo": {
+        "input_tokens": 771560,
+        "cached_input_tokens": 677888,
+        "output_tokens": 5546,
+        "reasoning_output_tokens": 710,
+        "uncached_input_tokens": 93672,
+        "input_usd": 0.2551328,
+        "output_usd": 0.05546,
+        "total_usd": 0.3105928,
+        "seconds": 204.621,
+        "toolCalls": 15,
+        "graphCalls": 1
+      },
+      "followUps": {
+        "input_tokens": 1558516,
+        "cached_input_tokens": 1339520,
+        "output_tokens": 5817,
+        "reasoning_output_tokens": 1252,
+        "uncached_input_tokens": 218996,
+        "input_usd": 0.571944,
+        "output_usd": 0.05817,
+        "total_usd": 0.630114,
+        "seconds": 234.52599999999998,
+        "toolCalls": 13,
+        "graphCalls": 0
+      },
+      "combined": {
+        "input_tokens": 1982224,
+        "cached_input_tokens": 1703040,
+        "output_tokens": 9612,
+        "reasoning_output_tokens": 1761,
+        "uncached_input_tokens": 279184,
+        "input_usd": 0.728672,
+        "output_usd": 0.09612,
+        "total_usd": 0.824792,
+        "seconds": 373.97999999999996,
+        "toolCalls": 24,
+        "graphCalls": 1
+      },
+      "observedIncludingInterruptions": {
+        "input_tokens": 2059130,
+        "cached_input_tokens": 1777152,
+        "output_tokens": 9769,
+        "reasoning_output_tokens": 1761,
+        "uncached_input_tokens": 281978,
+        "input_usd": 0.7416712,
+        "output_usd": 0.09769,
+        "total_usd": 0.8393611999999999,
+        "seconds": 518.9649999999999,
+        "toolCalls": 25,
+        "graphCalls": 1
+      },
+      "turns": [
+        {
+          "index": 0,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 139.454,
+          "usage": {
+            "input_tokens": 423708,
+            "cached_input_tokens": 363520,
+            "output_tokens": 3795,
+            "reasoning_output_tokens": 509
+          },
+          "cliUsage": {
+            "input_tokens": 423708,
+            "cached_input_tokens": 363520,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 3795,
+            "reasoning_output_tokens": 509
+          },
+          "cumulativeUsage": {
+            "input_tokens": 423708,
+            "cached_input_tokens": 363520,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 3795,
+            "reasoning_output_tokens": 509,
+            "total_tokens": 427503
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "mcp_tool_call",
+              "tool": "graph_overview",
+              "server": "contextshrink_graph",
+              "status": "completed"
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 60188,
+            "input_usd": 0.156728,
+            "output_usd": 0.03795,
+            "total_usd": 0.194678
+          }
+        },
+        {
+          "index": 1,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 65.167,
+          "usage": {
+            "input_tokens": 347852,
+            "cached_input_tokens": 314368,
+            "output_tokens": 1751,
+            "reasoning_output_tokens": 201
+          },
+          "cliUsage": {
+            "input_tokens": 771560,
+            "cached_input_tokens": 677888,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 5546,
+            "reasoning_output_tokens": 710
+          },
+          "cumulativeUsage": {
+            "input_tokens": 771560,
+            "cached_input_tokens": 677888,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 5546,
+            "reasoning_output_tokens": 710,
+            "total_tokens": 777106
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "failed",
+              "exitCode": 1
+            },
+            {
+              "type": "command_execution",
+              "status": "failed",
+              "exitCode": 1
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 33484,
+            "input_usd": 0.0984048,
+            "output_usd": 0.01751,
+            "total_usd": 0.1159148
+          }
+        },
+        {
+          "index": 2,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 77.627,
+          "usage": {
+            "input_tokens": 543994,
+            "cached_input_tokens": 374656,
+            "output_tokens": 1955,
+            "reasoning_output_tokens": 419
+          },
+          "cliUsage": {
+            "input_tokens": 1392460,
+            "cached_input_tokens": 1126656,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 7658,
+            "reasoning_output_tokens": 1129
+          },
+          "cumulativeUsage": {
+            "input_tokens": 1392460,
+            "cached_input_tokens": 1126656,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 7658,
+            "reasoning_output_tokens": 1129,
+            "total_tokens": 1400118
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 169338,
+            "input_usd": 0.37614159999999996,
+            "output_usd": 0.01955,
+            "total_usd": 0.3956916
+          }
+        },
+        {
+          "index": 3,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 66.868,
+          "usage": {
+            "input_tokens": 550591,
+            "cached_input_tokens": 534656,
+            "output_tokens": 1517,
+            "reasoning_output_tokens": 342
+          },
+          "cliUsage": {
+            "input_tokens": 1943051,
+            "cached_input_tokens": 1661312,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9175,
+            "reasoning_output_tokens": 1471
+          },
+          "cumulativeUsage": {
+            "input_tokens": 1943051,
+            "cached_input_tokens": 1661312,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9175,
+            "reasoning_output_tokens": 1471,
+            "total_tokens": 1952226
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            },
+            {
+              "type": "command_execution",
+              "status": "completed",
+              "exitCode": 0
+            }
+          ],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 15935,
+            "input_usd": 0.08533560000000001,
+            "output_usd": 0.01517,
+            "total_usd": 0.1005056
+          }
+        },
+        {
+          "index": 4,
+          "completed": true,
+          "exitCode": 0,
+          "timeout": false,
+          "seconds": 24.864,
+          "usage": {
+            "input_tokens": 116079,
+            "cached_input_tokens": 115840,
+            "output_tokens": 594,
+            "reasoning_output_tokens": 290
+          },
+          "cliUsage": {
+            "input_tokens": 2059130,
+            "cached_input_tokens": 1777152,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9769,
+            "reasoning_output_tokens": 1761
+          },
+          "cumulativeUsage": {
+            "input_tokens": 2059130,
+            "cached_input_tokens": 1777152,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 9769,
+            "reasoning_output_tokens": 1761,
+            "total_tokens": 2068899
+          },
+          "usageBasis": "delta of rollout cumulative provider usage",
+          "tools": [],
+          "failures": [],
+          "cost": {
+            "uncached_input_tokens": 239,
+            "input_usd": 0.012062,
+            "output_usd": 0.00594,
+            "total_usd": 0.018002
+          }
+        }
+      ]
+    }
+  },
+  "comparisons": {
+    "initialReview": {
+      "inputTokensAvoided": -142024,
+      "inputReductionPercent": -50.41961914769742,
+      "dollarsAvoided": -0.02531279999999997,
+      "dollarReductionPercent": -14.945691322656574
+    },
+    "uninterruptedFirstTwo": {
+      "inputTokensAvoided": -29410,
+      "inputReductionPercent": -3.9628107525432776,
+      "dollarsAvoided": -0.02503559999999999,
+      "dollarReductionPercent": -8.76728025068183
+    },
+    "followUps": {
+      "inputTokensAvoided": 37576,
+      "inputReductionPercent": 2.3542502562508894,
+      "dollarsAvoided": -0.27859039999999996,
+      "dollarReductionPercent": -79.25226073014726
+    },
+    "combined": {
+      "inputTokensAvoided": -104448,
+      "inputReductionPercent": -5.562324792733531,
+      "dollarsAvoided": -0.30390319999999993,
+      "dollarReductionPercent": -58.3432010824575
+    },
+    "observedIncludingInterruptions": {
+      "inputTokensAvoided": -181354,
+      "inputReductionPercent": -9.657914469031459,
+      "dollarsAvoided": -0.3184723999999999,
+      "dollarReductionPercent": -61.140189614366804
+    }
+  },
+  "quality": {
+    "A": {
+      "citations": 59,
+      "distinctCitedFiles": 23,
+      "invalidCitations": [],
+      "failedTools": [
+        {
+          "turn": 1,
+          "type": "command_execution",
+          "status": "failed",
+          "exitCode": 1
+        },
+        {
+          "turn": 1,
+          "type": "command_execution",
+          "status": "failed",
+          "exitCode": 1
+        }
+      ],
+      "graphTools": [],
+      "answerWords": 1170,
+      "onePassToolOutputTokens": 82799,
+      "sourceHashesUnchanged": true
+    },
+    "B": {
+      "citations": 63,
+      "distinctCitedFiles": 23,
+      "invalidCitations": [],
+      "failedTools": [
+        {
+          "turn": 1,
+          "type": "command_execution",
+          "status": "failed",
+          "exitCode": 1
+        },
+        {
+          "turn": 1,
+          "type": "command_execution",
+          "status": "failed",
+          "exitCode": 1
+        }
+      ],
+      "graphTools": [
+        {
+          "turn": 0,
+          "type": "mcp_tool_call",
+          "tool": "graph_overview",
+          "server": "contextshrink_graph",
+          "status": "completed"
+        }
+      ],
+      "answerWords": 1218,
+      "onePassToolOutputTokens": 71128,
+      "sourceHashesUnchanged": true
+    }
+  },
+  "manual": {
+    "method": "Primary reviewer read all ten successful answer files and inspected relevant source implementations and tests. Limited coverage review, not independent blind scoring or proof of equal semantic quality. Citation existence is checked separately.",
+    "summary": "Both arms broadly completed the requested review with supported findings. A's request-flow answer narrowed to hosted-account mode and omitted the separately configured operator token gate; B covered that gate. No major unsupported claim was identified in this limited review. A smaller or cheaper answer is not automatically equally useful.",
+    "cases": [
+      {
+        "turn": 0,
+        "task": "architecture",
+        "A": "met",
+        "B": "met",
+        "notes": "Both cover Python/Rust proxy/transforms, account/control plane, dashboard and desktop clients, request/analytics data flow and supported risks. B additionally identifies documentation drift. Neither claims an exhaustive security audit."
+      },
+      {
+        "turn": 1,
+        "task": "Responses request flow",
+        "A": "partial scope",
+        "B": "met",
+        "notes": "Both cover account authorization, routing, compression, transport, buffered usage/outbox and supported failure boundaries. A explicitly scopes to hosted mode and omits the separate configured non-loopback operator gate. B includes both authentication conditions. Streaming usage finalization is not comprehensively traced."
+      },
+      {
+        "turn": 2,
+        "task": "cache-aware savings pricing",
+        "A": "met",
+        "B": "met",
+        "notes": "Both explain live/prefix regions, cache-read/write prices, no-mix list fallback, unknown-price fallback versus unpriced, free-model zero pricing and usage versus estimates. B also flags the source comment calling list price an unconditional upper bound; cache-write premium tests support that concern. B completed this turn after a preserved capacity interruption."
+      },
+      {
+        "turn": 3,
+        "task": "graph ledger and fee accounting",
+        "A": "met",
+        "B": "met",
+        "notes": "Both correctly explain zero graph dollar credit, exclusion of signed historical graph rows from new monetary totals, zero inference counts, API normalization, retained already-recorded fees, account-scoped receipt identity and durable duplicate suppression. Their brief fee-threshold wording should be read with the cited billing formula, which charges 5% of full-cycle eligible savings once the $20 threshold is exceeded."
+      },
+      {
+        "turn": 4,
+        "task": "reuse/synthesis",
+        "A": "met",
+        "B": "met",
+        "notes": "Both use supported earlier findings and explicitly distinguish facts from efficiency hypotheses. Neither makes a new tool call. Recommendations do not claim proven runtime savings."
+      }
+    ],
+    "executionCaveats": [
+      "One capacity-interrupted B attempt is retained with known cost; retrying the same conversation leaves extra partial context. Subsequent cache mix differed substantially. This prevents treating the full-session dollar difference as an isolated causal graph effect.",
+      "Both arms had two nonzero shell exits during request-flow inspection; those requests and outputs are retained and charged in totals, rather than silently removed.",
+      "Only B's first turn used the graph: one overview. All focused follow-ups used source, and both final syntheses reused context without tools. The selective policy worked in this pair, without delivering lower total usage or cost.",
+      "Native Codex memory database stage1_outputs and jobs were zero in both profiles at completion; no native generated-memory reuse was observed. The graph index timestamp remained unchanged."
+    ]
+  },
+  "failedAttempts": [
+    {
+      "arm": "B",
+      "index": 2,
+      "completed": false,
+      "exitCode": 1,
+      "timeout": false,
+      "seconds": 144.985,
+      "usage": {
+        "input_tokens": 76906,
+        "cached_input_tokens": 74112,
+        "output_tokens": 157,
+        "reasoning_output_tokens": 0
+      },
+      "cliUsage": null,
+      "cumulativeUsage": {
+        "input_tokens": 848466,
+        "cached_input_tokens": 752000,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 5703,
+        "reasoning_output_tokens": 710,
+        "total_tokens": 854169
+      },
+      "usageBasis": "delta of rollout cumulative provider usage",
+      "tools": [
+        {
+          "type": "command_execution",
+          "status": "completed",
+          "exitCode": 0
+        }
+      ],
+      "failures": [
+        "Selected model is at capacity. Please try a different model.",
+        "Selected model is at capacity. Please try a different model."
+      ],
+      "cost": {
+        "uncached_input_tokens": 2794,
+        "input_usd": 0.0129992,
+        "output_usd": 0.00157,
+        "total_usd": 0.014569200000000001
+      },
+      "archive": "%USERPROFILE%\\OneDrive\\Desktop\\ContextShrink\\.claude\\worktrees\\phase-c-review-orchestrate-54e903\\desktop\\dist-windows\\npx-test\\selective-live-024\\failed-attempts\\B-2",
+      "note": "Capacity interruption, explicitly announced before one retry. Same conversation resumed; partial context remains and can affect later turns."
+    }
+  ],
+  "method": {
+    "sourceHashesUnchanged": true,
+    "temporaryAuthRemoved": true,
+    "interface": "Actual installed Codex CLI engine, isolated homes, two fresh conversations with four resumed follow-ups each",
+    "usage": "Differences in cumulative rollout provider usage; each arm telescopes to its final cumulative total. Cached input is a subset of input; reasoning is a subset of output.",
+    "cache": "Automatic actual hits, not forced equal. Order alternates per turn.",
+    "coverage": "Eligible frozen source, excluding experiment results/graph validation docs to reduce outcome leakage; shared native code graph built once with no model tokens",
+    "billing": "Main-model standard API-price equivalents, not a subscription invoice or quota conversion. Auxiliary approval-review usage unavailable.",
+    "limits": "One stochastic chat per arm, selected five-turn task sequence, no replication or equal-quality proof. Citation existence alone does not validate claims.",
+    "actualGraphUse": true,
+    "approval": "Outer launch initially blocked before execution; user then explicitly approved the named payload/destination and the test launched. One capacity-interrupted attempt was explicitly archived and retried once; known usage and the partial-context confound are retained.",
+    "graphIndexReused": true,
+    "scope": "Graph workflow only: both arms use the same direct model provider, without production proxy compression. This does not measure total ContextShrink proxy savings.",
+    "nativeMemory": {
+      "A": {
+        "stage1_outputs": 0,
+        "jobs": 0
+      },
+      "B": {
+        "stage1_outputs": 0,
+        "jobs": 0
+      },
+      "evidence": "Read-only SQLite count check after both chats completed"
+    }
+  }
+}

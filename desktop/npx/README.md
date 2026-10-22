@@ -3,9 +3,9 @@
 Connects Claude Code (in a terminal or VS Code) to the
 [ContextShrink](https://contextshrink.com) hosted proxy, which compresses what
 Claude Code sends and keeps its prompt cache warm. It is plain JavaScript run by
-Node: no dependencies, no background process. In a terminal setup it changes three
-keys in Claude Code's settings file and nothing else. On Windows it also sets up the
-Claude Desktop Code tab, which is described below.
+Node: no dependencies, no background process. It configures three environment
+keys and a savings display in Claude Code's settings. On Windows it also sets up
+the Claude Desktop Code tab, which is described below.
 
 ## Use
 
@@ -59,6 +59,44 @@ Connect also writes two small files:
   of each key and the values connect wrote, so disconnect can restore them.
 - `~/.contextshrink/npx.json` (owner-only where the OS allows it). It holds the
   keep-alive id and the account key's id, never the key itself.
+
+## Savings bar (0.2.1)
+
+Connect installs a terminal `statusLine` when you do not already have one. When
+npx manages the Windows Code tab, it also enables a small local plugin that draws
+the same line above the prompt. The plugin uses the same function-hook mechanism
+as the ContextShrink desktop app. A desktop-app-managed Code tab keeps its own bar.
+
+Example:
+
+```text
+ContextShrink · trimmed 22% · net saved $0.41 · 18 req · this key today (UTC)
+```
+
+These are server-recorded totals for **this API key during the current UTC day**,
+shared by sessions using that key. They are not individual-session or account-wide
+totals. Net savings include recorded keep-alive costs; negative net savings are
+labelled `net cost`. Dollar amounts describe proxy ledger savings, not a refund or
+reduction of a Claude subscription fee. The dashboard has the full breakdown.
+
+The display reads `GET /usage/key-summary` using the existing account key. It
+caches a small numeric summary for 30 seconds and refreshes at session start,
+after turns, and every 30 seconds in the Code tab. Telemetry ingestion can add a
+short delay. Network errors, an old API deployment, or a revoked key show
+`savings unavailable`; the renderer exits successfully within a short deadline.
+
+Scripts, plugin files, configuration paths, and the numeric cache live under
+`~/.contextshrink/npx-ui/`, outside npm's temporary package cache. The key stays in
+the existing settings/state files; it is never passed in command-line arguments
+or saved in the summary cache. This adds `statusLine`, `extraKnownMarketplaces`,
+and `enabledPlugins` entries where needed, preserving existing user values.
+Disconnect removes unchanged entries it added and its runtime files; edited
+settings and unrelated files are kept. If you edit a setting to keep pointing at
+the runtime, those files remain, but the renderer becomes unavailable after
+disconnect because its connection state has been removed.
+
+Running connect with 0.2.1 upgrades an existing 0.2.0 connection without a new
+sign-in. Start a new Claude Code/Code-tab session afterwards to load the plugin.
 
 Everything else in `settings.json` is kept, including key order and indentation.
 
@@ -133,8 +171,9 @@ hash check or the signature check fails. Nothing is installed in those cases.
 - The Code tab is set up on Windows only. On macOS and Linux, use the desktop app.
 - Until the first release of the Code tab files is published, connect sets up the
   terminal part and says the Code tab is not released yet.
-- There is no live savings bar in Claude Code or in the Code tab. Your savings are on
-  the ContextShrink dashboard.
+- The savings bar requires the updated control-plane API and gateway route. Code-tab
+  rendering uses Claude Code's function hooks; actual UI compatibility must be
+  checked in a fresh Claude Desktop session on the target version.
 - The keep-alive id is one per computer, shared by its Claude Code sessions and by the
   Code tab.
 
@@ -152,3 +191,18 @@ Set `CONTEXTSHRINK_API_URL` and `CONTEXTSHRINK_PROXY_URL` to point the CLI at ot
 hosts. The Code tab tests use test-only overrides (`CONTEXTSHRINK_NPX_TEST=1` and
 `CONTEXTSHRINK_NPX_*`); the CLI ignores them unless that variable is set. `e2e/run-live-test.ps1` (in the repository) runs a live test on Windows in an
 isolated Claude Code folder.
+
+### Releasing 0.2.1
+
+Deploy the API change in `api/analytics.py` and the gateway allowlist in
+`deploy/pi5-webtier/Caddyfile` before distributing 0.2.1. This is a Pi 5 API/gateway
+update; the Cloudflare Pages dashboard deployment does not install it. No schema
+migration or new signed launcher/helper is needed: the existing 0.2.0 binary pins
+stay unchanged.
+
+Pack a new `contextshrink-claude-0.2.1.tgz`, then test connect, the visible bar,
+one real routed request and refreshed totals, status, key rotation, and disconnect
+in a clean Windows account. An account with no Claude usage can check installation,
+the initial bar and restoration; real savings still require a successful request.
+Keep the original 0.2.0 test archive for comparison. Publish to npm only after the
+live check passes.

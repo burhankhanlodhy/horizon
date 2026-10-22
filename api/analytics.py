@@ -1,6 +1,6 @@
 """Account key management and trusted, idempotent proxy telemetry.
 
-All public reads derive ownership from the session, never a URL/header user ID.
+Public reads derive ownership from a session or verified key, never a supplied user ID.
 Only the proxy service can write usage; account keys cannot invent telemetry.
 """
 
@@ -18,7 +18,8 @@ import db
 import security
 from fastapi import Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from savings_ledger import SAVINGS_USD
 
 
 class KeyIn(BaseModel):
@@ -38,6 +39,21 @@ class RunIn(BaseModel):
 
 
 PolicyFeature = Literal["flash", "fast_mode", "flex", "modernize"]
+
+
+class GraphEstimateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    v: Literal[1]
+    id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    project: str = Field(pattern=r"^[a-f0-9]{16}$")
+    snapshot: str = Field(pattern=r"^[a-f0-9]{64}$")
+    baseline_tokens: int = Field(ge=1, le=4000)
+    actual_tokens: int = Field(ge=0, le=70000)
+    overhead_tokens: Literal[1024]
+    tokenizer: Literal["o200k_base"]
+    basis: Literal["bounded-literal-search-v1"]
+    confidence: Literal["client-measured-counterfactual"]
+    rate_per_million: float | None = Field(default=None, ge=0)
 
 
 class EventIn(BaseModel):
@@ -72,11 +88,25 @@ class EventIn(BaseModel):
     # "keepalive": a cache keep-alive ping the proxy sent for the account, not
     # a request the user made. ``keepalive_usd``: on a request, the cache
     # rewrite it avoided because a ping kept its session warm (in savings_usd).
-    kind: Literal["request", "keepalive"] = "request"
+    kind: Literal["request", "keepalive", "graph_estimate"] = "request"
+    graph_tokens_avoided: int = Field(default=0, ge=-70000, le=4000)
+    graph_estimate: GraphEstimateIn | None = None
     keepalive_usd: float = Field(default=0, ge=0)
     # Savings of Flash Observations and the price policies, per feature, already
     # inside savings_usd (horizon/proxy/policy_savings.py).
     policy_usd: dict[PolicyFeature, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def graph_diagnostics_are_not_usage_or_dollar_credit(self):
+        # Also handles old proxies still sending priced retrieval estimates.
+        if self.kind == "graph_estimate":
+            self.savings_usd = self.cost_usd = self.keepalive_usd = 0
+            self.tokens_in = self.tokens_out = self.tokens_saved = 0
+            self.tokens_before = self.tokens_after = 0
+            self.cache_read = self.cache_write = 0
+            self.response_cached = False
+            self.policy_usd = {}
+        return self
 
 
 class BatchIn(BaseModel):
@@ -134,7 +164,7 @@ async def compression_entitlement(user_id) -> dict:
     if row["plan"] in ("pro", "team") and row["status"] == "active":
         return {**base, "capped": False, "cycle_savings_usd": None, "compression_allowed": True}
     saved = await db._conn().fetchval(
-        "SELECT COALESCE(SUM(NULLIF(data->>'savings_usd','')::numeric),0) "
+        f"SELECT {SAVINGS_USD} "
         "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2",
         user_id,
         cycle_start,
@@ -151,7 +181,7 @@ async def compression_entitlement(user_id) -> dict:
 # Rows the user's own tools sent; keep-alive pings count in tokens, cost and
 # (negative) savings, never as requests. No untrusted string enters these SQL
 # expressions.
-REQUEST = "data->>'kind' IS DISTINCT FROM 'keepalive'"
+REQUEST = "COALESCE(data->>'kind','request') = 'request'"
 KEEPALIVE = "data->>'kind' = 'keepalive'"
 TOTALS = f"""
  count(*) FILTER (WHERE {REQUEST})::bigint AS requests,
@@ -165,7 +195,7 @@ TOTALS = f"""
  COALESCE(sum((data->>'tokens_after')::bigint),0)::bigint AS tokens_after,
  COALESCE(sum((data->>'cache_read')::bigint),0)::bigint AS cache_read,
  COALESCE(sum((data->>'cache_write')::bigint),0)::bigint AS cache_write,
- COALESCE(sum((data->>'savings_usd')::double precision),0) AS savings_usd,
+ {SAVINGS_USD} AS savings_usd,
  COALESCE(sum((data->>'cost_usd')::double precision),0) AS cost_usd,
  COALESCE(avg((data->>'latency_ms')::double precision) FILTER (WHERE {REQUEST}),0) AS latency_ms,
  COALESCE(avg((data->>'overhead_ms')::double precision) FILTER (WHERE {REQUEST}),0) AS overhead_ms,
@@ -179,7 +209,10 @@ TOTALS = f"""
  COALESCE(sum((data->'policy_usd'->>'flash')::double precision),0) AS flash_savings_usd,
  COALESCE(sum((data->'policy_usd'->>'fast_mode')::double precision),0) AS fast_mode_savings_usd,
  COALESCE(sum((data->'policy_usd'->>'flex')::double precision),0) AS flex_savings_usd,
- COALESCE(sum((data->'policy_usd'->>'modernize')::double precision),0) AS modernize_savings_usd
+ COALESCE(sum((data->'policy_usd'->>'modernize')::double precision),0) AS modernize_savings_usd,
+ count(*) FILTER (WHERE data->>'kind' = 'graph_estimate')::bigint AS graph_estimates,
+ COALESCE(sum((data->>'graph_tokens_avoided')::bigint),0)::bigint AS graph_tokens_avoided,
+ 0::double precision AS graph_savings_usd
 """
 
 
@@ -257,6 +290,42 @@ async def basic_usage(user, days):
 
 
 def install(app, current_user):
+    @app.get("/usage/key-summary")
+    async def key_summary(authorization: str | None = Header(default=None)):
+        """Today's UTC ledger totals for this key only, including keep-alive costs.
+
+        Used by the npx savings bar. A proxy key grants no access to another key,
+        the account's dashboard, raw events, or account/session credentials.
+        """
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        if (
+            not authorization or not authorization.startswith("Bearer ")
+            or not token.startswith("cs_live_") or len(token) > 300
+        ):
+            raise HTTPException(401, "Invalid account key")
+        key = await db.resolve_api_key(security.hash_token(token))
+        if key is None:
+            raise HTTPException(401, "Invalid account key")
+        if not set(key["scopes"]).intersection({"proxy:messages", "proxy:responses"}):
+            raise HTTPException(403, "Key has no proxy scope")
+        row = await db._conn().fetchrow(
+            f"SELECT count(*) FILTER (WHERE {REQUEST})::bigint AS requests, "
+            "COALESCE(sum((data->>'tokens_before')::bigint),0)::bigint AS tokens_before, "
+            "COALESCE(sum((data->>'tokens_saved')::bigint),0)::bigint AS tokens_saved, "
+            f"{SAVINGS_USD} AS savings_usd, "
+            "now() AS as_of FROM metrics.proxy_events "
+            "WHERE user_id=$1 AND key_id=$2 AND occurred_at >= "
+            "(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') "
+            "AND occurred_at <= now()",
+            key["user_id"], key["id"],
+        )
+        # Only the small numeric summary is exposed; no events or identifiers.
+        return {
+            "scope": "key", "period": "today_utc", "as_of": row["as_of"],
+            "requests": row["requests"], "tokens_before": row["tokens_before"],
+            "tokens_saved": row["tokens_saved"], "savings_usd": row["savings_usd"],
+        }
+
     async def advanced_user(user=Depends(current_user)):
         if user["plan"] not in ("pro", "team") or user["subscription_status"] != "active":
             raise HTTPException(
@@ -276,7 +345,7 @@ def install(app, current_user):
             """
             SELECT k.id,k.name,k.prefix,k.scopes,k.created_at,k.last_used_at,k.revoked_at,
                    (SELECT count(*) FROM metrics.proxy_events e WHERE e.key_id=k.id AND e.user_id=$1
-                    AND e.data->>'kind' IS DISTINCT FROM 'keepalive') AS requests
+                    AND COALESCE(e.data->>'kind','request') = 'request') AS requests
             FROM core.api_keys k WHERE k.user_id=$1 ORDER BY k.created_at DESC
         """,
             user["user_id"],
@@ -330,6 +399,7 @@ def install(app, current_user):
             "key_id": str(row["id"]),
             "plan": entitlement["plan"],
             "compression_allowed": entitlement["compression_allowed"],
+            "graph_estimates_supported": True,
         }
 
     @app.post("/internal/analytics/run", dependencies=[Depends(service_auth)])

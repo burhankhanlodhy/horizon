@@ -91,6 +91,38 @@ def _chat_messages(turns: int) -> list[dict]:
     return messages
 
 
+@pytest.mark.parametrize("mode", ["cache", "token"])
+def test_codex_code_mode_shell_output_flashed_through_handler(monkeypatch, tmp_path, mode):
+    app = _app(monkeypatch, tmp_path, mode)
+    with TestClient(app) as client:
+        http = _install_fake_client(client.app.state.proxy)
+        forwarded = []
+        for turns in (1, 2, 3):
+            items = _responses_input(turns)
+            for item in items:
+                if item.get("type") == "function_call":
+                    item["type"] = "custom_tool_call"
+                    item["name"] = "exec"
+                    item["input"] = (
+                        'text(await tools.exec_command({cmd:"pytest"})); // ' + item["call_id"]
+                    )
+                    item.pop("arguments")
+                elif item.get("type") == "function_call_output":
+                    item["type"] = "custom_tool_call_output"
+            body = {"model": "gpt-6.1-sol", "input": items, "stream": False}
+            assert client.post("/v1/responses", json=body, headers=AUTH).status_code == 200
+            forwarded.append(_sent(http)["input"])
+        for items in forwarded:
+            outputs = [i["output"] for i in items if i.get("type") == "custom_tool_call_output"]
+            assert outputs[-1].endswith(NOTICE)
+            assert all(o.startswith("[Horizon flash") for o in outputs[:-1])
+        for earlier, later in zip(forwarded, forwarded[1:], strict=False):
+            assert later[: len(earlier) - 1] == earlier[:-1]
+        assert [i for i in forwarded[-1] if i.get("type") == "reasoning"] == [
+            i for i in _responses_input(3) if i.get("type") == "reasoning"
+        ]
+
+
 def _outputs(items: list[dict]) -> list[str]:
     return [i["output"] for i in items if i.get("type") == "function_call_output"]
 

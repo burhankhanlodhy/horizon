@@ -1,0 +1,26 @@
+{
+  "scope": "same saved 0.2.2 outputs, projection only; receipt metadata retained; no model invoked",
+  "rows": [
+    {
+      "query": "flash_openai",
+      "snapshot": "f0c13d15a6f734ce6e7f2d24488d964456b24c5c0f01c7373af0bfe3dd2fceb1",
+      "before": 664,
+      "after": 421,
+      "sameOrderedCitations": true
+    },
+    {
+      "query": "pricing",
+      "snapshot": "f0c13d15a6f734ce6e7f2d24488d964456b24c5c0f01c7373af0bfe3dd2fceb1",
+      "before": 680,
+      "after": 426,
+      "sameOrderedCitations": true
+    },
+    {
+      "query": "migrate",
+      "snapshot": "f0c13d15a6f734ce6e7f2d24488d964456b24c5c0f01c7373af0bfe3dd2fceb1",
+      "before": 674,
+      "after": 421,
+      "sameOrderedCitations": true
+    }
+  ]
+}

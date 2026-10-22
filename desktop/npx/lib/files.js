@@ -128,5 +128,6 @@ module.exports = {
   writeSettings,
   readOwnJson,
   writePrivateJson,
+  writePrivateText: (file, text) => writeAtomic(file, text, 0o600),
   removeFile,
 };

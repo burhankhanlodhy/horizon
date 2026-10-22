@@ -1,0 +1,40 @@
+{
+  "method": "Primary reviewer manually read all sixteen answers and spot-checked material claims against frozen-source implementations and the specified rubric. This was not blind or independently judged, and does not prove semantic equivalence or exhaustive correctness.",
+  "sourceReferences": {
+    "architecture": ["pyproject.toml:375", "horizon/proxy/server.py:3097", "horizon/proxy/server.py:3985", "horizon/proxy/server.py:4010", "api/main.py:36", "horizon/proxy/account_analytics.py:139", "desktop/app/src-tauri/src/lib.rs:1"],
+    "request-flow": ["horizon/providers/proxy_routes.py:165", "horizon/proxy/account_analytics.py:410", "horizon/proxy/handlers/openai.py:6094", "horizon/proxy/handlers/openai.py:6512", "horizon/proxy/handlers/openai.py:6580", "horizon/proxy/handlers/openai.py:6812", "horizon/proxy/handlers/openai.py:7280", "horizon/proxy/handlers/openai.py:7437"],
+    "savings-accounting": ["horizon/savings_ledger.py:375", "horizon/proxy/outcome.py:681", "horizon/proxy/outcome.py:755", "horizon/proxy/savings_tracker.py:455", "desktop/npx-codex/lib/graph-estimates.cjs:49", "horizon/proxy/graph_savings.py:120", "api/analytics.py:171", "api/analytics.py:330", "api/analytics.py:417"],
+    "focused-control": ["desktop/npx-codex/lib/graph-policy.cjs:3", "desktop/npx-codex/lib/graph-policy.cjs:5", "desktop/npx-codex/lib/graph-policy.cjs:6", "desktop/npx-codex/lib/graph-policy.cjs:7", "desktop/npx-codex/lib/graph-policy.cjs:8", "desktop/npx-codex/lib/graph-policy.cjs:11"]
+  },
+  "A": [
+    { "index": 0, "coverage": "partial", "note": "Main proxy, transforms, control plane, dashboard, data flow and risks covered; final architecture overview omits desktop/client integration and explicitly excludes desktop internals." },
+    { "index": 1, "coverage": "met", "note": "Covers account and proxy gates, route selection, transformation, transport, outcomes/account reporting and 502 boundary." },
+    { "index": 2, "coverage": "met", "note": "Distinguishes usage and estimates, explains deduplication and main request counts, and identifies the separate per-key counter exception." },
+    { "index": 3, "coverage": "met", "note": "Correct discovery/lookup routing, direct reads for known locations, coverage and file-scoped estimate limitations." },
+    { "index": 4, "coverage": "met", "note": "Includes desktop integration and all principal architecture components, data flow and supported operational risks." },
+    { "index": 5, "coverage": "met", "note": "Covers authentication, routing, transformations, transport, durable account reporting and exception boundary." },
+    { "index": 6, "coverage": "met", "note": "Core ledger/usage distinctions, receipt deduplication and main totals covered. Does not mention the separate per-key counter caveat found in the first repetition." },
+    { "index": 7, "coverage": "met", "note": "Correct selective graph routing and limitations; one source-read tool call." }
+  ],
+  "B": [
+    { "index": 0, "coverage": "met", "note": "Covers proxy/native transforms, control plane, dashboard, desktop, data flow and supported risks; failed class trace retained in cost." },
+    { "index": 1, "coverage": "partial", "note": "Covers public API mode, proxy gate, routing, compression, forwarding, usage and failure boundary, but omits hosted account authorization/outbox and discusses optional legacy aggregate reporting instead." },
+    { "index": 2, "coverage": "met", "note": "Covers compression/usage distinction, graph counterfactual, signed estimates, replay protection, main request counts and per-key count exception." },
+    { "index": 3, "coverage": "met", "note": "Correct routing and coverage limitations; skipped graph tools for the known-file question." },
+    { "index": 4, "coverage": "met", "note": "Covers all principal architecture components and supported risks; repeated failed class trace included in cost." },
+    { "index": 5, "coverage": "met", "note": "Covers account/operator authentication, routing, compression, transport, outcome/account reporting and 502 boundary." },
+    { "index": 6, "coverage": "met", "note": "Core accounting and deduplication covered, with estimates separated from observed bills. Main inference counts correctly explained; per-key counter caveat omitted." },
+    { "index": 7, "coverage": "met", "note": "Correct discovery versus direct-read guidance and incomplete coverage limitations; skipped graph tools." }
+  ],
+  "interpretation": "Both arms generally provided useful source-grounded answers. The observed omissions differ by case; this limited rubric review does not establish identical quality. A cheaper or shorter answer was not automatically treated as success.",
+  "traceDiagnostic": {
+    "isolation": "Reproduced against the older separate frozen B fixture, without touching the active benchmark index.",
+    "classArgument": "horizon.proxy.server.HorizonProxy",
+    "classExitCode": 1,
+    "nativeError": "function not found",
+    "functionArgument": "create_app",
+    "functionExitCode": 0,
+    "finding": "The native trace tool expects exact function/method names. The adapter describes a general symbol and replaces the missing-function diagnostic with a misleading refresh suggestion. This is a concrete defect; no savings from a future fix are claimed in this baseline."
+  },
+  "searchDiagnostic": "In B architecture case 0, the first five results for 'entry point server app proxy compress pipeline' were test symbols. Broad lexical queries can give poor discovery relevance. This observation does not establish that all search results are irrelevant."
+}

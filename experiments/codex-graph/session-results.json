@@ -1,0 +1,168 @@
+{
+  "at": "2026-10-21T05:59:43.961Z",
+  "snapshot": "67f3d81b2629dadf684ba04f5fa79acd87f312e746affc71061af570e4b8990a",
+  "scope": "scripted ten-step retrieval workflow; no model was invoked; routes are prescribed, not observed agent decisions",
+  "tokenizer": "o200k_base",
+  "sourceCitationsVerified": true,
+  "accounting": "New retrieved context only; calls and output counted. Graph schemas plus both project and MCP guidance charged once. Same source excerpts and exact searches in all arms. Shared source-tool schemas, user prompts, reasoning, answer tokens, repeated history input and provider caching excluded. Not a full-session or equal-answer-quality result.",
+  "baselineCapTokens": 4000,
+  "graphSchemaAndGuidanceTokens": 706,
+  "graphDiscoveryCalls": 3,
+  "focusedSourceOperations": 6,
+  "contextReuseSteps": 1,
+  "totals": {
+    "broad": 12957,
+    "focused": 4843,
+    "selective": 3995
+  },
+  "versusBroad": {
+    "tokensAvoided": 8962,
+    "percent": 69.16724550436058
+  },
+  "versusFocused": {
+    "tokensAvoided": 848,
+    "percent": 17.509807970266365
+  },
+  "steps": [
+    {
+      "step": 1,
+      "prompt": "Discover the flash_openai entry point.",
+      "routes": {
+        "broad": "repository literal search",
+        "focused": "repository definition search",
+        "selective": "graph discovery"
+      },
+      "tokens": {
+        "broad": 2733,
+        "focused": 110,
+        "selective": 445
+      }
+    },
+    {
+      "step": 2,
+      "prompt": "Review current source for _maybe_flash_openai.",
+      "routes": {
+        "broad": "source read",
+        "focused": "source read",
+        "selective": "source read"
+      },
+      "tokens": {
+        "broad": 428,
+        "focused": 428,
+        "selective": 428
+      }
+    },
+    {
+      "step": 3,
+      "prompt": "Locate HORIZON_FLASH_OPENAI in the known file.",
+      "routes": {
+        "broad": "focused source search",
+        "focused": "focused source search",
+        "selective": "focused source search"
+      },
+      "tokens": {
+        "broad": 144,
+        "focused": 144,
+        "selective": 144
+      }
+    },
+    {
+      "step": 4,
+      "prompt": "Discover the pricing entry point.",
+      "routes": {
+        "broad": "repository literal search",
+        "focused": "repository definition search",
+        "selective": "graph discovery"
+      },
+      "tokens": {
+        "broad": 4089,
+        "focused": 1980,
+        "selective": 449
+      }
+    },
+    {
+      "step": 5,
+      "prompt": "Review current source for get_model_pricing.",
+      "routes": {
+        "broad": "source read",
+        "focused": "source read",
+        "selective": "source read"
+      },
+      "tokens": {
+        "broad": 466,
+        "focused": 466,
+        "selective": 466
+      }
+    },
+    {
+      "step": 6,
+      "prompt": "Locate cache_read_per_1m in the known file.",
+      "routes": {
+        "broad": "focused source search",
+        "focused": "focused source search",
+        "selective": "focused source search"
+      },
+      "tokens": {
+        "broad": 99,
+        "focused": 99,
+        "selective": 99
+      }
+    },
+    {
+      "step": 7,
+      "prompt": "Discover the migrate entry point.",
+      "routes": {
+        "broad": "repository literal search",
+        "focused": "repository definition search",
+        "selective": "graph discovery"
+      },
+      "tokens": {
+        "broad": 4187,
+        "focused": 805,
+        "selective": 447
+      }
+    },
+    {
+      "step": 8,
+      "prompt": "Review current source for migrate.",
+      "routes": {
+        "broad": "source read",
+        "focused": "source read",
+        "selective": "source read"
+      },
+      "tokens": {
+        "broad": 715,
+        "focused": 715,
+        "selective": 715
+      }
+    },
+    {
+      "step": 9,
+      "prompt": "Locate BEGIN EXCLUSIVE in the known file.",
+      "routes": {
+        "broad": "focused source search",
+        "focused": "focused source search",
+        "selective": "focused source search"
+      },
+      "tokens": {
+        "broad": 96,
+        "focused": 96,
+        "selective": 96
+      }
+    },
+    {
+      "step": 10,
+      "prompt": "Recall the migration transaction from the source already reviewed.",
+      "routes": {
+        "broad": "reuse existing context",
+        "focused": "reuse existing context",
+        "selective": "reuse existing context"
+      },
+      "tokens": {
+        "broad": 0,
+        "focused": 0,
+        "selective": 0
+      }
+    }
+  ]
+}

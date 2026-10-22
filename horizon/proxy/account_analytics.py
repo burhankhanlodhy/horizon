@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -35,6 +36,8 @@ class AccountContext:
     # month). The control plane decides; the proxy only honours it.
     compression_allowed: bool = True
     emitted: set[str] = field(default_factory=set)
+    graph_estimates: dict[str, dict] = field(default_factory=dict)
+    graph_estimates_supported: bool = False
 
 
 _account: ContextVar[AccountContext | None] = ContextVar("verified_proxy_account", default=None)
@@ -43,6 +46,18 @@ _account: ContextVar[AccountContext | None] = ContextVar("verified_proxy_account
 def account_id() -> str | None:
     context = _account.get()
     return context.user_id if context else None
+
+
+def capture_graph_estimates(items) -> None:
+    context = _account.get()
+    if context is None or not context.graph_estimates_supported:
+        return
+    try:
+        from horizon.proxy.graph_savings import extract
+
+        context.graph_estimates = extract(items)
+    except Exception:
+        context.graph_estimates = {}
 
 
 def compression_paused() -> bool:
@@ -92,10 +107,12 @@ class AccountAnalytics:
             / "account_analytics_outbox.sqlite3"
         )
 
+    @contextmanager
     def _db(self):
-        conn = sqlite3.connect(self.path, timeout=15)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        with closing(sqlite3.connect(self.path, timeout=15)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            with conn:
+                yield conn
 
     async def start(self):
         if not self.enabled:
@@ -296,6 +313,16 @@ async def record_account_outcome(
         event["policy_usd"] = policy
     await asyncio.to_thread(context.service._enqueue, event)
 
+    try:
+        from horizon.proxy.graph_savings import events
+
+        for graph_event in events(context, outcome):
+            graph_event.update(user_id=context.user_id, key_id=context.key_id,
+                               runtime_id=context.service.runtime_id, occurred_at=event["occurred_at"])
+            await asyncio.to_thread(context.service._enqueue, graph_event)
+    except Exception as exc:
+        logger.warning("Graph estimate unavailable (%s)", type(exc).__name__)
+
 
 async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
     """Bill one cache keep-alive ping to the account that owns the session.
@@ -393,7 +420,13 @@ class AccountMiddleware:
             return await self._deny(
                 scope, send, 401, "Account proxy key required (X-Horizon-Proxy-Token)"
             )
-        required = "proxy:responses" if path.rstrip("/").endswith("responses") else "proxy:messages"
+        # Codex's native catalog belongs to the Responses integration. The
+        # header cannot relax inference permissions: match this metadata route only.
+        native_codex_catalog = (
+            is_auxiliary and path.rstrip("/").endswith("/v1/models")
+            and headers.get("x-horizon-model-catalog") == "codex"
+        )
+        required = "proxy:responses" if path.rstrip("/").endswith("responses") or native_codex_catalog else "proxy:messages"
         status, data = await self.service.authorize(key, required)
         if data is None:
             return await self._deny(
@@ -407,6 +440,7 @@ class AccountMiddleware:
             data["key_id"],
             self.service,
             compression_allowed=data.get("compression_allowed", True) is not False,
+            graph_estimates_supported=data.get("graph_estimates_supported") is True,
         )
         scope.setdefault("state", {})["account_user_id"] = context.user_id
         # Never send account or service credentials upstream, or trust identity hints.
@@ -451,6 +485,7 @@ class AccountMiddleware:
                 # Picks up a cap reached mid-socket; per-connection policy
                 # computed at accept time applies again on reconnect.
                 context.compression_allowed = owner.get("compression_allowed", True) is not False
+                context.graph_estimates_supported = owner.get("graph_estimates_supported") is True
             return message
 
         try:

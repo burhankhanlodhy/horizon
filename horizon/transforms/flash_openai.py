@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -171,6 +172,42 @@ def responses_tool_names(items: Iterable[Any]) -> dict[str, str]:
     return names
 
 
+_CODEX_SHELL_ACCESS = re.compile(r"\btools\s*\.\s*exec_command\b")
+_CODEX_TOOL_REFERENCE = re.compile(r"\btools\b")
+
+
+def _codex_shell_exec_ids(items: Iterable[Any], policy: FlashPolicy) -> set[str]:
+    """Recognize Codex's code-mode shell wrapper without allowing generic exec.
+
+    New desktop Codex sends ``custom_tool_call(name='exec', input=<JS>)``
+    instead of a direct exec_command call. Only wrappers whose tools references
+    all resolve to exec_command inherit that tool's flash policy. Mixed tool,
+    dynamic lookup, and aliased tool access stay verbatim. The entire output
+    still passes the text-only and minimum-size guards in _apply.
+    """
+    if not policy.allows("exec_command"):
+        return set()
+    eligible: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "custom_tool_call":
+            continue
+        if item.get("name") not in {"exec", "functions.exec"}:
+            continue
+        raw = item.get("input")
+        call_id = item.get("call_id") or item.get("id")
+        if not isinstance(raw, str) or not isinstance(call_id, str):
+            continue
+        if not _CODEX_SHELL_ACCESS.search(raw):
+            continue
+        # Account for every tools reference, including references that are not
+        # calls (aliases, destructuring, or computed properties). Over-protect
+        # when command literals/comments mention another tool as well.
+        if _CODEX_TOOL_REFERENCE.search(_CODEX_SHELL_ACCESS.sub("", raw)):
+            continue
+        eligible.add(call_id)
+    return eligible
+
+
 def _is_model_item(item: Any) -> bool:
     return isinstance(item, dict) and (
         item.get("type") in MODEL_ITEM_TYPES or item.get("role") == "assistant"
@@ -286,6 +323,7 @@ def _apply(
         names = responses_tool_names(items)
         answered_before = responses_tail_start(items)
         field_name = "output"
+    shell_exec_ids = set() if chat else _codex_shell_exec_ids(items, policy)
     # First pass: the outputs this policy covers, by index.
     eligible: dict[int, tuple[str, str]] = {}
     for index, item in enumerate(items):
@@ -295,7 +333,9 @@ def _apply(
         if index < horizon or not is_output:
             continue
         call_id = item.get("tool_call_id") if chat else _call_id(item)
-        if not isinstance(call_id, str) or not policy.allows(names.get(call_id, "")):
+        if not isinstance(call_id, str) or not (
+            policy.allows(names.get(call_id, "")) or call_id in shell_exec_ids
+        ):
             continue
         current = _parts_text(item.get(field_name))
         original = (originals or {}).get(call_id)

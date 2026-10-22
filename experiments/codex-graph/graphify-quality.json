@@ -1,0 +1,24 @@
+{
+  "method": "Primary reviewer read all sixteen final answers and checked the relevant source paths. This is a limited coverage and claim review, not independent blind scoring or proof of equal semantic quality.",
+  "rubric": {
+    "architecture": "Entry points, proxy/native transforms, separate control plane, dashboard, desktop/client integration, data flow and supported risks.",
+    "request-flow": "Entry, conditional account and operator authentication, routing, transformation, forwarding, usage reporting and supported failure boundary.",
+    "savings-accounting": "Observed provider usage versus local/counterfactual estimates, receipt replay/deduplication and separation from main inference counts.",
+    "focused-control": "Discovery versus lookup/direct source, coverage and verification limits, file-scoped receipt exclusion."
+  },
+  "sharedCaveats": [
+    "Both accounting answers in each repetition correctly describe main analytics filtering. None identifies the separate /keys request counter exception at api/analytics.py:330; the main analytics filter is at line 171.",
+    "Citation existence is checked separately by the analyzer; a valid location alone does not verify a claim.",
+    "No major unsupported claim was identified in this limited review; this is not an exhaustive code audit."
+  ],
+  "cases": [
+    {"index":0,"task":"architecture","A":{"coverage":"met","notes":"Covers proxy, separate API/control plane, dashboard and desktop."},"B":{"coverage":"partial","notes":"Useful graph-guided review of CLI, proxy, providers, control plane and dashboard; desktop integration omitted. Supported risks include config-dependent auth, CCR fallback/expiry and shared upstream configuration."}},
+    {"index":1,"task":"request-flow","A":{"coverage":"met","notes":"Account-mode and separate configured operator gate, compression, transport, outcome/outbox and 502 boundary covered."},"B":{"coverage":"partial","notes":"Main flow and a supported 413 compression-refusal boundary covered. Account middleware described without its account-mode condition; separate configured operator gate omitted."}},
+    {"index":2,"task":"savings-accounting","A":{"coverage":"met","notes":"Core measurement, pricing, receipts, replay protection and main inference filtering covered."},"B":{"coverage":"met","notes":"Core measurement, pricing, receipts, replay protection and main inference filtering covered."}},
+    {"index":3,"task":"focused-control","A":{"coverage":"met","notes":"Policy explained accurately from known source."},"B":{"coverage":"met","notes":"Policy explained accurately; native routing introduced graph work for a known-file lookup."}},
+    {"index":4,"task":"architecture","A":{"coverage":"met","notes":"Proxy/Rust, separate API/control plane, dashboard, desktop launcher, data flow and supported risks covered."},"B":{"coverage":"partial","notes":"Mentions Rust and React dashboard but concentrates on proxy/CLI, compression/CCR and outbox. Separate control-plane architecture and desktop integration largely omitted."}},
+    {"index":5,"task":"request-flow","A":{"coverage":"met","notes":"Useful full trace with conditional account mode, transport, outcomes/outbox and 502 boundary."},"B":{"coverage":"met","notes":"Useful full trace with conditional account mode and operator gate, compression/transport, outcomes/outbox and 502 boundary."}},
+    {"index":6,"task":"savings-accounting","A":{"coverage":"met","notes":"Measurement versus estimates, capped baseline, overhead, signed pricing, durable deduplication and main inference filtering covered."},"B":{"coverage":"met","notes":"Measurement versus estimates, capped baseline, overhead, signed pricing, durable deduplication and main inference filtering covered."}},
+    {"index":7,"task":"focused-control","A":{"coverage":"met","notes":"Discovery versus lookup, direct reads for known files, source verification and file-scoped receipt exclusion covered."},"B":{"coverage":"met with caveat","notes":"Discovery versus lookup, direct source for known files, incomplete coverage/relationships and file-scoped receipt exclusion covered. Treats graph output as data, but does not explicitly repeat the verify-current-source-before-edits instruction."}}
+  ]
+}

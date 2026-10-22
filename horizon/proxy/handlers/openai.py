@@ -1987,6 +1987,9 @@ class OpenAIHandlerMixin:
         frame and runs on later frames, where it already looks only at the most
         recent messages (the new turn).
         """
+        from horizon.proxy.account_analytics import capture_graph_estimates
+
+        capture_graph_estimates(inner_payload.get("input"))
         traffic_learner = getattr(self, "traffic_learner", None)
         if traffic_learner is None:
             return
@@ -6139,6 +6142,9 @@ class OpenAIHandlerMixin:
         # telemetry; list-typed `input` is consulted directly by the unit
         # extraction helpers.
         input_data = body.get("input", "")
+        from horizon.proxy.account_analytics import capture_graph_estimates
+
+        capture_graph_estimates(input_data)
         instructions = body.get("instructions")
 
         messages: list[dict[str, Any]] = []

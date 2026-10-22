@@ -1,0 +1,925 @@
+{
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "high",
+  "prices": {
+    "input": 2,
+    "cachedInput": 0.1,
+    "output": 10,
+    "units": "USD per million tokens",
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-21"
+  },
+  "sourceFiles": 2659,
+  "graph": {
+    "nodes": 59124,
+    "edges": 142827,
+    "directed": false,
+    "modelTokens": 0,
+    "buildSeconds": 113.667
+  },
+  "arms": {
+    "A": {
+      "chats": 8,
+      "input_tokens": 1998933,
+      "cached_input_tokens": 1608704,
+      "output_tokens": 17047,
+      "reasoning_output_tokens": 944,
+      "uncached_input_tokens": 390229,
+      "input_usd": 0.9413284000000001,
+      "output_usd": 0.17047,
+      "total_usd": 1.1117983999999999,
+      "no_cache_price_scenario_usd": 4.168336,
+      "seconds": 523.6659999999999,
+      "graphCalls": 0
+    },
+    "B": {
+      "chats": 8,
+      "input_tokens": 4141501,
+      "cached_input_tokens": 3688960,
+      "output_tokens": 23737,
+      "reasoning_output_tokens": 3121,
+      "uncached_input_tokens": 452541,
+      "input_usd": 1.273978,
+      "output_usd": 0.23737,
+      "total_usd": 1.511348,
+      "no_cache_price_scenario_usd": 8.520372,
+      "seconds": 809.094,
+      "graphCalls": 0
+    }
+  },
+  "byTask": {
+    "architecture": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 625302,
+        "cached_input_tokens": 509568,
+        "output_tokens": 5373,
+        "reasoning_output_tokens": 331,
+        "uncached_input_tokens": 115734,
+        "input_usd": 0.2824248,
+        "output_usd": 0.05373,
+        "total_usd": 0.3361548,
+        "no_cache_price_scenario_usd": 1.304334,
+        "seconds": 172.606,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 1508849,
+        "cached_input_tokens": 1360128,
+        "output_tokens": 8560,
+        "reasoning_output_tokens": 1208,
+        "uncached_input_tokens": 148721,
+        "input_usd": 0.43345480000000003,
+        "output_usd": 0.0856,
+        "total_usd": 0.5190548,
+        "no_cache_price_scenario_usd": 3.103298,
+        "seconds": 300.962,
+        "graphCalls": 0
+      }
+    },
+    "request-flow": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 747606,
+        "cached_input_tokens": 610048,
+        "output_tokens": 6338,
+        "reasoning_output_tokens": 277,
+        "uncached_input_tokens": 137558,
+        "input_usd": 0.3361208,
+        "output_usd": 0.06338,
+        "total_usd": 0.3995008,
+        "no_cache_price_scenario_usd": 1.558592,
+        "seconds": 186.543,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 1234451,
+        "cached_input_tokens": 1110272,
+        "output_tokens": 7340,
+        "reasoning_output_tokens": 677,
+        "uncached_input_tokens": 124179,
+        "input_usd": 0.3593852,
+        "output_usd": 0.0734,
+        "total_usd": 0.43278520000000004,
+        "no_cache_price_scenario_usd": 2.542302,
+        "seconds": 236.316,
+        "graphCalls": 0
+      }
+    },
+    "savings-accounting": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 565508,
+        "cached_input_tokens": 454656,
+        "output_tokens": 4493,
+        "reasoning_output_tokens": 193,
+        "uncached_input_tokens": 110852,
+        "input_usd": 0.26716959999999995,
+        "output_usd": 0.04493,
+        "total_usd": 0.3120996,
+        "no_cache_price_scenario_usd": 1.175946,
+        "seconds": 134.313,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 1114593,
+        "cached_input_tokens": 984576,
+        "output_tokens": 6341,
+        "reasoning_output_tokens": 871,
+        "uncached_input_tokens": 130017,
+        "input_usd": 0.35849159999999997,
+        "output_usd": 0.06341,
+        "total_usd": 0.4219016,
+        "no_cache_price_scenario_usd": 2.292596,
+        "seconds": 201.64499999999998,
+        "graphCalls": 0
+      }
+    },
+    "focused-control": {
+      "A": {
+        "chats": 2,
+        "input_tokens": 60517,
+        "cached_input_tokens": 34432,
+        "output_tokens": 843,
+        "reasoning_output_tokens": 143,
+        "uncached_input_tokens": 26085,
+        "input_usd": 0.055613199999999995,
+        "output_usd": 0.00843,
+        "total_usd": 0.0640432,
+        "no_cache_price_scenario_usd": 0.129464,
+        "seconds": 30.204,
+        "graphCalls": 0
+      },
+      "B": {
+        "chats": 2,
+        "input_tokens": 283608,
+        "cached_input_tokens": 233984,
+        "output_tokens": 1496,
+        "reasoning_output_tokens": 365,
+        "uncached_input_tokens": 49624,
+        "input_usd": 0.12264639999999999,
+        "output_usd": 0.01496,
+        "total_usd": 0.1376064,
+        "no_cache_price_scenario_usd": 0.582176,
+        "seconds": 70.17099999999999,
+        "graphCalls": 0
+      }
+    }
+  },
+  "failedAttempts": [],
+  "interruptedAttemptKnownUsd": 0,
+  "package": {
+    "name": "graphifyy",
+    "version": "0.9.93",
+    "mode": "Published Graphify code-only AST extraction, clustering without paid labels, project Codex skill/native routing; query save-result/reflect memory allowed across fresh chats",
+    "extras": [
+      "mcp",
+      "sql"
+    ]
+  },
+  "setupAttempts": [
+    {
+      "scope": "Initial build before installing optional SQL parser",
+      "graph": {
+        "nodes": 59089,
+        "edges": 142774,
+        "directed": false,
+        "modelTokens": 0,
+        "buildSeconds": 88.825
+      }
+    }
+  ],
+  "totalSetupSeconds": 202.49200000000002,
+  "comparisons": {
+    "combined": {
+      "inputTokensAvoided": -2142568,
+      "inputReductionPercent": -107.18558350880194,
+      "outputTokensAvoided": -6690,
+      "dollarsAvoided": -0.39954960000000006,
+      "dollarReductionPercent": -35.937234664126166,
+      "noCacheScenarioDollarsAvoided": -4.352036
+    },
+    "byTask": {
+      "architecture": {
+        "inputTokensAvoided": -883547,
+        "inputReductionPercent": -141.29924420520004,
+        "outputTokensAvoided": -3187,
+        "dollarsAvoided": -0.18290000000000006,
+        "dollarReductionPercent": -54.40945659559229,
+        "noCacheScenarioDollarsAvoided": -1.798964
+      },
+      "request-flow": {
+        "inputTokensAvoided": -486845,
+        "inputReductionPercent": -65.12053140290473,
+        "outputTokensAvoided": -1002,
+        "dollarsAvoided": -0.03328440000000005,
+        "dollarReductionPercent": -8.33149770914102,
+        "noCacheScenarioDollarsAvoided": -0.9837099999999999
+      },
+      "savings-accounting": {
+        "inputTokensAvoided": -549085,
+        "inputReductionPercent": -97.09588546934792,
+        "outputTokensAvoided": -1848,
+        "dollarsAvoided": -0.10980200000000001,
+        "dollarReductionPercent": -35.18171763116647,
+        "noCacheScenarioDollarsAvoided": -1.1166500000000001
+      },
+      "focused-control": {
+        "inputTokensAvoided": -223091,
+        "inputReductionPercent": -368.6418692268288,
+        "outputTokensAvoided": -653,
+        "dollarsAvoided": -0.0735632,
+        "dollarReductionPercent": -114.8649661478502,
+        "noCacheScenarioDollarsAvoided": -0.452712
+      }
+    },
+    "byPair": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "inputTokensAvoided": -602614,
+        "inputReductionPercent": -208.36770894203806,
+        "outputTokensAvoided": -2051,
+        "dollarsAvoided": -0.10993640000000002,
+        "dollarReductionPercent": -63.445246240714326,
+        "noCacheScenarioDollarsAvoided": -1.2257380000000002
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "inputTokensAvoided": -207431,
+        "inputReductionPercent": -50.30837773665536,
+        "outputTokensAvoided": -187,
+        "dollarsAvoided": 0.02954000000000001,
+        "dollarReductionPercent": 12.106974174520767,
+        "noCacheScenarioDollarsAvoided": -0.416732
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "inputTokensAvoided": -223105,
+        "inputReductionPercent": -67.68715944807835,
+        "outputTokensAvoided": -491,
+        "dollarsAvoided": -0.036220800000000025,
+        "dollarReductionPercent": -20.715024294721065,
+        "noCacheScenarioDollarsAvoided": -0.45111999999999997
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "inputTokensAvoided": -91882,
+        "inputReductionPercent": -331.285379484406,
+        "outputTokensAvoided": -342,
+        "dollarsAvoided": -0.04004799999999999,
+        "dollarReductionPercent": -164.81201027194308,
+        "noCacheScenarioDollarsAvoided": -0.18718400000000002
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "inputTokensAvoided": -280933,
+        "inputReductionPercent": -83.58737856855949,
+        "outputTokensAvoided": -1136,
+        "dollarsAvoided": -0.07296359999999999,
+        "dollarReductionPercent": -44.7966934598581,
+        "noCacheScenarioDollarsAvoided": -0.573226
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "inputTokensAvoided": -279414,
+        "inputReductionPercent": -83.33576905755368,
+        "outputTokensAvoided": -815,
+        "dollarsAvoided": -0.0628244,
+        "dollarReductionPercent": -40.39915323337783,
+        "noCacheScenarioDollarsAvoided": -0.566978
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "inputTokensAvoided": -325980,
+        "inputReductionPercent": -138.18801505748297,
+        "outputTokensAvoided": -1357,
+        "dollarsAvoided": -0.07358119999999999,
+        "dollarReductionPercent": -53.61232465893557,
+        "noCacheScenarioDollarsAvoided": -0.66553
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "inputTokensAvoided": -131209,
+        "inputReductionPercent": -400.2470868159356,
+        "outputTokensAvoided": -311,
+        "dollarsAvoided": -0.033515199999999995,
+        "dollarReductionPercent": -84.32769726247986,
+        "noCacheScenarioDollarsAvoided": -0.26552800000000004
+      }
+    ]
+  },
+  "quality": {
+    "A": {
+      "citations": 115,
+      "generatedCitations": [],
+      "invalidLocations": [],
+      "blockedCompletedChats": [],
+      "toolFailures": [
+        {
+          "index": 0,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n '\"'^def |''^async def |@|handle_|add_api_route|websocket'\"' horizon/providers/proxy_routes.py | Select-Object -First 75; rg -n 'run_compression|pipeline.apply|http_client|\\\\.send\\\\(|\\\\.post\\\\(|handle.*response' horizon/proxy/handlers/anthropic.py | Select-Object -First 55; rg -n 'class |def |sqlite|tenant|owner|scope|account|queue|drop|retry' horizon/proxy/account_analytics.py | Select-Object -First 95; rg -n '_core|Rust|def apply|def compress' horizon/transforms/smart_crusher.py horizon/transforms/content_router.py crates/horizon-py/src/lib.rs | Select-Object -First 70; rg -n 'main|scripts|tauri|vite|react' desktop/app/package.json dashboard/package.json desktop/npx-codex/package.json; rg -n '\"'^class |''^def |''^async def |FastAPI|uvicorn|forward|websocket'\"' desktop/client/horizon_main.py | Select-Object -First 40\"",
+          "status": "failed"
+        },
+        {
+          "index": 1,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n 'def _record_request_outcome|usage_reporter|analytics|report' horizon/proxy/outcome.py horizon/proxy/usage_reporter.py horizon/proxy/handlers/base.py; rg -n 'def _retry_request|def _stream_openai_responses|OPENAI_API_URL|def _resolve_codex_routing_headers' horizon/proxy/handlers/openai.py horizon/proxy/server.py horizon/proxy/handlers/base.py; \"'$p='\"'horizon/proxy/handlers/openai.py'; \"'$s=Get-Content $p; 7080..7125 | ForEach-Object { '\"'{0}:{1}' -f (\"'$_+1),$s[$_] }; 6795..6823 | ForEach-Object { '\"'{0}:{1}' -f (\"'$_+1),$s[$_] }; rg -n '\"'def .*|usage|outcome' horizon/proxy/usage_reporter.py | Select-Object -First 40\"",
+          "status": "failed"
+        },
+        {
+          "index": 2,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n 'graph_estimate|inference|TOTALS|ON CONFLICT|event_id|tokens_before|tokens_saved' api/analytics.py api/schemas.py api/models.py api/main.py desktop/npx-codex/lib/graph-mcp.cjs desktop/npx-codex/lib/savings-summary.js horizon/proxy/server.py horizon/proxy/request_context.py\"",
+          "status": "failed"
+        },
+        {
+          "index": 2,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n 'graph_savings|graph_estimates|tokens_before|savings_usd|tokens_saved|record_request|price' horizon/proxy/analytics* horizon/proxy/*report* horizon/proxy/savings_attribution.py horizon/verified_savings.py horizon/proxy/prometheus_metrics.py\"",
+          "status": "failed"
+        },
+        {
+          "index": 2,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command '$n=0; Get-Content dashboard/src/pages/Usage.tsx | ForEach-Object { $n++; if (($n -ge 160 -and $n -le 204) -or ($n -ge 400 -and $n -le 435)) { '\"'{0}: {1}' -f \"'$n, $_ } }; $n=0; Get-Content desktop/npx-codex/lib/savings-summary.js | ForEach-Object { $n++; '\"'{0}: {1}' -f \"'$n, $_ }; rg -n '\"'verified_savings|emit_request_outcome|tokens_before|tokens_after' horizon/proxy/request_outcome.py horizon/proxy/outcomes.py horizon/proxy/handlers/base.py\"",
+          "status": "failed"
+        },
+        {
+          "index": 5,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n '(/v1/responses|def |usage|authorize)' horizon/proxy/handlers/openai.py | Select-Object -First 120; rg -n '(/v1/responses|responses|auth|usage)' deploy -g '*.py' -g '*.conf' -g '*.toml' -g '*.yaml' | Select-Object -First 110\"",
+          "status": "failed"
+        },
+        {
+          "index": 6,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"rg -n \\\"novel|retained|estimate_request_savings_usd|record_savings|tokens_saved|original_tokens\\\" horizon/proxy/outcome.py horizon/proxy/metrics.py horizon/proxy/request_runner.py horizon/pricing/counterfactual.py dashboard/src -g '*.py' -g '*.tsx' -g '*.ts'\"",
+          "status": "failed"
+        }
+      ]
+    },
+    "B": {
+      "citations": 115,
+      "generatedCitations": [],
+      "invalidLocations": [],
+      "blockedCompletedChats": [],
+      "toolFailures": [
+        {
+          "index": 0,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command \"python -c \\\"import json; from pathlib import Path; d=json.loads(Path('graphify-out/graph.json').read_text(encoding='utf-8')); ps=['api/main.py','horizon/proxy/server.py','horizon/proxy/handlers/anthropic.py','horizon/proxy/handlers/openai.py','horizon/pipeline.py','horizon/__init__.py']; ns=[n for n in d['nodes'] if n.get('source_file') in ps and len(n.get('label',''))<70]; print('\\\\n'.join(f\\\\\\\"{n.get('source_file')}:{n.get('source_location')} {n.get('label')}\\\\\\\" for n in ns if n.get('source_file') not in ps[1:4] or any(t in n.get('label','') for t in ['HorizonProxy','handle_anthropic','handle_openai','verify','middleware','register','Pipeline','__init__']))[:11500])\\\"\"",
+          "status": "failed"
+        },
+        {
+          "index": 5,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command 'graphify path \"handle_openai_responses\" \"_record_request_outcome\"'",
+          "status": "failed"
+        },
+        {
+          "index": 6,
+          "exitCode": 1,
+          "command": "\"C:\\\\Users\\\\USER\\\\.cache\\\\codex-runtimes\\\\codex-primary-runtime\\\\dependencies\\\\native\\\\powershell\\\\pwsh.exe\" -Command 'graphify explain \"AccountAnalytics\"; graphify explain \"record_request\"'",
+          "status": "failed"
+        }
+      ]
+    }
+  },
+  "retrieval": {
+    "A": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "shellCalls": 10,
+        "graphifyCalls": [],
+        "toolOutputTokens": 36027,
+        "answerWords": 372
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "shellCalls": 16,
+        "graphifyCalls": [],
+        "toolOutputTokens": 48387,
+        "answerWords": 258
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "shellCalls": 14,
+        "graphifyCalls": [],
+        "toolOutputTokens": 43116,
+        "answerWords": 315
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "shellCalls": 1,
+        "graphifyCalls": [],
+        "toolOutputTokens": 235,
+        "answerWords": 124
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "shellCalls": 12,
+        "graphifyCalls": [],
+        "toolOutputTokens": 32493,
+        "answerWords": 365
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "shellCalls": 17,
+        "graphifyCalls": [],
+        "toolOutputTokens": 32848,
+        "answerWords": 290
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "shellCalls": 13,
+        "graphifyCalls": [],
+        "toolOutputTokens": 151290,
+        "answerWords": 299
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "shellCalls": 1,
+        "graphifyCalls": [],
+        "toolOutputTokens": 235,
+        "answerWords": 118
+      }
+    ],
+    "B": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "repetition": 0,
+        "shellCalls": 17,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 65388,
+        "answerWords": 396
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "repetition": 0,
+        "shellCalls": 13,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 36941,
+        "answerWords": 289
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "repetition": 0,
+        "shellCalls": 10,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 31422,
+        "answerWords": 307
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "repetition": 0,
+        "shellCalls": 3,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 5656,
+        "answerWords": 129
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "repetition": 1,
+        "shellCalls": 14,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 45972,
+        "answerWords": 353
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "repetition": 1,
+        "shellCalls": 17,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "path",
+            "exitCode": 1,
+            "status": "failed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 38786,
+        "answerWords": 275
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "repetition": 1,
+        "shellCalls": 16,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "reflect",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 1,
+            "status": "failed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 1,
+            "status": "failed"
+          },
+          {
+            "command": "path",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "save-result",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 41057,
+        "answerWords": 344
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "repetition": 1,
+        "shellCalls": 4,
+        "graphifyCalls": [
+          {
+            "command": "query",
+            "exitCode": 0,
+            "status": "completed"
+          },
+          {
+            "command": "explain",
+            "exitCode": 0,
+            "status": "completed"
+          }
+        ],
+        "toolOutputTokens": 4992,
+        "answerWords": 129
+      }
+    ]
+  },
+  "memory": {
+    "generatedFileCount": 2377,
+    "savedMemoryFiles": [
+      "graphify-out/memory/query_20261021_221217_07386491_review_the_codebase_in_this_folder__explain_archit.md",
+      "graphify-out/memory/query_20261021_221419_bc287505_trace_a_public_openai_responses_inference_request.md",
+      "graphify-out/memory/query_20261021_221840_7b54e303_explain_how_this_codebase_calculates_and_reports_c.md",
+      "graphify-out/memory/query_20261021_222131_595dde0a_review_the_codebase_in_this_folder__explain_archit.md",
+      "graphify-out/memory/query_20261021_222625_3197f9a2_trace_a_public_openai_responses_inference_request.md",
+      "graphify-out/memory/query_20261021_222814_9ac61f24_explain_how_this_codebase_calculates_and_reports_c.md",
+      "graphify-out/reflections/LESSONS.md"
+    ],
+    "invocations": {
+      "query": 14,
+      "reflect": 6,
+      "path": 8,
+      "save-result": 6,
+      "explain": 7
+    },
+    "structuralGraphSha256Unchanged": true
+  },
+  "manualQuality": {
+    "method": "Primary reviewer read all sixteen final answers and checked the relevant source paths. This is a limited coverage and claim review, not independent blind scoring or proof of equal semantic quality.",
+    "rubric": {
+      "architecture": "Entry points, proxy/native transforms, separate control plane, dashboard, desktop/client integration, data flow and supported risks.",
+      "request-flow": "Entry, conditional account and operator authentication, routing, transformation, forwarding, usage reporting and supported failure boundary.",
+      "savings-accounting": "Observed provider usage versus local/counterfactual estimates, receipt replay/deduplication and separation from main inference counts.",
+      "focused-control": "Discovery versus lookup/direct source, coverage and verification limits, file-scoped receipt exclusion."
+    },
+    "sharedCaveats": [
+      "Both accounting answers in each repetition correctly describe main analytics filtering. None identifies the separate /keys request counter exception at api/analytics.py:330; the main analytics filter is at line 171.",
+      "Citation existence is checked separately by the analyzer; a valid location alone does not verify a claim.",
+      "No major unsupported claim was identified in this limited review; this is not an exhaustive code audit."
+    ],
+    "cases": [
+      {
+        "index": 0,
+        "task": "architecture",
+        "A": {
+          "coverage": "met",
+          "notes": "Covers proxy, separate API/control plane, dashboard and desktop."
+        },
+        "B": {
+          "coverage": "partial",
+          "notes": "Useful graph-guided review of CLI, proxy, providers, control plane and dashboard; desktop integration omitted. Supported risks include config-dependent auth, CCR fallback/expiry and shared upstream configuration."
+        }
+      },
+      {
+        "index": 1,
+        "task": "request-flow",
+        "A": {
+          "coverage": "met",
+          "notes": "Account-mode and separate configured operator gate, compression, transport, outcome/outbox and 502 boundary covered."
+        },
+        "B": {
+          "coverage": "partial",
+          "notes": "Main flow and a supported 413 compression-refusal boundary covered. Account middleware described without its account-mode condition; separate configured operator gate omitted."
+        }
+      },
+      {
+        "index": 2,
+        "task": "savings-accounting",
+        "A": {
+          "coverage": "met",
+          "notes": "Core measurement, pricing, receipts, replay protection and main inference filtering covered."
+        },
+        "B": {
+          "coverage": "met",
+          "notes": "Core measurement, pricing, receipts, replay protection and main inference filtering covered."
+        }
+      },
+      {
+        "index": 3,
+        "task": "focused-control",
+        "A": {
+          "coverage": "met",
+          "notes": "Policy explained accurately from known source."
+        },
+        "B": {
+          "coverage": "met",
+          "notes": "Policy explained accurately; native routing introduced graph work for a known-file lookup."
+        }
+      },
+      {
+        "index": 4,
+        "task": "architecture",
+        "A": {
+          "coverage": "met",
+          "notes": "Proxy/Rust, separate API/control plane, dashboard, desktop launcher, data flow and supported risks covered."
+        },
+        "B": {
+          "coverage": "partial",
+          "notes": "Mentions Rust and React dashboard but concentrates on proxy/CLI, compression/CCR and outbox. Separate control-plane architecture and desktop integration largely omitted."
+        }
+      },
+      {
+        "index": 5,
+        "task": "request-flow",
+        "A": {
+          "coverage": "met",
+          "notes": "Useful full trace with conditional account mode, transport, outcomes/outbox and 502 boundary."
+        },
+        "B": {
+          "coverage": "met",
+          "notes": "Useful full trace with conditional account mode and operator gate, compression/transport, outcomes/outbox and 502 boundary."
+        }
+      },
+      {
+        "index": 6,
+        "task": "savings-accounting",
+        "A": {
+          "coverage": "met",
+          "notes": "Measurement versus estimates, capped baseline, overhead, signed pricing, durable deduplication and main inference filtering covered."
+        },
+        "B": {
+          "coverage": "met",
+          "notes": "Measurement versus estimates, capped baseline, overhead, signed pricing, durable deduplication and main inference filtering covered."
+        }
+      },
+      {
+        "index": 7,
+        "task": "focused-control",
+        "A": {
+          "coverage": "met",
+          "notes": "Discovery versus lookup, direct reads for known files, source verification and file-scoped receipt exclusion covered."
+        },
+        "B": {
+          "coverage": "met with caveat",
+          "notes": "Discovery versus lookup, direct source for known files, incomplete coverage/relationships and file-scoped receipt exclusion covered. Treats graph output as data, but does not explicitly repeat the verify-current-source-before-edits instruction."
+        }
+      }
+    ]
+  },
+  "method": {
+    "sourceFiles": 2659,
+    "manifestDigest": "566c1b9551cabef57a571389b9af0703f975ed29f10b14a0eb2b8c193e87210d",
+    "independentChats": 16,
+    "sourceHashesUnchanged": true,
+    "temporaryAuthRemoved": true,
+    "graphBuildModelTokens": 0,
+    "billedScope": "Observed main-model standard API-price equivalents. Subscription invoices and auxiliary approval-review model usage are not measured.",
+    "limits": "One repository, two repetitions per task, automatic cache state. First arm swaps per task in repetition two. Local code-only Graphify with deterministic clustering and no paid semantic labels or Cloud. Citation location checks are not semantic verification. Generated work memory persists only for B."
+  },
+  "retrievalTotals": {
+    "A": {
+      "shellCalls": 84,
+      "toolOutputTokens": 344631,
+      "answerWords": 2141
+    },
+    "B": {
+      "shellCalls": 94,
+      "toolOutputTokens": 270214,
+      "answerWords": 2222
+    }
+  }
+}

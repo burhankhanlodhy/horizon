@@ -30,7 +30,7 @@ function assertNoKeyLeak(api, outputs) {
   }
 }
 
-test('connect writes exactly the three keys and keeps every other setting', () =>
+test('connect writes the three env keys and savings bar, keeping every other setting', () =>
   withSandbox(async ({ api, sb }) => {
     const original = [
       '{',
@@ -48,7 +48,7 @@ test('connect writes exactly the three keys and keeps every other setting', () =
     assert.strictEqual(res.code, 0, res.output);
 
     const settings = readJson(sb.settings);
-    assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env']);
+    assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env', 'statusLine']);
     assert.deepStrictEqual(settings.permissions, { allow: ['Bash(npm test)'] });
     assert.strictEqual(settings.model, 'opus');
     assert.deepStrictEqual(Object.keys(settings.env), [

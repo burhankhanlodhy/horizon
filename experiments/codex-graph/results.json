@@ -1,0 +1,59 @@
+{
+  "at": "2026-10-21T05:59:26.699Z",
+  "snapshot": "7c7bd5a51a7d9beda40ffea1e8e4c8dce90f6327d93bccbc65beac1c06168b03",
+  "tokenizer": "o200k_base",
+  "scope": "deterministic retrieval, not a full live-chat A/B",
+  "baselineOutputCapTokens": 4000,
+  "graphSchemaCharged": "1024-token allowance per query for full schemas and guidance; invocation and metadata counted explicitly",
+  "sourceVerification": "same nine-line excerpt in both arms; not claimed as saved",
+  "tasks": [
+    {
+      "query": "flash_openai",
+      "expected": "_maybe_flash_openai",
+      "citation": "horizon/proxy/handlers/openai.py:2123",
+      "citationVerified": true,
+      "broadSearchTokens": 2628,
+      "focusedSearchTokens": 96,
+      "graphTokens": 1495,
+      "graphSchemaTokens": 543,
+      "graphOverheadAllowance": 1024,
+      "estimateBaselineTokens": 2618,
+      "focusedSearchContainsExpectedSymbol": true,
+      "identicalVerificationTokens": 53,
+      "broadTokensAvoided": 1133,
+      "focusedTokensAvoided": -1399
+    },
+    {
+      "query": "pricing",
+      "expected": "get_model_pricing",
+      "citation": "horizon/pricing/litellm_pricing.py:240",
+      "citationVerified": true,
+      "broadSearchTokens": 4008,
+      "focusedSearchTokens": 1907,
+      "graphTokens": 1495,
+      "graphSchemaTokens": 543,
+      "graphOverheadAllowance": 1024,
+      "estimateBaselineTokens": 3358,
+      "focusedSearchContainsExpectedSymbol": true,
+      "identicalVerificationTokens": 104,
+      "broadTokensAvoided": 2513,
+      "focusedTokensAvoided": 412
+    },
+    {
+      "query": "migrate",
+      "expected": "migrate",
+      "citation": "desktop/npx-codex/lib/chats.js:166",
+      "citationVerified": true,
+      "broadSearchTokens": 4008,
+      "focusedSearchTokens": 754,
+      "graphTokens": 1489,
+      "graphSchemaTokens": 543,
+      "graphOverheadAllowance": 1024,
+      "estimateBaselineTokens": 4000,
+      "focusedSearchContainsExpectedSymbol": true,
+      "identicalVerificationTokens": 102,
+      "broadTokensAvoided": 2519,
+      "focusedTokensAvoided": -735
+    }
+  ]
+}

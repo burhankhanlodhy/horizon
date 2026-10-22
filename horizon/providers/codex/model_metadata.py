@@ -205,6 +205,10 @@ def normalize_codex_registry_headers(headers: Mapping[str, str]) -> dict[str, st
     """Prepare inbound ChatGPT auth headers for the Codex model registry."""
     upstream_headers = dict(headers)
     drop_header(upstream_headers, "host")
+    # Gateway credentials/control flags belong to the proxy, never OpenAI.
+    for name in list(upstream_headers):
+        if name.lower().startswith("x-horizon-"):
+            del upstream_headers[name]
 
     account_header = header_name(upstream_headers, "chatgpt-account-id")
     account_id = upstream_headers.get(account_header, "") if account_header else ""
@@ -225,6 +229,8 @@ async def fetch_chatgpt_codex_model_entries(
     headers: Mapping[str, str],
     requested_client_version: str | None,
     options: CodexModelRegistryOptions = CodexModelRegistryOptions(),
+    *,
+    native_metadata: bool = False,
 ) -> tuple[dict[str, Any], ...] | None:
     """Fetch Codex model metadata from ChatGPT, returning None when fallback should apply."""
     client_version = codex_client_version(requested_client_version, options)
@@ -251,7 +257,7 @@ async def fetch_chatgpt_codex_model_entries(
             return None
 
         model_entries = tuple(
-            codex_model_registry_entry(slug, entry)
+            (dict(entry) if native_metadata else codex_model_registry_entry(slug, entry))
             for entry in models_raw
             if isinstance(entry, dict)
             for slug in (entry.get("slug"),)
@@ -345,6 +351,16 @@ async def handle_chatgpt_model_metadata(
 
     requested_client_version = request.query_params.get("client_version")
     if upstream_path == "/backend-api/models":
+        if request.headers.get("x-horizon-model-catalog") == "codex":
+            entries = await fetch_chatgpt_codex_model_entries(
+                http_client, headers, requested_client_version, native_metadata=True
+            )
+            if entries is None:
+                return Response(
+                    content='{"error":"Codex model catalog unavailable"}',
+                    status_code=503, media_type="application/json",
+                )
+            return _json_response({"models": list(entries)})
         upstream_response = await fetch_chatgpt_codex_models_response(
             http_client,
             headers,
