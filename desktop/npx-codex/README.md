@@ -43,6 +43,11 @@ disconnects and asks for ContextShrink sign-in again to revoke that key. `login`
 rotates the connector's key; `login --key` accepts an externally managed key,
 which is not revoked by logout. Upgrading does not require another sign-in.
 
+## Version 0.2.5
+
+- Savings below a cent show their real size (for example "$0.0015") instead of
+  "$0.00", in the savings command and the Windows companion window.
+
 ## Version 0.2.4
 
 - New-chat connection, opt-in existing-chat migration with restoration, and a

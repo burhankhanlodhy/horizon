@@ -192,6 +192,11 @@ hosts. The Code tab tests use test-only overrides (`CONTEXTSHRINK_NPX_TEST=1` an
 `CONTEXTSHRINK_NPX_*`); the CLI ignores them unless that variable is set. `e2e/run-live-test.ps1` (in the repository) runs a live test on Windows in an
 isolated Claude Code folder.
 
+### 0.2.2
+
+Savings below a cent show their real size (for example "$0.0015") instead of
+"$0.00". No server change and no new signed launcher or helper.
+
 ### Releasing 0.2.1
 
 Deploy the API change in `api/analytics.py` and the gateway allowlist in
