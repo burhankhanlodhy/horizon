@@ -14,7 +14,7 @@ import itertools
 import json
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,13 +46,16 @@ _client_ips = itertools.count(1)
 
 def _blank_plan() -> dict:
     return {
-        "trial_started_at": None,
-        "trial_ends_at": None,
         "stripe_subscription_id": None,
         "status": None,
         "current_period_end": None,
         "cancel_at_period_end": False,
+        "updated_at": T0,
     }
+
+
+def _month_of(moment: datetime) -> date:
+    return moment.replace(day=1).date()
 
 
 class FakeDB:
@@ -63,10 +66,24 @@ class FakeDB:
         self.requests: dict = {}
         self.devices: dict = {}
         self.plans: dict = {}
-        self.trials: dict = {}
+        self.weeks: list[dict] = []
         self.usage: dict = {}
         self.customers: dict = {"cus_code": ALICE}
         self.subscription_writes: list[str] = []
+        # Runs just before a free-week insert, to play a concurrent request's commit.
+        self.before_week_insert = None
+
+    def add_week(self, user_id, device_hash, started_at):
+        """A committed free-week row, as another request would have written it."""
+        row = {
+            "user_id": user_id,
+            "device_hash": device_hash,
+            "month": _month_of(started_at),
+            "started_at": started_at,
+            "ends_at": started_at + timedelta(days=7),
+        }
+        self.weeks.append(row)
+        return row
 
     # asyncpg pool/connection shape: acquire(), transaction() as async contexts.
     def acquire(self):
@@ -124,16 +141,34 @@ class FakeDB:
                 if d["user_id"] == args[0] and d["revoked_at"] is None
             ]
             return [dict(d) for d in sorted(rows, key=lambda d: d["created_at"])]
+        if "FROM core.code_free_weeks WHERE user_id=$1" in sql:
+            return [
+                {k: w[k] for k in ("device_hash", "month", "started_at", "ends_at")}
+                for w in self.weeks
+                if w["user_id"] == args[0]
+            ]
         raise AssertionError(sql)
 
     async def fetchval(self, sql, *args):
         if "SELECT id FROM core.users WHERE id=$1 FOR UPDATE" in sql:
             return args[0]
-        if "INSERT INTO core.code_trial_devices" in sql:
-            if args[0] in self.trials:
+        if "SELECT user_id FROM core.code_free_weeks WHERE device_hash=$1 AND month=$2" in sql:
+            row = next((w for w in self.weeks if (w["device_hash"], w["month"]) == args), None)
+            return row["user_id"] if row else None
+        if "INSERT INTO core.code_free_weeks" in sql:
+            user_id, device_hash, month, started, ends = args
+            if self.before_week_insert is not None:
+                hook, self.before_week_insert = self.before_week_insert, None
+                hook()
+            # Both UNIQUE constraints; ON CONFLICT DO NOTHING returns no row.
+            taken = any(
+                (w["user_id"] == user_id or w["device_hash"] == device_hash) and w["month"] == month
+                for w in self.weeks
+            )
+            if taken:
                 return None
-            self.trials[args[0]] = {"user_id": args[1], "started_at": args[2]}
-            return args[0]
+            self.add_week(user_id, device_hash, started)
+            return started
         if "INSERT INTO core.code_devices (user_id" in sql:
             device_id = uuid4()
             self.devices[device_id] = {
@@ -220,9 +255,6 @@ class FakeDB:
         ):
             device = self._device_by_id(args[0])
             device["revoked_at"] = device["revoked_at"] or self.clock.now
-        elif "INSERT INTO core.code_plans (user_id, trial_started_at" in sql:
-            plan = self.plans.setdefault(args[0], _blank_plan())
-            plan.update(trial_started_at=args[1], trial_ends_at=args[2])
         elif "INSERT INTO core.code_plans (user_id, stripe_subscription_id" in sql:
             user_id, sub_id, status, period_end, cancel_flag = args
             plan = self.plans.setdefault(user_id, _blank_plan())
@@ -234,6 +266,7 @@ class FakeDB:
                     status=status,
                     current_period_end=period_end,
                     cancel_at_period_end=cancel_flag,
+                    updated_at=self.clock.now,
                 )
         elif "UPDATE core.subscriptions" in sql:
             self.subscription_writes.append(sql)
@@ -255,15 +288,35 @@ class FakeDB:
 class FakeStripe:
     def __init__(self):
         self.subs: dict[str, dict] = {}
+        self.invoices: list[dict] = []
+        # False: list ignores the subscription filter, as a defence check on code_plan.
+        self.honor_invoice_filter = True
         self.calls: list[tuple] = []
         self.v1 = SimpleNamespace(
-            subscriptions=SimpleNamespace(retrieve=self._retrieve),
+            subscriptions=SimpleNamespace(retrieve=self._retrieve, update=self._update),
+            invoices=SimpleNamespace(list=self._invoices),
             checkout=SimpleNamespace(sessions=SimpleNamespace(create=self._checkout)),
             billing_portal=SimpleNamespace(sessions=SimpleNamespace(create=self._portal)),
         )
 
     def _retrieve(self, sub_id):
         return stripe.Subscription.construct_from(self.subs[sub_id], "sk_test_x")
+
+    def _update(self, sub_id, params, options=None):
+        self.calls.append(("subscription.update", sub_id, params, options))
+        self.subs[sub_id] = {**self.subs[sub_id], **params}
+        return stripe.Subscription.construct_from(self.subs[sub_id], "sk_test_x")
+
+    def _invoices(self, params, options=None):
+        self.calls.append(("invoices.list", params))
+        wanted = params.get("subscription")
+        rows = [
+            inv
+            for inv in self.invoices
+            if not self.honor_invoice_filter or _invoice_sub(inv) == wanted
+        ]
+        data = [stripe.Invoice.construct_from(inv, "sk_test_x") for inv in rows]
+        return SimpleNamespace(data=data[: params.get("limit", 10)])
 
     def _checkout(self, params):
         self.calls.append(("checkout", params))
@@ -469,42 +522,248 @@ def test_account_page_revoke_frees_the_slot_and_hides_other_accounts_devices(cli
 # ------------------------------------------------------------------ trial
 
 
-def test_first_approval_starts_a_seven_day_trial(client):
+def _state(client, session="sess-alice") -> dict:
+    return client.get("/code/account", headers=auth(session)).json()["plan"]
+
+
+def test_approval_starts_no_week_and_the_account_is_free(client, env):
     connect(client, HASH_A)
+    assert env.db.weeks == []
     account = client.get("/code/account", headers=auth("sess-alice")).json()
-    assert account["plan"]["state"] == "trial"
-    assert account["plan"]["trial_ends_at"] == (T0 + timedelta(days=7)).isoformat()
-    assert account["plan"]["entitled"] is True
     assert account["device_limit"] == 2
+    assert account["plan"] == {
+        "state": "free",
+        "free_week": {
+            "status": "available",
+            "started_at": None,
+            "ends_at": None,
+            "renews_at": T0.isoformat(),
+        },
+        "current_period_end": None,
+        "cancel_at_period_end": False,
+        "entitled": False,
+        "price_usd": 5,
+    }
 
 
-def test_a_second_computer_does_not_restart_the_trial(client, env):
+def test_account_plan_object_has_the_documented_fields(client, env):
     connect(client, HASH_A)
-    first_end = env.db.plans[ALICE]["trial_ends_at"]
+    env.db.plans[ALICE] = {
+        **_blank_plan(),
+        "stripe_subscription_id": "sub_code_1",
+        "status": "active",
+        "current_period_end": PERIOD_END,
+        "cancel_at_period_end": True,
+    }
+    assert _state(client) == {
+        "state": "active",
+        "free_week": {
+            "status": "available",
+            "started_at": None,
+            "ends_at": None,
+            "renews_at": T0.isoformat(),
+        },
+        "current_period_end": PERIOD_END.isoformat(),
+        "cancel_at_period_end": True,
+        "entitled": True,
+        "price_usd": 5,
+    }
+
+
+# ------------------------------------------------------------- free week
+
+WEEK = timedelta(days=7)
+NOV_1 = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+
+def test_first_use_starts_the_week_and_the_note_runs_to_its_end(client, env):
+    key, _ = connect(client, HASH_A)
+    response = entitlement(client, key)
+    assert response.status_code == 200
+    body = response.json()
+    ends = int((T0 + WEEK).timestamp())
+    assert body["plan"] == "trial"
+    assert body["until"] == ends and body["free_week_ends_at"] == ends
+    _, _, fields = _note(body["token"])
+    assert fields["plan"] == "trial" and fields["until"] == ends
+    assert env.db.weeks == [
+        {
+            "user_id": ALICE,
+            "device_hash": HASH_A,
+            "month": date(2026, 10, 1),
+            "started_at": T0,
+            "ends_at": T0 + WEEK,
+        }
+    ]
+    plan = _state(client)
+    assert plan["state"] == "free" and plan["entitled"] is True
+    assert plan["free_week"] == {
+        "status": "active",
+        "started_at": T0.isoformat(),
+        "ends_at": (T0 + WEEK).isoformat(),
+        "renews_at": NOV_1.isoformat(),
+    }
+
+
+def test_a_second_device_of_the_account_shares_the_week(client, env):
+    key_a, _ = connect(client, HASH_A, "Laptop")
+    key_b, _ = connect(client, HASH_B, "Desktop")
+    first = entitlement(client, key_a).json()
     env.clock.now += timedelta(days=2)
-    connect(client, HASH_B, "Desktop")
-    assert env.db.plans[ALICE]["trial_ends_at"] == first_end
+    second = entitlement(client, key_b, HASH_B)
+    assert second.status_code == 200
+    assert second.json()["until"] == first["until"] == int((T0 + WEEK).timestamp())
+    assert len(env.db.weeks) == 1
 
 
-def test_one_trial_per_account_even_when_a_computer_reconnects_later(client, env):
+def test_week_ends_after_seven_days_and_the_next_one_renews_on_the_first(client, env):
+    key, _ = connect(client, HASH_A)
+    assert entitlement(client, key).status_code == 200
+    env.clock.now = T0 + WEEK  # the week ends exactly now
+    response = entitlement(client, key)
+    assert response.status_code == 402
+    assert response.json()["detail"] == {
+        "code": "plan_required",
+        "free_week_renews_at": NOV_1.isoformat(),
+        "free_week_reason": "used",
+    }
+    assert _state(client)["free_week"]["renews_at"] == NOV_1.isoformat()
+
+
+def test_next_month_starts_a_new_week_at_its_first_use(client, env):
+    key, _ = connect(client, HASH_A)
+    entitlement(client, key)
+    env.clock.now = datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)
+    response = entitlement(client, key)
+    assert response.status_code == 200
+    assert response.json()["until"] == int((env.clock.now + WEEK).timestamp())
+    assert [w["month"] for w in env.db.weeks] == [date(2026, 10, 1), date(2026, 11, 1)]
+
+
+def test_a_week_started_on_the_28th_runs_into_next_month_and_that_month_waits_for_it(client, env):
+    key_a, _ = connect(client, HASH_A, "Laptop")
+    key_b, _ = connect(client, HASH_B, "Desktop")
+    spill_end = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    env.clock.now = datetime(2026, 10, 28, 12, tzinfo=timezone.utc)
+    assert entitlement(client, key_a).json()["until"] == int(spill_end.timestamp())
+
+    env.clock.now = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+    # Still inside the week: another device shares it, and no November week starts.
+    assert entitlement(client, key_b, HASH_B).json()["until"] == int(spill_end.timestamp())
+    assert len(env.db.weeks) == 1
+    plan = _state(client)
+    assert plan["free_week"]["status"] == "active"
+    assert plan["free_week"]["renews_at"] == spill_end.isoformat()
+
+    env.clock.now = spill_end - timedelta(minutes=1)
+    assert entitlement(client, key_b, HASH_B).status_code == 200
+    # The moment it ends, November's week may start.
+    env.clock.now = spill_end
+    response = entitlement(client, key_b, HASH_B)
+    assert response.status_code == 200
+    assert response.json()["until"] == int((spill_end + WEEK).timestamp())
+    assert [w["month"] for w in env.db.weeks] == [date(2026, 10, 1), date(2026, 11, 1)]
+
+
+def test_a_computer_gets_one_free_week_per_month_across_accounts(client, env):
+    key_alice, _ = connect(client, HASH_A, session="sess-alice")
+    assert entitlement(client, key_alice).status_code == 200
+    key_bob, _ = connect(client, HASH_A, "Laptop", session="sess-bob")
+    env.clock.now += timedelta(days=8)  # still October, and Alice's week is over
+    response = entitlement(client, key_bob)
+    assert response.status_code == 402
+    assert response.json()["detail"] == {
+        "code": "plan_required",
+        "free_week_renews_at": NOV_1.isoformat(),
+        "free_week_reason": "device_used",
+    }
+    assert len(env.db.weeks) == 1
+
+    env.clock.now = NOV_1 + timedelta(hours=9)
+    assert entitlement(client, key_bob).status_code == 200  # next month: Bob's own week
+    assert env.db.weeks[-1]["user_id"] == BOB
+
+
+def test_a_running_week_does_not_carry_a_computer_another_account_used_this_month(client, env):
+    key_bob, _ = connect(client, HASH_B, session="sess-bob")
+    assert entitlement(client, key_bob, HASH_B).status_code == 200
+    key_alice, _ = connect(client, HASH_A, session="sess-alice")
+    env.clock.now += timedelta(hours=1)
+    assert entitlement(client, key_alice, HASH_A).status_code == 200
+    key_alice_desktop, _ = connect(client, HASH_B, "Desktop", session="sess-alice")
+    env.clock.now += timedelta(hours=1)
+    response = entitlement(client, key_alice_desktop, HASH_B)
+    assert response.status_code == 402
+    assert response.json()["detail"]["free_week_reason"] == "device_used"
+
+
+def test_reconnecting_a_computer_does_not_restart_the_months_week(client, env):
     key, device_id = connect(client, HASH_A)
-    first_end = env.db.plans[ALICE]["trial_ends_at"]
-    env.clock.now += timedelta(days=8)
+    assert entitlement(client, key).status_code == 200
+    env.clock.now += timedelta(days=8)  # still October, and the week is over
     client.delete(f"/code/devices/{device_id}", headers=auth("sess-alice"))
-    connect(client, HASH_A)  # same computer, new device row
-    assert env.db.plans[ALICE]["trial_ends_at"] == first_end
+    new_key, _ = connect(client, HASH_A)  # same computer, new device row
+    response = entitlement(client, new_key)
+    assert response.status_code == 402
+    assert response.json()["detail"]["free_week_reason"] == "used"
     assert entitlement(client, key).status_code == 401
+    assert len(env.db.weeks) == 1
 
 
-def test_a_computer_gets_one_trial_across_accounts(client):
-    connect(client, HASH_A, session="sess-alice")
-    connect(client, HASH_A, "Laptop", session="sess-bob")
-    bob = client.get("/code/account", headers=auth("sess-bob")).json()
-    assert bob["plan"]["state"] == "none"
-    assert bob["plan"]["entitled"] is False
+def test_a_paid_account_never_starts_or_uses_a_free_week(client, env):
+    key_bob, _ = connect(client, HASH_B, session="sess-bob")
+    assert entitlement(client, key_bob, HASH_B).status_code == 200  # Bob used the computer's week
+    key, _ = connect(client, HASH_B, "Desktop")
+    env.db.plans[ALICE] = {
+        **_blank_plan(),
+        "stripe_subscription_id": "sub_code_1",
+        "status": "active",
+        "current_period_end": PERIOD_END,
+    }
+    body = entitlement(client, key, HASH_B).json()
+    assert body["plan"] == "active"
+    assert body["until"] == int((PERIOD_END + code_plan.GRACE).timestamp())
+    assert body["free_week_ends_at"] is None
+    assert [w["user_id"] for w in env.db.weeks] == [BOB]
+    assert _state(client)["free_week"]["status"] == "available"
+
+
+def test_schema_migration_copies_this_months_trials_into_free_weeks():
+    # No Postgres runs here, so this checks the migration statement itself.
+    schema = (Path(__file__).resolve().parents[1] / "schema.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS core.code_free_weeks" in schema
+    migration = " ".join(schema[schema.index("INSERT INTO core.code_free_weeks") :].split())
     assert (
-        client.get("/code/account", headers=auth("sess-alice")).json()["plan"]["state"] == "trial"
+        "FROM core.code_plans p JOIN core.code_trial_devices t ON t.user_id = p.user_id"
+        in migration
     )
+    assert "WHERE p.trial_started_at IS NOT NULL AND p.trial_ends_at IS NOT NULL" in migration
+    assert (
+        "date_trunc('month', p.trial_started_at AT TIME ZONE 'UTC') = "
+        "date_trunc('month', now() AT TIME ZONE 'UTC')" in migration
+    )
+    assert migration.endswith("ON CONFLICT DO NOTHING;")
+
+
+def test_concurrent_first_use_from_two_devices_of_one_account_starts_one_week(client, env):
+    key_a, _ = connect(client, HASH_A, "Laptop")
+    key_b, _ = connect(client, HASH_B, "Desktop")
+    # Device A's request commits its week after device B has read the account's weeks.
+    env.db.before_week_insert = lambda: env.db.add_week(ALICE, HASH_A, T0)
+    response = entitlement(client, key_b, HASH_B)
+    assert response.status_code == 200
+    assert response.json()["until"] == int((T0 + WEEK).timestamp())
+    assert len(env.db.weeks) == 1
+    assert entitlement(client, key_a, HASH_A).json()["until"] == int((T0 + WEEK).timestamp())
+
+
+def test_concurrent_first_use_of_one_computer_by_two_accounts_starts_one_week(client, env):
+    key_alice, _ = connect(client, HASH_A, session="sess-alice")
+    env.db.before_week_insert = lambda: env.db.add_week(BOB, HASH_A, T0)
+    response = entitlement(client, key_alice, HASH_A)
+    assert response.status_code == 402
+    assert response.json()["detail"]["free_week_reason"] == "device_used"
+    assert [w["user_id"] for w in env.db.weeks] == [BOB]
 
 
 # ------------------------------------------------------------ entitlement
@@ -539,11 +798,12 @@ def test_entitled_device_gets_a_note_that_verifies_with_the_public_key(client, e
     assert body["until"] == fields["until"]
 
 
-def test_note_expiry_is_capped_by_the_entitlement_end(client, env):
+def test_note_expiry_is_capped_by_the_week_end(client, env):
     key, _ = connect(client, HASH_A)
-    env.clock.now = T0 + timedelta(days=7) - timedelta(hours=1)
+    entitlement(client, key)  # starts the week
+    env.clock.now = T0 + WEEK - timedelta(hours=1)
     _, _, fields = _note(entitlement(client, key).json()["token"])
-    assert fields["until"] == int((T0 + timedelta(days=7)).timestamp())
+    assert fields["until"] == int((T0 + WEEK).timestamp())
     assert fields["exp"] == fields["until"] < fields["iat"] + 72 * 3600
 
 
@@ -562,7 +822,7 @@ def test_paid_note_runs_to_period_end_plus_three_days(client, env):
     assert fields["exp"] == fields["iat"] + 72 * 3600
 
 
-def test_past_due_keeps_access_only_inside_the_grace_period(client, env):
+def test_past_due_keeps_the_paid_note_only_inside_the_grace_period(client, env):
     key, _ = connect(client, HASH_A)
     env.db.plans[ALICE] = {
         **_blank_plan(),
@@ -570,19 +830,22 @@ def test_past_due_keeps_access_only_inside_the_grace_period(client, env):
         "status": "past_due",
         "current_period_end": T0 - timedelta(days=1),
     }
-    assert entitlement(client, key).status_code == 200
-    env.clock.now = T0 + timedelta(days=3)
-    assert entitlement(client, key).status_code == 402
+    assert entitlement(client, key).json()["plan"] == "active"
+    env.clock.now = T0 + timedelta(days=3)  # grace is over, so the free week applies
+    later = entitlement(client, key).json()
+    assert later["plan"] == "trial"
+    assert later["until"] == int((T0 + timedelta(days=10)).timestamp())
 
 
-def test_after_the_trial_without_a_subscription_is_402(client, env):
+def test_a_used_week_is_refused_with_the_renewal_and_no_trial_fields(client, env):
     key, _ = connect(client, HASH_A)
-    env.clock.now = T0 + timedelta(days=7, seconds=1)
+    env.db.add_week(ALICE, HASH_A, T0 - timedelta(days=21))  # this month's week, already over
     response = entitlement(client, key)
     assert response.status_code == 402
     assert response.json()["detail"] == {
         "code": "plan_required",
-        "trial_ended_at": (T0 + timedelta(days=7)).isoformat(),
+        "free_week_renews_at": NOV_1.isoformat(),
+        "free_week_reason": "used",
     }
 
 
@@ -609,13 +872,13 @@ def test_missing_or_bad_signing_key_is_503(client, env):
 @pytest.mark.parametrize(
     "plan, expected_state, entitled",
     [
-        ({}, "none", False),
-        ({"trial_ends_at": T0 + timedelta(days=1)}, "trial", True),
+        ({}, "free", False),
         ({"status": "active", "stripe_subscription_id": "s"}, "active", True),
         # Inside the three-day grace after the period ended, then not.
         ({"status": "past_due", "current_period_end": T0 - timedelta(days=1)}, "past_due", True),
-        ({"status": "past_due", "current_period_end": T0 - timedelta(days=4)}, "past_due", False),
-        ({"status": "canceled", "stripe_subscription_id": "s"}, "canceled", False),
+        ({"status": "past_due", "current_period_end": T0 - timedelta(days=4)}, "free", False),
+        # A cancelled subscription is no live paid subscription: the account is free.
+        ({"status": "canceled", "stripe_subscription_id": "s"}, "free", False),
     ],
 )
 def test_account_plan_state(client, env, plan, expected_state, entitled):
@@ -786,7 +1049,12 @@ def test_bad_buckets_are_rejected_and_nothing_is_written(client, env, buckets):
 
 
 def _sub(
-    status="active", *, metadata=None, lookup_key="contextshrink_code_monthly", sub_id="sub_code_1"
+    status="active",
+    *,
+    metadata=None,
+    lookup_key="contextshrink_code_monthly",
+    sub_id="sub_code_1",
+    cancel_at_period_end=False,
 ):
     return {
         "id": sub_id,
@@ -794,7 +1062,7 @@ def _sub(
         "customer": "cus_code",
         "status": status,
         "cancel_at": None,
-        "cancel_at_period_end": False,
+        "cancel_at_period_end": cancel_at_period_end,
         "metadata": metadata
         if metadata is not None
         else {"product": "code", "user_id": str(ALICE)},
@@ -961,6 +1229,139 @@ def test_portal_needs_a_billing_account_and_returns_to_the_account_page(client, 
     assert name == "portal" and params["return_url"] == "https://code.contextshrink.com/account"
 
 
+def _subscribe(env, *, status="active", cancel=False):
+    env.stripe.subs["sub_code_1"] = _sub(status, cancel_at_period_end=cancel)
+    env.db.plans[ALICE] = {
+        **_blank_plan(),
+        "stripe_subscription_id": "sub_code_1",
+        "status": status,
+        "current_period_end": PERIOD_END,
+        "cancel_at_period_end": cancel,
+    }
+
+
+def _stripe_updates(env):
+    return [(c[1], c[2], c[3]) for c in env.stripe.calls if c[0] == "subscription.update"]
+
+
+def test_cancel_sets_cancel_at_period_end_in_stripe_and_returns_the_plan(client, env):
+    _subscribe(env)
+    response = client.post("/code/subscription/cancel", headers=auth("sess-alice"))
+    assert response.status_code == 200
+    [(sub_id, params, options)] = _stripe_updates(env)
+    assert sub_id == "sub_code_1" and params == {"cancel_at_period_end": True}
+    assert options["idempotency_key"].startswith("code-cancel-sub_code_1-")
+    assert response.json() == {
+        "state": "active",
+        "free_week": {
+            "status": "available",
+            "started_at": None,
+            "ends_at": None,
+            "renews_at": T0.isoformat(),
+        },
+        "current_period_end": PERIOD_END.isoformat(),
+        "cancel_at_period_end": True,
+        "entitled": True,
+        "price_usd": 5,
+    }
+    assert env.db.plans[ALICE]["cancel_at_period_end"] is True
+
+
+def test_resume_undoes_a_pending_cancel_and_each_action_has_its_own_key(client, env):
+    _subscribe(env)
+    client.post("/code/subscription/cancel", headers=auth("sess-alice"))
+    env.clock.now += timedelta(minutes=1)
+    response = client.post("/code/subscription/resume", headers=auth("sess-alice"))
+    assert response.status_code == 200
+    assert response.json()["cancel_at_period_end"] is False
+    env.clock.now += timedelta(minutes=1)
+    client.post("/code/subscription/cancel", headers=auth("sess-alice"))
+
+    updates = _stripe_updates(env)
+    assert [params["cancel_at_period_end"] for _, params, _ in updates] == [True, False, True]
+    keys = [options["idempotency_key"] for _, _, options in updates]
+    assert len(set(keys)) == 3
+    assert keys[1].startswith("code-resume-sub_code_1-")
+
+
+def test_cancel_or_resume_without_a_live_subscription_is_409_and_calls_nothing(client, env):
+    connect(client, HASH_A)
+    for path in ("/code/subscription/cancel", "/code/subscription/resume"):
+        assert client.post(path, headers=auth("sess-alice")).status_code == 409
+    env.db.plans[ALICE] = {
+        **_blank_plan(),
+        "stripe_subscription_id": "sub_code_1",
+        "status": "canceled",
+    }
+    assert client.post("/code/subscription/cancel", headers=auth("sess-alice")).status_code == 409
+    assert _stripe_updates(env) == []
+
+
+def _stripe_invoice(inv_id, sub_id, *, number, status="paid"):
+    return {
+        "object": "invoice",
+        "id": inv_id,
+        "number": number,
+        "created": int(T0.timestamp()),
+        "total": 500,
+        "currency": "usd",
+        "status": status,
+        "hosted_invoice_url": f"https://invoice.test/{inv_id}",
+        "parent": {
+            "type": "subscription_details",
+            "subscription_details": {"subscription": sub_id, "metadata": {}},
+        },
+    }
+
+
+def _invoice_sub(inv: dict) -> str:
+    return inv["parent"]["subscription_details"]["subscription"]
+
+
+CODE_INVOICES = [
+    {
+        "id": "in_code_1",
+        "number": "CS-1",
+        "created": T0.isoformat(),
+        "total": 5.0,
+        "currency": "usd",
+        "status": "paid",
+        "url": "https://invoice.test/in_code_1",
+    }
+]
+
+
+def test_invoices_list_only_the_code_subscriptions_invoices(client, env):
+    _subscribe(env)
+    env.stripe.invoices = [
+        _stripe_invoice("in_code_1", "sub_code_1", number="CS-1"),
+        _stripe_invoice("in_pro_1", "sub_pro_1", number="PRO-1"),
+        _stripe_invoice("in_draft", "sub_code_1", number="CS-2", status="draft"),
+    ]
+    response = client.get("/code/invoices", headers=auth("sess-alice"))
+    assert response.status_code == 200
+    assert response.json() == CODE_INVOICES
+    assert [c for c in env.stripe.calls if c[0] == "invoices.list"] == [
+        ("invoices.list", {"subscription": "sub_code_1", "limit": 24})
+    ]
+
+
+def test_invoices_drop_other_subscriptions_even_if_stripe_returns_them(client, env):
+    _subscribe(env)
+    env.stripe.honor_invoice_filter = False
+    env.stripe.invoices = [
+        _stripe_invoice("in_code_1", "sub_code_1", number="CS-1"),
+        _stripe_invoice("in_pro_1", "sub_pro_1", number="PRO-1"),
+    ]
+    assert client.get("/code/invoices", headers=auth("sess-alice")).json() == CODE_INVOICES
+
+
+def test_no_code_subscription_means_no_invoices_and_no_stripe_call(client, env):
+    connect(client, HASH_A)
+    assert client.get("/code/invoices", headers=auth("sess-alice")).json() == []
+    assert [c for c in env.stripe.calls if c[0] == "invoices.list"] == []
+
+
 # ------------------------------------------------------- fee fairness
 
 
@@ -1007,6 +1408,9 @@ def test_gateway_allows_the_code_routes_and_nothing_private():
         "/code/entitlement",
         "/code/usage",
         "/code/usage/summary",
+        "/code/subscription/cancel",
+        "/code/subscription/resume",
+        "/code/invoices",
     ):
         assert re.fullmatch(pattern, allowed), allowed
     for private in (
@@ -1018,5 +1422,8 @@ def test_gateway_allows_the_code_routes_and_nothing_private():
         "/code/device/extra",
         "/code/usage/summary/extra",
         "/code/internal/usage",
+        "/code/subscription",
+        "/code/subscription/cancel/extra",
+        "/code/invoices/extra",
     ):
         assert not re.fullmatch(pattern, private), private

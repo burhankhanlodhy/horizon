@@ -58,7 +58,7 @@
 	# Public control-plane routes only; /internal/* (service token), the
 	# legacy /ingest and FastAPI's /docs and /openapi.json stay private.
 	# /code/* is ContextShrink Code: the npx CLI, the code.contextshrink.com site.
-	@public_api path_regexp api ^/(healthz|auth/(signup|login|logout|me|password/(forgot|reset)|email/(verify|resend))|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/(summary|key-summary)|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?|code/(cli/(start|request|approve|poll)|account|checkout|portal|device|devices/[0-9a-fA-F-]{36}|entitlement|usage(/summary)?))$
+	@public_api path_regexp api ^/(healthz|auth/(signup|login|logout|me|password/(forgot|reset)|email/(verify|resend))|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/(summary|key-summary)|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?|code/(cli/(start|request|approve|poll)|account|checkout|portal|device|devices/[0-9a-fA-F-]{36}|entitlement|usage(/summary)?|subscription/(cancel|resume)|invoices))$
 	handle @public_api {
 		reverse_proxy 127.0.0.1:8788 {
 			header_up -Cdn-Loop

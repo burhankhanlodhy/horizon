@@ -38,7 +38,8 @@ CODE_PRICE_LOOKUP_KEY = os.environ.get("STRIPE_CODE_PRICE_LOOKUP_KEY", "contexts
 PRODUCT = "code"
 NOTE_ISSUER = "contextshrink-code"
 DEVICE_LIMIT = 2
-TRIAL_DAYS = 7
+FREE_WEEK_DAYS = 7
+PRICE_USD = 5
 # Days after a paid period ends (or a failed renewal) that the plan stays on.
 GRACE = timedelta(days=3)
 NOTE_MAX_AGE_S = 72 * 3600
@@ -198,12 +199,16 @@ def _sign_note(payload: dict, signer: Ed25519PrivateKey) -> str:
 # ----------------------------------------------------------- entitlement
 
 
-def _trial_until(plan: dict, now: datetime) -> datetime | None:
-    end = plan.get("trial_ends_at")
-    return end if end is not None and now < end else None
+def _month_start(now: datetime) -> datetime:
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _next_month_start(now: datetime) -> datetime:
+    return (_month_start(now) + timedelta(days=32)).replace(day=1)
 
 
 def _paid_until(plan: dict, now: datetime) -> datetime | None:
+    """When a live paid subscription's entitlement ends, or None without one."""
     status = plan.get("status")
     end = plan.get("current_period_end")
     if status in billing.ENTITLED_STATUSES:
@@ -213,37 +218,43 @@ def _paid_until(plan: dict, now: datetime) -> datetime | None:
     return None
 
 
-def _entitlement(plan: dict, now: datetime) -> tuple[str, datetime] | None:
-    """(plan name, entitled until) while the account is entitled, else None."""
-    paid = _paid_until(plan, now)
-    trial = _trial_until(plan, now)
-    if paid is None and trial is None:
+def _paid_state(plan: dict, now: datetime) -> str | None:
+    """Plan state ("active" or "past_due") while a paid subscription is live, else None."""
+    if _paid_until(plan, now) is None:
         return None
-    if paid is not None:
-        return "active", max(filter(None, (paid, trial)))
-    return "trial", trial
+    return "active" if plan.get("status") in billing.ENTITLED_STATUSES else "past_due"
 
 
-def _plan_state(plan: dict, now: datetime) -> str:
-    status = plan.get("status")
-    if status in billing.ENTITLED_STATUSES:
-        return "active"
-    if _trial_until(plan, now) is not None:
-        return "trial"
-    if status == "past_due":
-        return "past_due"
-    if status in billing.ENDED_STATUSES:
-        return "canceled"
-    return "none"
+def _week_view(weeks: list[dict], now: datetime, *, device_blocked: bool = False) -> dict:
+    """Where the account stands in its free weeks at `now`.
+
+    renews_at is when the next free week can start: the next month when this month's
+    week is used (or this computer is blocked for the month), otherwise now; and never
+    before a week still running into the next month has ended.
+    """
+    month = _month_start(now).date()
+    covering = next((w for w in weeks if w["started_at"] <= now < w["ends_at"]), None)
+    this_month = next((w for w in weeks if w["month"] == month), None)
+    base = _next_month_start(now) if (this_month is not None or device_blocked) else now
+    renews_at = max([base, *(w["ends_at"] for w in weeks)])
+    return {"covering": covering, "this_month": this_month, "renews_at": renews_at}
 
 
 async def _plan(conn, user_id) -> dict:
     row = await conn.fetchrow(
-        "SELECT trial_started_at, trial_ends_at, stripe_subscription_id, status, "
-        "current_period_end, cancel_at_period_end FROM core.code_plans WHERE user_id=$1",
+        "SELECT stripe_subscription_id, status, current_period_end, cancel_at_period_end, "
+        "updated_at FROM core.code_plans WHERE user_id=$1",
         user_id,
     )
     return dict(row) if row else {}
+
+
+async def _free_weeks(conn, user_id) -> list[dict]:
+    rows = await conn.fetch(
+        "SELECT device_hash, month, started_at, ends_at FROM core.code_free_weeks WHERE user_id=$1",
+        user_id,
+    )
+    return [dict(r) for r in rows]
 
 
 async def _active_devices(conn, user_id) -> list[dict]:
@@ -293,29 +304,92 @@ async def _pending_request(conn, code_hash: str):
     return req
 
 
-# ---------------------------------------------------------------- trial
+# ------------------------------------------------------------- free week
 
 
-async def _start_trial(conn, user_id, device_hash: str, now: datetime) -> None:
-    # One trial per device_hash across all accounts: the insert is the claim.
-    claimed = await conn.fetchval(
-        "INSERT INTO core.code_trial_devices (device_hash, user_id, started_at) VALUES ($1,$2,$3) "
-        "ON CONFLICT (device_hash) DO NOTHING RETURNING device_hash",
+def _refused(reason: str, renews_at: datetime) -> HTTPException:
+    return HTTPException(
+        402,
+        {
+            "code": "plan_required",
+            "free_week_renews_at": _iso(renews_at),
+            "free_week_reason": reason,
+        },
+    )
+
+
+async def _device_week_owner(conn, device_hash: str, now: datetime):
+    """The account that used this computer's free week this month, or None."""
+    return await conn.fetchval(
+        "SELECT user_id FROM core.code_free_weeks WHERE device_hash=$1 AND month=$2",
         device_hash,
-        user_id,
-        now,
+        _month_start(now).date(),
     )
-    if claimed is None:
-        return  # This computer already started a trial on another account.
-    await conn.execute(
-        "INSERT INTO core.code_plans (user_id, trial_started_at, trial_ends_at, updated_at) "
-        "VALUES ($1,$2,$3,$2) ON CONFLICT (user_id) DO UPDATE SET "
-        "trial_started_at=EXCLUDED.trial_started_at, trial_ends_at=EXCLUDED.trial_ends_at, "
-        "updated_at=EXCLUDED.updated_at",
-        user_id,
-        now,
-        now + timedelta(days=TRIAL_DAYS),
-    )
+
+
+async def _free_week(conn, user_id, device_hash: str) -> tuple[datetime, datetime]:
+    """(started_at, ends_at) of the free week this device may use now.
+
+    Starts the week on first use. Raises 402 (with the renewal time and reason) when
+    the account or this computer has no week left this month. The insert is guarded
+    by the UNIQUE (user_id, month) and UNIQUE (device_hash, month) constraints: when
+    a concurrent request wins the race, the loop re-reads and decides on its row.
+    """
+    for _ in range(3):
+        now = _now()
+        owner = await _device_week_owner(conn, device_hash, now)
+        device_used = owner is not None and owner != user_id
+        view = _week_view(await _free_weeks(conn, user_id), now, device_blocked=device_used)
+        covering = view["covering"]
+        if covering is not None:
+            # This account's week is running. A computer that used another account's
+            # week this month gets no free week, even inside this one.
+            if device_used:
+                raise _refused("device_used", view["renews_at"])
+            return covering["started_at"], covering["ends_at"]
+        if view["this_month"] is not None:
+            raise _refused("used", view["renews_at"])
+        if device_used:
+            raise _refused("device_used", view["renews_at"])
+        started, ends = now, now + timedelta(days=FREE_WEEK_DAYS)
+        inserted = await conn.fetchval(
+            "INSERT INTO core.code_free_weeks (user_id, device_hash, month, started_at, ends_at) "
+            "VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING started_at",
+            user_id,
+            device_hash,
+            _month_start(now).date(),
+            started,
+            ends,
+        )
+        if inserted is not None:
+            return started, ends
+    raise HTTPException(503, "Could not start this month's free week. Try again.")
+
+
+async def _plan_object(conn, user_id, now: datetime) -> dict:
+    """The account's plan as the website and the CLI show it."""
+    plan = await _plan(conn, user_id)
+    view = _week_view(await _free_weeks(conn, user_id), now)
+    paid = _paid_state(plan, now)
+    if view["covering"] is not None:
+        week_status, shown = "active", view["covering"]
+    elif view["this_month"] is not None:
+        week_status, shown = "used", view["this_month"]
+    else:
+        week_status, shown = "available", None
+    return {
+        "state": paid or "free",
+        "free_week": {
+            "status": week_status,
+            "started_at": _iso(shown["started_at"]) if shown else None,
+            "ends_at": _iso(shown["ends_at"]) if shown else None,
+            "renews_at": _iso(view["renews_at"]),
+        },
+        "current_period_end": _iso(plan.get("current_period_end")) if paid else None,
+        "cancel_at_period_end": bool(plan.get("cancel_at_period_end")) if paid else False,
+        "entitled": paid is not None or view["covering"] is not None,
+        "price_usd": PRICE_USD,
+    }
 
 
 # -------------------------------------------------------------- Stripe
@@ -579,9 +653,6 @@ def install(app, current_user):
                     req["device_hash"],
                     req["tool"],
                 )
-            plan = await _plan(conn, user["user_id"])
-            if plan.get("trial_started_at") is None and plan.get("stripe_subscription_id") is None:
-                await _start_trial(conn, user["user_id"], req["device_hash"], now)
             await conn.execute(
                 "UPDATE core.code_cli_requests SET approved_user_id=$2, device_id=$3 WHERE id=$1",
                 req["id"],
@@ -639,18 +710,11 @@ def install(app, current_user):
 
     @app.get("/code/account")
     async def account(user=Depends(current_user)):
-        now = _now()
         conn = db._conn()
-        plan = await _plan(conn, user["user_id"])
+        plan = await _plan_object(conn, user["user_id"], _now())
         devices = await _active_devices(conn, user["user_id"])
         return {
-            "plan": {
-                "state": _plan_state(plan, now),
-                "trial_ends_at": _iso(plan.get("trial_ends_at")),
-                "current_period_end": _iso(plan.get("current_period_end")),
-                "cancel_at_period_end": bool(plan.get("cancel_at_period_end")),
-                "entitled": _entitlement(plan, now) is not None,
-            },
+            "plan": plan,
             "devices": [
                 {
                     **_device_out(d),
@@ -693,13 +757,13 @@ def install(app, current_user):
             "UPDATE core.code_devices SET last_seen_at=now() WHERE id=$1", device["id"]
         )
         plan = await _plan(conn, device["user_id"])
-        granted = _entitlement(plan, now)
-        if granted is None:
-            raise HTTPException(
-                402,
-                {"code": "plan_required", "trial_ended_at": _iso(plan.get("trial_ends_at"))},
-            )
-        name, until = granted
+        paid_until = _paid_until(plan, now)
+        if paid_until is not None:
+            name, until, free_ends = "active", paid_until, None
+        else:
+            # Free week. The note says "trial" for engine compatibility.
+            _, free_ends = await _free_week(conn, device["user_id"], device["device_hash"])
+            name, until = "trial", free_ends
         iat = int(now.timestamp())
         until_s = int(until.timestamp())
         payload = {
@@ -713,7 +777,12 @@ def install(app, current_user):
             "exp": min(iat + NOTE_MAX_AGE_S, until_s),
             "until": until_s,
         }
-        return {"token": _sign_note(payload, signer), "plan": name, "until": until_s}
+        return {
+            "token": _sign_note(payload, signer),
+            "plan": name,
+            "until": until_s,
+            "free_week_ends_at": int(free_ends.timestamp()) if free_ends else None,
+        }
 
     @app.post("/code/usage")
     async def usage(body: UsageIn, device=Depends(device_auth)):
@@ -790,3 +859,54 @@ def install(app, current_user):
             {"customer": row["stripe_customer_id"], "return_url": f"{SITE_URL}/account"},
         )
         return {"url": session.url}
+
+    async def _set_cancel_at_period_end(user, cancel: bool) -> dict:
+        conn = db._conn()
+        now = _now()
+        plan = await _plan(conn, user["user_id"])
+        sub_id = plan.get("stripe_subscription_id")
+        if sub_id is None or _paid_state(plan, now) is None:
+            raise HTTPException(409, "You do not have an active ContextShrink Code subscription.")
+        action = "cancel" if cancel else "resume"
+        # The key is tied to the plan's last sync, so a retry is safe but a later
+        # cancel after a resume is a new request.
+        await billing._call(
+            billing._stripe().v1.subscriptions.update,
+            sub_id,
+            {"cancel_at_period_end": cancel},
+            {"idempotency_key": f"code-{action}-{sub_id}-{plan['updated_at'].isoformat()}"},
+        )
+        await sync_code_subscription(sub_id)
+        return await _plan_object(conn, user["user_id"], _now())
+
+    @app.post("/code/subscription/cancel")
+    async def cancel_subscription(user=Depends(current_user)):
+        return await _set_cancel_at_period_end(user, True)
+
+    @app.post("/code/subscription/resume")
+    async def resume_subscription(user=Depends(current_user)):
+        return await _set_cancel_at_period_end(user, False)
+
+    @app.get("/code/invoices")
+    async def code_invoices(user=Depends(current_user)):
+        plan = await _plan(db._conn(), user["user_id"])
+        sub_id = plan.get("stripe_subscription_id")
+        if not sub_id:
+            return []
+        result = await billing._call(
+            billing._stripe().v1.invoices.list, {"subscription": sub_id, "limit": 24}
+        )
+        return [
+            {
+                "id": inv.id,
+                "number": inv.number,
+                "created": billing._ts(inv.created).isoformat(),
+                "total": inv.total / 100,
+                "currency": inv.currency,
+                "status": inv.status,
+                "url": inv.hosted_invoice_url,
+            }
+            for inv in result.data
+            # Only this subscription's invoices; drafts have no link yet, as in billing.
+            if inv.status != "draft" and billing._invoice_subscription_id(inv) == sub_id
+        ]
