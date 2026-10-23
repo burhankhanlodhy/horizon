@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -42,7 +44,7 @@ def _log_first_line(home) -> str:
 
 
 def test_windows_starts_the_engine_through_wmi_and_not_popen(home, as_windows, monkeypatch) -> None:
-    monkeypatch.setenv("CS_TEST_MARK", "from-the-starter")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:8080")
     created = []
 
     def wmi(command, cwd):
@@ -58,7 +60,7 @@ def test_windows_starts_the_engine_through_wmi_and_not_popen(home, as_windows, m
     assert f'>> "{home / runtime.LOG_FILE}" 2>&1' in command
     assert _log_first_line(home) == "launcher: WMI Win32_Process.Create"
     saved = json.loads((home / runtime.LAUNCH_ENV_FILE).read_text(encoding="utf-8"))
-    assert saved["env"]["CS_TEST_MARK"] == "from-the-starter"
+    assert saved["env"]["HTTPS_PROXY"] == "http://proxy.test:8080"
 
 
 def test_a_wmi_failure_falls_back_to_the_detached_start_and_says_so(
@@ -199,12 +201,12 @@ def test_the_wmi_call_times_out_as_a_failure(monkeypatch) -> None:
 
 
 def test_the_engine_applies_the_starters_environment_once(home, monkeypatch) -> None:
-    monkeypatch.setenv("CS_TEST_MARK", "saved")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:8080")
     runtime._write_launch_env(home)
     target: dict[str, str] = {"KEEP": "yes"}
 
     assert runtime.take_launch_environment(home, target) > 0
-    assert target["CS_TEST_MARK"] == "saved"
+    assert target["HTTPS_PROXY"] == "http://proxy.test:8080"
     assert target["KEEP"] == "yes"
     assert not (home / runtime.LAUNCH_ENV_FILE).exists()
     assert runtime.take_launch_environment(home, {}) == 0
@@ -307,3 +309,134 @@ def test_exit_now_flushes_output_and_ends_with_the_given_code() -> None:
     )
     assert result.returncode == 7
     assert result.stdout == "flushed"
+
+
+# ── What is saved for the engine ──────────────────────────────────────
+
+SECRET = "sk-test-do-not-save-123"
+
+
+def test_only_the_allowed_variables_are_saved_for_the_engine(home, monkeypatch) -> None:
+    for name, value in {
+        "ANTHROPIC_API_KEY": SECRET,
+        "OPENAI_API_KEY": SECRET,
+        "CONTEXTSHRINK_API_KEY": SECRET,
+        "CONTEXTSHRINK_SERVICE_TOKEN": SECRET,
+        "HORIZON_PROXY_TOKEN": SECRET,
+        "HORIZON_CLIENT_EXE": "C:/stale/horizon.exe",
+        "HORIZON_LAUNCHER_PID": "999",
+        "HORIZON_SAVINGS": "max",
+        "HTTPS_PROXY": "http://proxy.test:8080",
+        "NO_PROXY": "localhost",
+        "SSL_CERT_FILE": "C:/certs/corp.pem",
+        "CONTEXTSHRINK_API_URL": "https://api.test",
+        "PATH": "C:/Windows",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    runtime._write_launch_env(home)
+
+    raw = (home / runtime.LAUNCH_ENV_FILE).read_text(encoding="utf-8")
+    assert SECRET not in raw, "a secret reached the saved environment"
+    saved = json.loads(raw)["env"]
+    assert saved["HORIZON_SAVINGS"] == "max"
+    assert saved["HTTPS_PROXY"] == "http://proxy.test:8080"
+    assert saved["NO_PROXY"] == "localhost"
+    assert saved["SSL_CERT_FILE"] == "C:/certs/corp.pem"
+    assert saved["CONTEXTSHRINK_API_URL"] == "https://api.test"
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "CONTEXTSHRINK_API_KEY",
+        "CONTEXTSHRINK_SERVICE_TOKEN",
+        "HORIZON_PROXY_TOKEN",
+        "HORIZON_CLIENT_EXE",
+        "HORIZON_LAUNCHER_PID",
+        "PATH",
+    ):
+        assert name not in saved, name
+
+
+@pytest.mark.parametrize(
+    "name, allowed",
+    [
+        ("CONTEXTSHRINK_HOME", True),
+        ("https_proxy", True),
+        ("no_proxy", True),
+        ("Http_Proxy", True),
+        ("HORIZON_SAVINGS", True),
+        ("HORIZON_MIN_TOKENS", False),  # the word TOKEN is excluded on purpose
+        ("HORIZON_KEYS_PATH", False),
+        ("HORIZON_LICENSE_KEY", False),
+        ("HORIZON_CLIENT_EXE", False),
+        ("ANTHROPIC_BASE_URL", False),
+        ("ANTHROPIC_API_KEY", False),
+        ("CONTEXTSHRINK_API_KEY", False),
+        ("CONTEXTSHRINK_SERVICE_TOKEN", False),
+    ],
+)
+def test_the_allowlist_names(name: str, allowed: bool) -> None:
+    assert runtime.launch_environment_allowed(name) is allowed
+
+
+def test_the_engine_applies_only_allowed_names_from_the_file(home) -> None:
+    (home / runtime.LAUNCH_ENV_FILE).write_text(
+        json.dumps(
+            {"version": 1, "env": {"HTTPS_PROXY": "http://p:1", "ANTHROPIC_API_KEY": SECRET}}
+        ),
+        encoding="utf-8",
+    )
+    target: dict[str, str] = {}
+    assert runtime.take_launch_environment(home, target) == 1
+    assert target == {"HTTPS_PROXY": "http://p:1"}
+
+
+def test_the_engine_deletes_the_saved_environment_when_it_starts(home) -> None:
+    runtime._write_launch_env(home)
+    assert (home / runtime.LAUNCH_ENV_FILE).exists()
+    runtime.take_launch_environment(home, {})
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()
+
+
+def test_a_stale_saved_environment_is_not_applied_and_is_deleted(home, monkeypatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:8080")
+    runtime._write_launch_env(home)
+    hour_ago = time.time() - 3600
+    os.utime(home / runtime.LAUNCH_ENV_FILE, (hour_ago, hour_ago))
+
+    target: dict[str, str] = {}
+    assert runtime.take_launch_environment(home, target) == 0
+    assert target == {}
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()
+
+
+def test_the_starter_deletes_the_saved_environment_when_the_engine_never_answers(
+    home, monkeypatch
+) -> None:
+    def start_that_saves_and_fails(home_dir, port, **kwargs):
+        runtime._write_launch_env(home_dir)
+        return "wmi"
+
+    monkeypatch.setattr(runtime, "spawn_detached", start_that_saves_and_fails)
+    monkeypatch.setattr(runtime, "health", lambda port=0, **k: None)
+
+    assert runtime.ensure(home, 18999, wait_seconds=0.3) is False
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()
+
+
+def test_the_starter_deletes_the_saved_environment_when_the_engine_answers(
+    home, monkeypatch
+) -> None:
+    answers = iter([None])
+
+    def start_that_saves(home_dir, port, **kwargs):
+        runtime._write_launch_env(home_dir)
+        return "wmi"
+
+    monkeypatch.setattr(runtime, "spawn_detached", start_that_saves)
+    monkeypatch.setattr(
+        runtime, "health", lambda port=0, **k: next(answers, {"engine": "test", "ok": True})
+    )
+
+    assert runtime.ensure(home, 18999, wait_seconds=5) is True
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()

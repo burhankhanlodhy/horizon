@@ -33,6 +33,50 @@ PID_FILE = "engine.pid"
 STOP_FILE = "engine.stop"
 LOG_FILE = "engine.log"
 LAUNCH_ENV_FILE = "launch-env.json"
+# A saved environment older than this is never applied: the engine reads it at once.
+LAUNCH_ENV_MAX_AGE_SECONDS = 300
+# The only environment that is saved for the engine. The starter's full environment can
+# hold API keys and tokens, and the file stays on disk until the engine reads it, so
+# nothing outside this list is written. Matched case-insensitively for the proxy names.
+#   CONTEXTSHRINK_HOME, CONTEXTSHRINK_API_URL, CONTEXTSHRINK_MACHINE_ID: the engine's
+#     home, the API address and the device-id override (horizon/code_engine, hosted.py).
+#   HTTP_PROXY, HTTPS_PROXY, NO_PROXY: the engine's upstream and API connections.
+#   SSL_CERT_FILE, SSL_CERT_DIR, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE: CA bundles for them.
+#   USERPROFILE, HOME, APPDATA, LOCALAPPDATA, TEMP, TMP: profile and temp locations
+#     (paths, not secrets). The proxy writes its logs under the profile.
+#   HORIZON_* (except names with a secret-like part, and HORIZON_CLIENT_EXE and
+#     HORIZON_LAUNCHER_PID, which describe the starter): the proxy's settings. There are
+#     about 400 of them, so they are matched by prefix rather than listed.
+LAUNCH_ENV_NAMES = frozenset(
+    {
+        "CONTEXTSHRINK_HOME",
+        "CONTEXTSHRINK_API_URL",
+        "CONTEXTSHRINK_MACHINE_ID",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "USERPROFILE",
+        "HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+    }
+)
+_LAUNCH_ENV_PROXY_NAMES = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"})
+_LAUNCH_ENV_HORIZON_PREFIX = "HORIZON_"
+_LAUNCH_ENV_HORIZON_EXCLUDED = (
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIAL",
+    "AUTH",
+    "LICENSE",
+    "CLIENT_EXE",
+    "LAUNCHER_PID",
+)
 HEALTH_PATH = "/__cs/health"
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -182,16 +226,23 @@ def health(port: int = DEFAULT_PORT, *, timeout: float = 0.3) -> dict[str, Any] 
 
 
 def ensure(home: Path, port: int = DEFAULT_PORT, *, wait_seconds: float = 5.0) -> bool:
-    """Start the engine in the background unless it already answers. Returns True when it answers."""
+    """Start the engine in the background unless it already answers. Returns True when it answers.
+
+    The saved launch environment is deleted when the wait ends, whether or not the engine
+    answered: an engine that has not read it by then is not going to.
+    """
     if health(port) is not None:
         return True
-    spawn_detached(home, port)
-    deadline = time.monotonic() + wait_seconds
-    while time.monotonic() < deadline:
-        if health(port) is not None:
-            return True
-        time.sleep(0.1)
-    return False
+    try:
+        spawn_detached(home, port)
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            if health(port) is not None:
+                return True
+            time.sleep(0.1)
+        return False
+    finally:
+        remove(home / LAUNCH_ENV_FILE)
 
 
 def spawn_detached(
@@ -244,25 +295,52 @@ def wmi_command_line(argv: list[str], home: Path) -> str:
     return f'"{comspec}" /d /s /c "{inner}"'
 
 
+def launch_environment_allowed(name: str) -> bool:
+    """True when ``name`` is one of the variables saved for the engine (see ``LAUNCH_ENV_NAMES``)."""
+    upper = name.upper()
+    if name in LAUNCH_ENV_NAMES or upper in _LAUNCH_ENV_PROXY_NAMES:
+        return True
+    if not upper.startswith(_LAUNCH_ENV_HORIZON_PREFIX):
+        return False
+    return not any(part in upper for part in _LAUNCH_ENV_HORIZON_EXCLUDED)
+
+
 def _write_launch_env(home: Path) -> None:
-    """Save the starter's environment for the engine: WMI does not pass it on. The engine applies it and deletes the file."""
-    values = {key: value for key, value in os.environ.items() if isinstance(value, str)}
+    """Save the engine's environment for the engine: WMI does not pass it on.
+
+    Only ``LAUNCH_ENV_NAMES`` and the allowed ``HORIZON_*`` settings are written. The
+    engine applies them and deletes the file; the starter deletes it if the engine has
+    not done so when its wait ends.
+    """
+    values = {
+        key: value
+        for key, value in os.environ.items()
+        if isinstance(value, str) and launch_environment_allowed(key)
+    }
     write_private_json(home / LAUNCH_ENV_FILE, {"version": 1, "env": values})
 
 
 def take_launch_environment(home: Path, environ: MutableMapping[str, str]) -> int:
     """Apply the environment the starter saved (see ``_write_launch_env``), then delete it.
 
-    Returns how many variables were applied. A missing or malformed file applies nothing.
+    The file is deleted whatever it holds. A file older than ``LAUNCH_ENV_MAX_AGE_SECONDS``
+    is not applied. Returns how many variables were applied. A missing or malformed file
+    applies nothing.
     """
     path = home / LAUNCH_ENV_FILE
+    try:
+        written_at = path.stat().st_mtime
+    except OSError:
+        return 0
     data = read_json(path)
     remove(path)
+    if time.time() - written_at > LAUNCH_ENV_MAX_AGE_SECONDS:
+        return 0
     if not data or not isinstance(data.get("env"), dict):
         return 0
     applied = 0
     for key, value in data["env"].items():
-        if isinstance(key, str) and key and not key.startswith("=") and isinstance(value, str):
+        if isinstance(key, str) and launch_environment_allowed(key) and isinstance(value, str):
             environ[key] = value
             applied += 1
     return applied
