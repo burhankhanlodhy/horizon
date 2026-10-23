@@ -2,15 +2,19 @@
 // streamed from the private R2 bucket bound as RELEASES (dashboard/wrangler.toml).
 // The bucket is never public: this function is the only way in. It serves single
 // flat file names, plus the three Code-tab tools under claude-code-tools/<version>/
-// (npx contextshrink-claude) and nothing else. Uploads come from
-// desktop/publish-installer.ps1.
+// (npx contextshrink-claude), the engine zip and its manifest under
+// engine/<version>/ (npx contextshrink-claude and contextshrink-codex), and nothing
+// else. Uploads come from desktop/publish-installer.ps1.
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 const TOOLS =
   /^claude-code-tools\/\d+\.\d+\.\d+\/(claude-code-launcher\.exe|contextshrink-codetab\.exe|manifest\.json)$/;
+const ENGINE =
+  /^engine\/\d+\.\d+\.\d+\/(contextshrink-engine-windows-x86_64\.zip|engine-manifest\.json)$/;
 
 const TYPES = {
   json: "application/json",
+  zip: "application/zip",
   exe: "application/vnd.microsoft.portable-executable",
   dmg: "application/x-apple-diskimage",
   deb: "application/vnd.debian.binary-package",
@@ -35,6 +39,7 @@ export async function onRequest({ request, env, params }) {
   let key = "";
   if (parts.length === 1 && NAME.test(joined)) key = joined;
   else if (TOOLS.test(joined)) key = joined;
+  else if (ENGINE.test(joined)) key = joined;
   if (!key) return text(404, "Not Found");
 
   let object;

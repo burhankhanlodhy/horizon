@@ -48,6 +48,20 @@
   The installer for the current version is still required in the same run, unless
   -ToolsOnly is given: then only the tools are uploaded and latest.json, updater.json
   and the installers are left exactly as they are.
+
+  -Engine <dir> publishes the ContextShrink Code engine (the signed embedded client
+  that npx contextshrink-claude and contextshrink-codex install): the zip
+  contextshrink-engine-windows-x86_64.zip (horizon.exe at its root) and
+  engine-manifest.json from <dir>, for example the CI artifact contextshrink-engine-windows:
+    gh run download <run-id> -n contextshrink-engine-windows -D desktop\dist-engine
+    .\desktop\publish-installer.ps1 -Engine desktop\dist-engine -EngineOnly
+  The zip's SHA-256 and size must match engine-manifest.json, the manifest's url must be
+  the engine URL for its version, and horizon.exe inside the zip must have a Valid
+  Authenticode signature, or nothing is uploaded. They go to <Bucket>/engine/<version>/
+  (the version is the one in engine-manifest.json) and are served at
+  https://app.contextshrink.com/releases/engine/<version>/<file>. -Target r2 only.
+  -EngineOnly uploads only the engine. Without it, -Engine is published with the
+  installers, after the Code-tab tools and before latest.json.
 #>
 param(
     [ValidateSet("r2", "pi4")]
@@ -59,9 +73,17 @@ param(
     # Folder with claude-code-launcher.exe, contextshrink-codetab.exe and manifest.json.
     [string]$ClaudeCodeTools,
     # Upload only the -ClaudeCodeTools files; leave the installers and manifests alone.
-    [switch]$ToolsOnly
+    [switch]$ToolsOnly,
+    # Folder with contextshrink-engine-windows-x86_64.zip and engine-manifest.json.
+    [string]$Engine,
+    # Upload only the -Engine files; leave the installers and manifests alone.
+    [switch]$EngineOnly
 )
 $ErrorActionPreference = "Stop"
+
+if ($EngineOnly -and -not $Engine) { throw "-EngineOnly needs -Engine <dir>." }
+if ($EngineOnly -and $ToolsOnly) { throw "-EngineOnly and -ToolsOnly cannot be combined." }
+if ($ToolsOnly -and $Engine) { throw "-ToolsOnly and -Engine cannot be combined: use -EngineOnly to upload the engine alone." }
 
 # Code-tab tools: checked before anything is uploaded, so a bad signature or a
 # mismatch refuses the whole run.
@@ -96,6 +118,66 @@ if ($ClaudeCodeTools) {
     "Code-tab tools $toolsVersion from ${toolsDir}: $(($toolsFiles | ForEach-Object Name) -join ', ')"
 }
 
+# Engine: the same rule as the tools. Everything is checked before anything is
+# uploaded, so a mismatch or an unsigned horizon.exe refuses the whole run.
+$engineFiles = @()
+$engineVersion = ""
+if ($Engine) {
+    if ($Target -ne "r2") { throw "-Engine publishes to R2 only: use -Target r2." }
+    $engineDir = (Resolve-Path -LiteralPath $Engine -ErrorAction Stop).Path
+    $engineManifestFile = Join-Path $engineDir "engine-manifest.json"
+    if (-not (Test-Path -LiteralPath $engineManifestFile)) { throw "No engine-manifest.json in $engineDir." }
+    $engineManifest = Get-Content -LiteralPath $engineManifestFile -Raw | ConvertFrom-Json
+    $engineVersion = [string]$engineManifest.version
+    if ($engineVersion -notmatch '^\d+\.\d+\.\d+$') { throw "engine-manifest.json has no usable version: '$engineVersion'." }
+    $engineName = "contextshrink-engine-windows-x86_64.zip"
+    $engineZip = Join-Path $engineDir $engineName
+    if (-not (Test-Path -LiteralPath $engineZip)) { throw "$engineName is missing from $engineDir." }
+    $expectedUrl = "https://app.contextshrink.com/releases/engine/$engineVersion/$engineName"
+    if ([string]$engineManifest.url -ne $expectedUrl) { throw "engine-manifest.json url is not $expectedUrl; nothing was uploaded." }
+    $engineItem = Get-Item -LiteralPath $engineZip
+    $engineSha = (Get-FileHash -LiteralPath $engineZip -Algorithm SHA256).Hash.ToLower()
+    if ($engineSha -ne ([string]$engineManifest.sha256).ToLower() -or $engineItem.Length -ne [long]$engineManifest.size) {
+        throw "$engineName does not match engine-manifest.json (sha256 or size); nothing was uploaded."
+    }
+    # horizon.exe must sit at the zip root and be validly signed as shipped.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($engineZip)
+    try {
+        $entry = $archive.GetEntry("horizon.exe")
+        if (-not $entry) { throw "$engineName has no horizon.exe at its root; nothing was uploaded." }
+        $probe = Join-Path ([IO.Path]::GetTempPath()) ("cs-engine-check-" + [guid]::NewGuid().ToString("N") + ".exe")
+        try {
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $probe, $true)
+            $signature = Get-AuthenticodeSignature -LiteralPath $probe
+        }
+        finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+    if ($signature.Status -ne "Valid") {
+        throw "horizon.exe inside $engineName has no valid Authenticode signature ($($signature.Status)); nothing was uploaded."
+    }
+    $engineFiles += $engineItem
+    # The manifest goes last, so it never points at a zip that is not there yet.
+    $engineFiles += Get-Item -LiteralPath $engineManifestFile
+    "Engine $engineVersion from ${engineDir}: $(($engineFiles | ForEach-Object Name) -join ', ')"
+}
+
+# Uploads $engineFiles to <Bucket>/engine/<version>/ (zip first, manifest last).
+function Send-EngineToR2 {
+    foreach ($f in $engineFiles) {
+        $key = "engine/$engineVersion/$($f.Name)"
+        if ($f.Extension -eq ".zip") { $type = "application/zip" } else { $type = "application/json" }
+        "Uploading $key"
+        Invoke-Wrangler r2 object put "$Bucket/$key" --file $f.FullName --content-type $type --remote
+    }
+    "Published engine ${engineVersion}: https://app.contextshrink.com/releases/engine/$engineVersion/engine-manifest.json"
+}
+
 if ($ToolsOnly) {
     if (-not $ClaudeCodeTools) { throw "-ToolsOnly needs -ClaudeCodeTools <dir>." }
     . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
@@ -107,6 +189,13 @@ if ($ToolsOnly) {
         Invoke-Wrangler r2 object put "$Bucket/$key" --file $f.FullName --content-type $type --remote
     }
     "Published Code-tab tools ${toolsVersion}: https://app.contextshrink.com/releases/claude-code-tools/$toolsVersion/manifest.json"
+    return
+}
+
+if ($EngineOnly) {
+    . (Join-Path $PSScriptRoot "..\deploy\cloudflare-pages\cloudflare.ps1")
+    Use-CloudflareToken
+    Send-EngineToR2
     return
 }
 
@@ -220,6 +309,7 @@ if ($Target -eq "r2") {
     if ($toolsFiles.Count) {
         "Published Code-tab tools ${toolsVersion}: https://app.contextshrink.com/releases/claude-code-tools/$toolsVersion/manifest.json"
     }
+    if ($engineFiles.Count) { Send-EngineToR2 }
     foreach ($f in $files) {
         $type = $types[$f.Extension.ToLower()]
         if (-not $type) { $type = "application/octet-stream" }
