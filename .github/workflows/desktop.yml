@@ -245,3 +245,56 @@ jobs:
           path: desktop/dist-claude-code-tools/*
           if-no-files-found: error
           retention-days: 7
+      # The engine for ContextShrink Code (npx contextshrink-claude / contextshrink-codex):
+      # the signed embedded client folder, zipped with horizon.exe at the zip root.
+      # publish-installer.ps1 -Engine uploads both files to R2 under engine/<version>/.
+      - name: Package the engine for publish-installer.ps1 (-Engine)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $name = "contextshrink-engine-windows-x86_64.zip"
+          $dist = (Resolve-Path "desktop\client\dist\horizon").Path
+          if (-not (Test-Path (Join-Path $dist "horizon.exe"))) { throw "No horizon.exe in $dist" }
+          # The engine version is the desktop version (tauri.conf.json, as the installer uses).
+          $version = (Get-Content "desktop\app\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "No usable version in desktop\app\src-tauri\tauri.conf.json" }
+          $out = "desktop\dist-engine"
+          Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $zip = Join-Path (Resolve-Path $out).Path $name
+          # Run from inside the folder so the entries are relative: horizon.exe, python\, app\.
+          Push-Location $dist
+          try {
+              & 7z a -tzip $zip "*" | Out-Null
+          } finally {
+              Pop-Location
+          }
+          if ($LASTEXITCODE -ne 0) { throw "7z could not create $name" }
+          # Verify inside the zip: horizon.exe at the root, with the signature it ships with.
+          $check = Join-Path $env:RUNNER_TEMP "engine-check"
+          Remove-Item -Recurse -Force $check -ErrorAction SilentlyContinue
+          & 7z x $zip "-o$check" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Could not unpack $name to check it" }
+          $horizon = Join-Path $check "horizon.exe"
+          if (-not (Test-Path -LiteralPath $horizon)) { throw "horizon.exe is not at the root of $name" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $horizon
+          if ($env:CS_SIGN_ENDPOINT) {
+              if ($sig.Status -ne "Valid") { throw "horizon.exe inside $name is not validly signed: $($sig.Status)" }
+          } else {
+              Write-Output "::warning::horizon.exe in $name is unsigned (Artifact Signing is not configured); publish-installer.ps1 will refuse it"
+          }
+          $item = Get-Item -LiteralPath $zip
+          $manifest = [ordered]@{
+              version = $version
+              url     = "https://app.contextshrink.com/releases/engine/$version/$name"
+              sha256  = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+              size    = $item.Length
+          }
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path $out).Path "engine-manifest.json"), ($manifest | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+          Get-ChildItem $out | ForEach-Object { "Staged $($_.Name) ($($_.Length) bytes)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextshrink-engine-windows
+          path: desktop/dist-engine/*
+          if-no-files-found: error
+          retention-days: 7

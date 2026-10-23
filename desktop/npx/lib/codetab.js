@@ -12,8 +12,9 @@
 // pinned lib/codetab-manifest.json (size and SHA-256), verified with Authenticode,
 // and only then moved into place.
 //
-// codetab.json holds the account key in plain text, as settings.json does. On
-// Windows the file takes the ACL of the ContextShrink data folder under the profile.
+// codetab.json names the local engine address and holds no secret (the device key
+// stays in device.json). The launcher forwards Code tab requests to the engine.
+// On Windows the file takes the ACL of the ContextShrink data folder under the profile.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -25,6 +26,7 @@ const { Transform, pipeline } = require('node:stream');
 const { execFile } = require('node:child_process');
 const cfg = require('./config');
 const files = require('./files');
+const { readSignature, signatureProblem } = require('./code-publisher');
 const { USER_AGENT } = require('./api');
 
 class CodeTabError extends Error {}
@@ -35,24 +37,17 @@ const LAUNCHER_NAME = 'claude-code-launcher.exe';
 const HELPER_NAME = 'contextshrink-codetab.exe';
 const FILE_NAMES = [LAUNCHER_NAME, HELPER_NAME];
 const CONFIG_NAME = 'codetab.json';
-const CONFIG_VERSION = 1;
 const OWNER = 'npx';
-const LAUNCH_MODE = 'direct';
 const BIN_DIR = 'npx-bin';
 const STAMP_NAME = 'npx-repair.stamp';
 const PLACEHOLDER_VERSION = '0.0.0-unset';
 const PLACEHOLDER_HASH = '0'.repeat(64);
 const DEFAULT_MANIFEST = path.join(__dirname, 'codetab-manifest.json');
-const SIGNER_SUBJECT = /(^|,\s*)CN=Muhammad Burhan Khan Lodhi(,|$)/;
-const SIGNER_ISSUER = 'Microsoft ID Verified';
 const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const HASH_SHAPE = /^[0-9a-f]{64}$/;
-const KEEPALIVE_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
-const KEY_SHAPE = /^cs_live_[A-Za-z0-9_-]{20,128}$/;
 const LOOPBACK = new Set(['127.0.0.1']);
 const DOWNLOAD_IDLE_MS = 30000;
 const HELPER_TIMEOUT_MS = 180000;
-const CHECK_TIMEOUT_MS = 60000;
 const UNREACHABLE = 'cannot download the Code tab files. Check your internet connection. Nothing was installed.';
 
 // Test-only overrides. They are ignored unless CONTEXTSHRINK_NPX_TEST=1.
@@ -271,66 +266,14 @@ function downloadTo(url, dest, entry, name, redirectsLeft = 3) {
   });
 }
 
-// The publisher check. Status must be Valid, the signer must be the ContextShrink
-// publisher and the certificate must come from Microsoft's ID Verified authority.
-function signatureProblem(info) {
-  if (!files.isPlainObject(info) || info.Status !== 'Valid') {
-    const status = files.isPlainObject(info) && info.Status ? info.Status : 'unknown';
-    return `signature status is ${status}`;
-  }
-  if (!SIGNER_SUBJECT.test(String(info.Subject || ''))) return 'the signer is not the expected publisher';
-  if (!String(info.Issuer || '').includes(SIGNER_ISSUER)) return 'the certificate is not from the expected authority';
-  return null;
-}
-
-// The file path goes in an environment variable, never in the script text.
-const SIGNATURE_SCRIPT = [
-  "$ErrorActionPreference = 'Stop'",
-  '$sig = Get-AuthenticodeSignature -LiteralPath $env:CONTEXTSHRINK_CHECK_PATH',
-  "$subject = ''",
-  "$issuer = ''",
-  '$cert = $sig.SignerCertificate',
-  'if ($null -ne $cert) { $subject = $cert.Subject; $issuer = $cert.Issuer }',
-  '[pscustomobject]@{ Status = [string]$sig.Status; Subject = $subject; Issuer = $issuer } | ConvertTo-Json -Compress',
-].join('\n');
-
-function powerShellPath() {
-  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
-  return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
-
-function readSignature(file) {
-  const encoded = Buffer.from(SIGNATURE_SCRIPT, 'utf16le').toString('base64');
-  return new Promise((resolve, reject) => {
-    execFile(
-      powerShellPath(),
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      {
-        env: { ...process.env, CONTEXTSHRINK_CHECK_PATH: file },
-        windowsHide: true,
-        timeout: CHECK_TIMEOUT_MS,
-        maxBuffer: 1 << 20,
-      },
-      (error, stdout) => {
-        const line = String(stdout || '').trim().split(/\r?\n/).pop() || '';
-        let info = null;
-        try {
-          info = JSON.parse(line);
-        } catch {
-          info = null;
-        }
-        if (error || !files.isPlainObject(info)) {
-          reject(new CodeTabError('could not check the signature of a Code tab file. Nothing was installed.'));
-        } else {
-          resolve(info);
-        }
-      }
-    );
-  });
-}
-
 async function checkSignature(file, name) {
-  const problem = signatureProblem(await readSignature(file));
+  let info;
+  try {
+    info = await readSignature(file);
+  } catch {
+    throw new CodeTabError('could not check the signature of a Code tab file. Nothing was installed.');
+  }
+  const problem = signatureProblem(info);
   if (problem) {
     throw new CodeTabError(`${name} failed the publisher check (${problem}). Nothing was installed.`);
   }
@@ -426,38 +369,31 @@ function countOf(states, state) {
   return states.filter((s) => s === state).length;
 }
 
-// Tool search follows the terminal rule: on unless the user set it to another value.
+// The Code tab uses the same engine address as the terminal. Tool search follows the
+// terminal rule: on unless the user set it to another value.
 function gatewayFromSettings(terminal) {
   const settings = files.readSettings(terminal.settings);
   const block = files.isPlainObject(settings.payload.env) ? settings.payload.env : {};
-  const base = block[cfg.BASE_URL_KEY];
-  const prefix = `${terminal.proxyUrl}/k/`;
-  if (typeof base !== 'string' || !base.startsWith(prefix) || !KEEPALIVE_SHAPE.test(base.slice(prefix.length))) {
-    throw new CodeTabError('ANTHROPIC_BASE_URL in settings.json is not the ContextShrink address, so it was not set up.');
-  }
-  const headerPrefix = `${cfg.PROXY_TOKEN_HEADER}: `;
-  const header = block[cfg.HEADERS_KEY];
-  const key = typeof header === 'string' && header.startsWith(headerPrefix) ? header.slice(headerPrefix.length) : '';
-  if (!KEY_SHAPE.test(key)) {
-    throw new CodeTabError('the account key in settings.json is not in a format the Code tab accepts. Run connect again.');
+  if (block[cfg.BASE_URL_KEY] !== terminal.engineUrl) {
+    throw new CodeTabError('ANTHROPIC_BASE_URL in settings.json is not the ContextShrink engine address, so it was not set up.');
   }
   const toolSearchSetByUser =
     files.hasOwn(block, cfg.TOOL_SEARCH_KEY) && block[cfg.TOOL_SEARCH_KEY] !== cfg.TOOL_SEARCH_VALUE;
   return {
-    base,
-    key,
+    base: terminal.engineUrl,
     env: toolSearchSetByUser ? {} : { [cfg.TOOL_SEARCH_KEY]: cfg.TOOL_SEARCH_VALUE },
   };
 }
 
+// The forwarder format: no launch mode and no key. The launcher forwards to the engine.
+// The launcher only routes when v is 1 and enabled is true, so v must be written.
 function configFor(gateway) {
   return {
-    v: CONFIG_VERSION,
-    enabled: true,
+    v: 1,
     owner: OWNER,
-    mode: LAUNCH_MODE,
+    enabled: true,
     base_url: gateway.base,
-    headers: { [cfg.PROXY_TOKEN_HEADER]: gateway.key },
+    health_port: Number(new URL(gateway.base).port),
     env: gateway.env,
   };
 }
@@ -517,7 +453,7 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
     }
     if (skip) {
       if (existing) {
-        // A new key from login must reach the file the launcher reads.
+        // Brings an older codetab.json (before the forwarder format) up to date.
         files.writePrivateJson(paths.config, configFor(gatewayFromSettings(terminal)));
         ctx.out('Code tab left as it is (--no-code-tab).');
       } else {
@@ -671,5 +607,6 @@ module.exports = {
   setUpCodeTab,
   undoCodeTab,
   codeTabStatus,
+  configFor,
   signatureProblem,
 };

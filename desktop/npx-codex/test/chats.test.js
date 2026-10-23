@@ -144,7 +144,7 @@ test('disconnect restores migrated chats before removing the provider configurat
   const db = new DatabaseSync(path.join(dir, 'state_5.sqlite'));
   db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, archived INTEGER)');
   db.prepare('INSERT INTO threads VALUES (?, ?, ?, 0)').run(OLD, file, 'openai'); db.close();
-  const original = 'model="keep-model"\n', change = connectText(original, 'https://proxy.contextshrink.com/k/abcdefghijklmnopqrstuvwx/v1', 'cs_live_fakeabcdefghijklmnopqrstuv');
+  const original = 'model="keep-model"\n', change = connectText(original, 'http://127.0.0.1:18793/v1');
   files.writePrivateJson(path.join(dir, '.contextshrink-npx-codex.json'), { version: 2, configExisted: true, ...change, device_key_id: null });
   fs.writeFileSync(path.join(dir, 'config.toml'), change.written);
   chats.migrate({ dir }, options, closed);

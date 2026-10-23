@@ -16,6 +16,7 @@ import account_email
 import analytics
 import asyncpg
 import billing
+import code_plan
 import contact
 import db
 import security
@@ -389,6 +390,7 @@ analytics.install(app, current_user)
 billing.install(app, current_user)
 contact.install(app, current_user)
 account_email.install(app, current_user)
+code_plan.install(app, current_user)
 teams.install(app, current_user)
 team_billing.install(app, current_user, teams.context)
 team_sso.install(app, current_user)

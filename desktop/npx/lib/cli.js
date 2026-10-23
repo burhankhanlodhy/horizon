@@ -1,51 +1,45 @@
 'use strict';
 
 // Command line for `npx contextshrink-claude`: parses arguments, runs one command and maps
-// the outcome to an exit code. Output never includes the account key.
+// the outcome to an exit code. Output never includes the device key.
 
-const { Refusal, connect, disconnect, status, logout } = require('./connect');
+const { Refusal, connect, uninstall, status } = require('./connect');
 const { ApiError } = require('./api');
 const { FileError } = require('./files');
-const { Cancelled, createPrompter } = require('./prompt');
+const { CsError } = require('./code-env');
 
 const USAGE = `contextshrink-claude ${require('../package.json').version}
 
 Usage:
-  npx contextshrink-claude [connect] [--force]   Sign in and route Claude Code through ContextShrink
-  npx contextshrink-claude login [--key]         Make a new account key for this computer (--key: paste one)
-  npx contextshrink-claude disconnect            Restore the settings and the Code tab that connect changed
-  npx contextshrink-claude status                Show whether Claude Code and the Code tab are connected
-  npx contextshrink-claude logout                Disconnect and revoke this computer's account key
+  npx contextshrink-claude [connect] [--force]   Sign this computer in and route Claude Code through ContextShrink
+  npx contextshrink-claude uninstall             Restore Claude Code and the Code tab; release this computer when no tool is left
+  npx contextshrink-claude status                Show the device, plan, engine and usage saved today
 
 Options:
-  --team <id>    Connect to a Team workspace (ID from the dashboard)
-  --force        Replace another gateway or existing header (disconnect restores it)
-  --key          Read an account key from stdin instead of signing in
-  --no-code-tab  Do not set up Claude Desktop's Code tab (Windows; connect and login)
+  --force        Replace another gateway or an existing ANTHROPIC_CUSTOM_HEADERS (uninstall restores it)
+  --no-code-tab  Do not set up Claude Desktop's Code tab (Windows; connect only)
   -h, --help     Show this help
+
+uninstall also runs as disconnect or logout.
 `;
 
-const COMMANDS = new Set(['connect', 'login', 'disconnect', 'status', 'logout', 'help']);
+const COMMANDS = new Set(['connect', 'uninstall', 'disconnect', 'logout', 'status', 'help']);
+const KNOWN_FLAGS = new Set(['--force', '--no-code-tab', '-h', '--help', '--version', '-v']);
 
 function parseArgs(argv) {
   const args = argv.slice();
   let command = 'connect';
   if (args.length && !args[0].startsWith('-')) command = args.shift();
-  let teamId;
-  const teamIndex = args.indexOf('--team');
-  if (teamIndex >= 0) { teamId = args[teamIndex + 1] || ''; args.splice(teamIndex, 2); }
   const flags = new Set(args);
-  const known = new Set(['--force', '--key', '--no-code-tab', '-h', '--help', '--version', '-v']);
-  const unknown = args.filter((a) => !known.has(a));
-  if (teamId !== undefined && (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(teamId) || !['connect', 'login'].includes(command) || flags.has('--key'))) unknown.push('--team requires a Team ID and sign-in');
-  return { command, flags, unknown, teamId };
+  const unknown = args.filter((a) => !KNOWN_FLAGS.has(a));
+  return { command, flags, unknown };
 }
 
 async function run(argv, io) {
   const out = (line = '') => io.stdout.write(line + '\n');
   const err = (line = '') => io.stderr.write(line + '\n');
 
-  const { command, flags, unknown, teamId } = parseArgs(argv);
+  const { command, flags, unknown } = parseArgs(argv);
   if (flags.has('--version') || flags.has('-v')) {
     out(require('../package.json').version);
     return 0;
@@ -64,55 +58,34 @@ async function run(argv, io) {
     err(USAGE.trimEnd());
     return 2;
   }
-  if (flags.has('--force') && !['connect', 'login'].includes(command)) {
-    err('--force only applies to connect and login.');
+  if (flags.has('--force') && command !== 'connect') {
+    err('--force only applies to connect.');
     return 2;
   }
-  if (flags.has('--key') && command !== 'login') {
-    err('--key only applies to login.');
-    return 2;
-  }
-  if (flags.has('--no-code-tab') && !['connect', 'login'].includes(command)) {
-    err('--no-code-tab only applies to connect and login.');
+  if (flags.has('--no-code-tab') && command !== 'connect') {
+    err('--no-code-tab only applies to connect.');
     return 2;
   }
 
-  const ctx = {
-    env: io.env,
-    out,
-    err,
-    prompter: io.prompter || createPrompter({ stdin: io.stdin, stderr: io.stderr }),
-  };
+  const ctx = { env: io.env, out, err };
 
   try {
     switch (command) {
       case 'connect':
-        return await connect(ctx, { teamId, force: flags.has('--force'), codeTab: !flags.has('--no-code-tab') });
-      case 'login':
-        return await connect(ctx, {
-          force: flags.has('--force'),
-          login: true,
-          teamId,
-          keyFromStdin: flags.has('--key'),
-          codeTab: !flags.has('--no-code-tab'),
-        });
+        return await connect(ctx, { force: flags.has('--force'), codeTab: !flags.has('--no-code-tab') });
+      case 'uninstall':
       case 'disconnect':
-        return await disconnect(ctx);
+      case 'logout':
+        return await uninstall(ctx);
       case 'status':
         return await status(ctx);
-      case 'logout':
-        return await logout(ctx);
       default:
         return 2;
     }
   } catch (error) {
-    if (error instanceof Refusal || error instanceof FileError || error instanceof ApiError) {
+    if (error instanceof Refusal || error instanceof CsError || error instanceof FileError || error instanceof ApiError) {
       err(error.message);
-      return 1;
-    }
-    if (error instanceof Cancelled) {
-      err('Cancelled. Nothing was changed.');
-      return 1;
+      return error.exitCode || 1;
     }
     err(`Unexpected error: ${error && error.message ? error.message : 'unknown'}.`);
     return 1;

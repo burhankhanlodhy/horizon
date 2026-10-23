@@ -1,8 +1,12 @@
 """Team savings math and cycle snapshots, with no network or database access."""
 
 import asyncio
+import copy
+import json
+import re
+import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import billing  # noqa: E402
+import savings_ledger  # noqa: E402
 import team_billing  # noqa: E402
 
 
@@ -545,3 +550,394 @@ def test_checkout_can_restart_after_cancellation_but_waits_for_completed_checkou
         asyncio.run(handler("team-a", team_billing.SeatChangeIn(seat_count=3), user={"user_id": "owner"}))
     assert exc.value.status_code == 409
     assert api.created == []
+
+
+# ------------------------------------------- fee eligibility, access and late fees
+#
+# The fakes below model only the statements these paths run. Writes made inside
+# conn.transaction() roll back when the block raises, as Postgres does.
+
+PERIOD_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+PERIOD_END = datetime(2026, 9, 1, tzinfo=timezone.utc)
+RECONCILE_BEFORE = datetime(2026, 10, 1, tzinfo=timezone.utc)
+FEE_SQL = savings_ledger.FEE_ELIGIBLE_SAVINGS_USD
+
+
+def _cycle(fee_cents=0, fee_adjustment_cents=0):
+    return {
+        "team_id": "team-a",
+        "period_start": PERIOD_START,
+        "period_end": PERIOD_END,
+        "savings_usd": Decimal("0"),
+        "fee_cents": fee_cents,
+        "fee_adjustment_cents": fee_adjustment_cents,
+        "late_savings_usd": Decimal("0"),
+        "payment_status": "paid",
+        "reconciliation_state": "attached",
+    }
+
+
+class _Tx:
+    def __init__(self, ledger):
+        self.ledger = ledger
+
+    async def __aenter__(self):
+        self.saved = (copy.deepcopy(self.ledger.cycle), copy.deepcopy(self.ledger.adjustments))
+        return self
+
+    async def __aexit__(self, exc_type, *_):
+        if exc_type is not None:
+            self.ledger.cycle, self.ledger.adjustments = self.saved
+        return False
+
+
+class _Conn:
+    def __init__(self, ledger):
+        self.ledger = ledger
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    def transaction(self):
+        return _Tx(self.ledger)
+
+    async def fetchval(self, sql, *args):
+        self.ledger.sql.append(sql)
+        if "pg_try_advisory_lock" in sql:
+            return True
+        if "metrics.proxy_events" in sql:
+            return self.ledger.savings
+        if "count(*)" in sql:
+            return sum(1 for a in self.ledger.adjustments if a["period_start"] == args[1])
+        return None
+
+    async def fetch(self, sql, *args):
+        self.ledger.sql.append(sql)
+        if "FROM billing.team_cycles" in sql:
+            return [dict(self.ledger.cycle)]
+        if "FROM billing.team_fee_adjustments" in sql:
+            return [
+                dict(a)
+                for a in self.ledger.adjustments
+                if a["status"] == "pending" and a["period_start"] == args[1]
+            ]
+        return []
+
+    async def execute(self, sql, *args):
+        ledger = self.ledger
+        ledger.sql.append(sql)
+        if sql.lstrip().startswith("INSERT INTO billing.team_fee_adjustments"):
+            key, team_id, start, cents, invoice_id = args
+            ledger.adjustments.append(
+                {
+                    "adjustment_key": key,
+                    "team_id": team_id,
+                    "period_start": start,
+                    "cents": cents,
+                    "stripe_invoice_id": invoice_id,
+                    "status": "pending",
+                }
+            )
+        elif "SET status='attached'" in sql:
+            for a in ledger.adjustments:
+                if a["adjustment_key"] == args[0]:
+                    a["status"] = "attached"
+        elif "SET stripe_invoice_id=$2" in sql:
+            for a in ledger.adjustments:
+                if a["adjustment_key"] == args[0]:
+                    a["stripe_invoice_id"] = args[1]
+        elif "SET fee_adjustment_cents=fee_adjustment_cents+$3" in sql:
+            if ledger.fail_next_cycle_update:
+                ledger.fail_next_cycle_update = False
+                raise RuntimeError("simulate database failure after Stripe accepted the item")
+            ledger.cycle["fee_adjustment_cents"] += args[2]
+            ledger.cycle["late_savings_usd"] = args[3]
+            ledger.cycle["reconciliation_state"] = "settled"
+        elif "SET reconciliation_state='settled',late_savings_usd=$3" in sql:
+            ledger.cycle["reconciliation_state"] = "settled"
+            ledger.cycle["late_savings_usd"] = args[2]
+        return None
+
+
+class _Pool:
+    """db._conn(): direct statements and acquire() both reach the same connection."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return self.conn
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+
+class _Ledger:
+    def __init__(self, cycle, savings):
+        self.cycle = cycle
+        self.savings = Decimal(savings)
+        self.adjustments = []
+        self.sql = []
+        self.fail_next_cycle_update = False
+        self.conn = _Conn(self)
+        self.pool = _Pool(self.conn)
+
+
+class _Items:
+    """Stripe invoice items. A repeated idempotency key returns the original item."""
+
+    def __init__(self):
+        self.items = []
+        self.create_calls = 0
+        self._by_key = {}
+
+    def list(self, params):
+        return SimpleNamespace(data=[i for i in self.items if i.invoice == params["invoice"]])
+
+    def create(self, params, options=None):
+        key = (options or {}).get("idempotency_key")
+        if key and key in self._by_key:
+            return self._by_key[key]
+        self.create_calls += 1
+        item = SimpleNamespace(invoice=params["invoice"], amount=params["amount"], metadata=params["metadata"])
+        self.items.append(item)
+        if key:
+            self._by_key[key] = item
+        return item
+
+    def charged_cents(self):
+        return sum(item.amount for item in self.items)
+
+
+def _patch_late_fee(monkeypatch, ledger, items):
+    monkeypatch.setattr(team_billing, "db", SimpleNamespace(_conn=lambda: ledger.pool, FEE_GRACE_DAYS=7))
+    monkeypatch.setattr(team_billing, "_stripe", lambda: SimpleNamespace(v1=SimpleNamespace(invoice_items=items)))
+
+    async def inline_call(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(team_billing, "_call", inline_call)
+
+
+def _reconcile(invoice_id):
+    asyncio.run(team_billing._reconcile_late_cycles("team-a", invoice_id, "cus-team", RECONCILE_BEFORE))
+
+
+def test_late_fee_commit_failure_after_stripe_is_never_charged_twice(monkeypatch):
+    ledger = _Ledger(_cycle(), savings="30.00")
+    items = _Items()
+    _patch_late_fee(monkeypatch, ledger, items)
+    ledger.fail_next_cycle_update = True
+
+    # Stripe accepts the item on inv-1, then the database write fails.
+    with pytest.raises(RuntimeError, match="simulate database failure"):
+        _reconcile("inv-1")
+    assert items.charged_cents() == 150
+    assert ledger.cycle["fee_adjustment_cents"] == 0
+    assert [a["status"] for a in ledger.adjustments] == ["pending"]
+
+    # The next renewal is a new invoice. The pending intent is found on inv-1, so
+    # the delta is recorded as applied and not charged again.
+    _reconcile("inv-2")
+    assert items.create_calls == 1
+    assert items.charged_cents() == 150
+    assert all(item.invoice == "inv-1" for item in items.items)
+    assert ledger.cycle["fee_adjustment_cents"] == 150
+    assert ledger.adjustments[0]["status"] == "attached"
+
+    _reconcile("inv-3")
+    assert items.create_calls == 1
+    assert items.charged_cents() == 150
+
+
+def test_pending_intent_without_a_stripe_item_is_attached_to_the_current_invoice(monkeypatch):
+    """A crash before the Stripe call leaves an intent with no item behind it."""
+    ledger = _Ledger(_cycle(), savings="30.00")
+    key = f"team-fee-adj-team-a-{int(PERIOD_START.timestamp())}-150-0"
+    ledger.adjustments.append(
+        {
+            "adjustment_key": key,
+            "team_id": "team-a",
+            "period_start": PERIOD_START,
+            "cents": 150,
+            "stripe_invoice_id": "inv-1",
+            "status": "pending",
+        }
+    )
+    items = _Items()
+    _patch_late_fee(monkeypatch, ledger, items)
+
+    _reconcile("inv-2")
+
+    assert items.create_calls == 1
+    assert items.items[0].invoice == "inv-2"
+    assert items.items[0].amount == 150
+    assert items.items[0].metadata["team_cycle_key"] == key
+    assert ledger.adjustments[0]["stripe_invoice_id"] == "inv-2"
+    assert ledger.adjustments[0]["status"] == "attached"
+    assert ledger.cycle["fee_adjustment_cents"] == 150
+
+
+def test_normal_late_fee_is_one_item_on_the_current_invoice(monkeypatch):
+    ledger = _Ledger(_cycle(), savings="30.00")
+    items = _Items()
+    _patch_late_fee(monkeypatch, ledger, items)
+
+    _reconcile("inv-1")
+
+    assert items.create_calls == 1
+    item = items.items[0]
+    assert item.invoice == "inv-1"
+    assert item.amount == 150
+    assert item.metadata["team_cycle_key"].startswith("team-fee-adj-team-a-")
+    assert [a["status"] for a in ledger.adjustments] == ["attached"]
+    assert ledger.cycle["fee_adjustment_cents"] == 150
+    assert ledger.cycle["late_savings_usd"] == Decimal("30.00")
+    assert ledger.cycle["reconciliation_state"] == "settled"
+
+    _reconcile("inv-2")
+    assert items.create_calls == 1
+
+
+def test_late_fee_reduction_credits_back_and_a_later_increase_is_charged_again(monkeypatch):
+    ledger = _Ledger(_cycle(fee_cents=150), savings="20.00")
+    items = _Items()
+    _patch_late_fee(monkeypatch, ledger, items)
+
+    _reconcile("inv-1")
+    assert [item.amount for item in items.items] == [-150]
+    assert ledger.cycle["fee_adjustment_cents"] == -150
+
+    ledger.savings = Decimal("30.00")
+    _reconcile("inv-2")
+    assert [item.amount for item in items.items] == [-150, 150]
+    assert ledger.cycle["fee_adjustment_cents"] == 0
+    # Each total gets its own key, so a value seen before is not mistaken for a replay.
+    assert len({a["adjustment_key"] for a in ledger.adjustments}) == 2
+    # The cycle's fee is now the 5% of $30 that the team owes.
+    assert ledger.cycle["fee_cents"] + ledger.cycle["fee_adjustment_cents"] == 150
+
+
+def test_team_fee_excludes_subscription_and_oauth_rows():
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE proxy_events (team_id TEXT, occurred_at TEXT, data TEXT)")
+    rows = [
+        {"savings_usd": 10},
+        {"savings_usd": 5, "auth_mode": "payg"},
+        {"savings_usd": 100, "auth_mode": "oauth"},
+        {"savings_usd": 200, "auth_mode": "subscription"},
+        {"savings_usd": 300, "kind": "graph_estimate"},
+    ]
+    for data in rows:
+        connection.execute("INSERT INTO proxy_events VALUES (?,?,?)", ("team-a", "2026-08-10", json.dumps(data)))
+    connection.execute(
+        "INSERT INTO proxy_events VALUES (?,?,?)", ("team-b", "2026-08-10", json.dumps({"savings_usd": 900}))
+    )
+    window = ("team-a", "2026-08-01", "2026-09-01")
+
+    def total(expression):
+        value = connection.execute(
+            f"SELECT {expression} FROM proxy_events WHERE team_id=? AND occurred_at>=? AND occurred_at<?",
+            window,
+        ).fetchone()[0]
+        return Decimal(str(value))
+
+    # The old all-traffic total would charge 5% of $315; the fee total is $15.
+    assert total(savings_ledger.SAVINGS_USD) == Decimal("315")
+    assert total(FEE_SQL) == Decimal("15")
+    assert team_billing.savings_fee(total(FEE_SQL)) == Decimal("0.00")
+
+
+def test_team_cycle_freeze_and_late_reconciliation_use_the_fee_total(monkeypatch):
+    ledger = _Ledger(_cycle(), savings="30.00")
+    _patch_late_fee(monkeypatch, ledger, _Items())
+
+    asyncio.run(team_billing._freeze_cycle(ledger.conn, "team-a", PERIOD_START, PERIOD_END))
+    _reconcile("inv-1")
+
+    freeze_sql = [s for s in ledger.sql if "metrics.proxy_events" in s and "GROUP BY" in s]
+    proxy_sql = [s for s in ledger.sql if "metrics.proxy_events" in s]
+    assert freeze_sql and all(FEE_SQL in s for s in freeze_sql)
+    assert proxy_sql and all(FEE_SQL in s for s in proxy_sql)
+
+
+def test_team_estimate_uses_the_fee_total(monkeypatch):
+    ledger = _Ledger(_cycle(), savings="15.00")
+    _patch_late_fee(monkeypatch, ledger, _Items())
+
+    async def team_row(_team_id):
+        return {
+            "team_id": "team-a",
+            "seat_count": 3,
+            "current_period_start": PERIOD_START,
+            "current_period_end": PERIOD_END,
+        }
+
+    monkeypatch.setattr(team_billing, "_team_row", team_row)
+    result = asyncio.run(team_billing.estimate("team-a", {"membership_id": "m1", "team_role": "owner"}))
+
+    assert result["savings_usd"] == 15.0
+    assert result["savings_fee_usd"] == 0.0
+    assert any(FEE_SQL in s for s in ledger.sql if "metrics.proxy_events" in s)
+
+
+def test_personal_ledger_savings_skip_team_rows_and_subscription_logins():
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE metrics_proxy_events (user_id TEXT, team_id TEXT, occurred_at TEXT, data TEXT)")
+    rows = [
+        ("account", None, {"savings_usd": 10}),
+        ("account", "team-a", {"savings_usd": 900}),
+        ("account", None, {"savings_usd": 500, "auth_mode": "oauth"}),
+    ]
+    for user_id, team_id, data in rows:
+        connection.execute(
+            "INSERT INTO metrics_proxy_events VALUES (?,?,?,?)",
+            (user_id, team_id, "2026-08-10", json.dumps(data)),
+        )
+
+    class LedgerConnection:
+        async def fetchval(self, sql, *args):
+            # Translate the asyncpg placeholders in order for SQLite.
+            return connection.execute(
+                re.sub(r"\$\d", "?", sql).replace("metrics.proxy_events", "metrics_proxy_events"),
+                args,
+            ).fetchone()[0]
+
+    total = asyncio.run(
+        billing.ledger_savings("account", PERIOD_START, PERIOD_END, LedgerConnection())
+    )
+    assert total == Decimal("10")
+
+
+@pytest.mark.parametrize(
+    "row, expected",
+    [
+        ({"status": "active"}, True),
+        ({"status": "trialing"}, True),
+        ({"status": "past_due", "current_period_end": "now-1d"}, True),
+        ({"status": "past_due", "current_period_end": "now-4d"}, False),
+        ({"status": "past_due", "current_period_end": None}, False),
+        ({"status": "unpaid", "current_period_end": "now"}, False),
+        ({"status": "canceled"}, False),
+        ({"status": "active", "overdue": True}, False),
+        ({"status": "past_due", "current_period_end": "now-1d", "overdue": True}, False),
+        (None, False),
+    ],
+)
+def test_team_entitlement_matches_code_plan_access_rules(monkeypatch, row, expected):
+    now = datetime.now(timezone.utc)
+    if row is not None:
+        row = dict({"current_period_end": None, "overdue": False}, **row)
+        offsets = {"now": timedelta(0), "now-1d": timedelta(days=-1), "now-4d": timedelta(days=-4)}
+        if isinstance(row["current_period_end"], str):
+            row["current_period_end"] = now + offsets[row["current_period_end"]]
+
+    class Conn:
+        async def fetchrow(self, sql, *args):
+            return row
+
+    monkeypatch.setattr(team_billing, "db", SimpleNamespace(_conn=lambda: Conn(), FEE_GRACE_DAYS=7))
+    assert asyncio.run(team_billing.entitlement("team-a")) is expected

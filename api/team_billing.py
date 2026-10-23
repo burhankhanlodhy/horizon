@@ -11,14 +11,14 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 import db
 import stripe
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from savings_ledger import SAVINGS_USD
+from savings_ledger import FEE_ELIGIBLE_SAVINGS_USD
 
 logger = logging.getLogger("contextshrink.team_billing")
 ENABLED = os.environ.get("CONTEXTSHRINK_TEAMS_ENABLED", "false").strip().lower() in {
@@ -33,6 +33,10 @@ SEAT_PRICE_USD = Decimal("5.00")
 MIN_SEATS = 3
 FEE_RATE = Decimal("0.05")
 FEE_THRESHOLD = Decimal("20.00")
+# Access rules match ContextShrink Code (code_plan.py): active and trialing are
+# entitled; past_due keeps access for this long after the period end.
+TEAM_ENTITLED_STATUSES = {"active", "trialing"}
+TEAM_PAST_DUE_GRACE = timedelta(days=3)
 _client = stripe.StripeClient(os.environ.get("STRIPE_SECRET_KEY", ""), max_network_retries=2) if os.environ.get("STRIPE_SECRET_KEY") else None
 _price_id_cache: str | None = None
 
@@ -155,16 +159,30 @@ async def _team_row(team_id):
 
 
 async def entitlement(team_id) -> bool:
-    """Return whether a Team has verified paid access and remains in fee grace."""
+    """Whether a Team has verified paid access right now.
+
+    Active and trialing subscriptions are entitled. A past_due subscription stays
+    entitled until three days after its period end, as ContextShrink Code does.
+    An overdue savings fee removes access in every case.
+    """
     row = await db._conn().fetchrow(
-        "SELECT s.status, EXISTS(SELECT 1 FROM billing.team_cycles c "
+        "SELECT s.status, s.current_period_end, EXISTS(SELECT 1 FROM billing.team_cycles c "
         "WHERE c.team_id=s.team_id AND c.payment_status IN ('failed','void') "
         "AND c.payment_failed_at < now() - ($2::int * interval '1 day')) AS overdue "
         "FROM core.team_subscriptions s WHERE s.team_id=$1",
         team_id,
         db.FEE_GRACE_DAYS,
     )
-    return bool(row and row["status"] == "active" and not row["overdue"])
+    if row is None or row["overdue"]:
+        return False
+    if row["status"] in TEAM_ENTITLED_STATUSES:
+        return True
+    period_end = row["current_period_end"]
+    return (
+        row["status"] == "past_due"
+        and period_end is not None
+        and datetime.now(timezone.utc) < period_end + TEAM_PAST_DUE_GRACE
+    )
 
 
 async def estimate(team_id, user=None, *, viewer_membership_id=None, viewer_role=None) -> dict:
@@ -187,14 +205,14 @@ async def estimate(team_id, user=None, *, viewer_membership_id=None, viewer_role
         )
         start, end = period["start"], period["end"]
     savings = await db._conn().fetchval(
-        f"SELECT {SAVINGS_USD} FROM metrics.proxy_events "
+        f"SELECT {FEE_ELIGIBLE_SAVINGS_USD} FROM metrics.proxy_events "
         "WHERE team_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
         team_id,
         start,
         end,
     )
     breakdown = await db._conn().fetch(
-        f"SELECT e.membership_id,e.user_id,u.name,m.role,m.left_at,{SAVINGS_USD} AS savings_usd "
+        f"SELECT e.membership_id,e.user_id,u.name,m.role,m.left_at,{FEE_ELIGIBLE_SAVINGS_USD} AS savings_usd "
         "FROM metrics.proxy_events e LEFT JOIN core.team_memberships m ON m.id=e.membership_id "
         "LEFT JOIN core.users u ON u.id=e.user_id "
         "WHERE e.team_id=$1 AND e.occurred_at >= $2 AND e.occurred_at < $3 "
@@ -402,7 +420,7 @@ async def _handle_cycle_invoice(invoice, subscription_id: str) -> None:
 
 async def _freeze_cycle(conn, team_id, start, end):
     rows = await conn.fetch(
-        f"SELECT membership_id,user_id,{SAVINGS_USD} AS savings_usd FROM metrics.proxy_events "
+        f"SELECT membership_id,user_id,{FEE_ELIGIBLE_SAVINGS_USD} AS savings_usd FROM metrics.proxy_events "
         "WHERE team_id=$1 AND occurred_at >= $2 AND occurred_at < $3 "
         "GROUP BY membership_id,user_id",
         team_id,
@@ -561,68 +579,154 @@ def aggregate_cycle_rows(rows):
     return money(total), member_sums, money(service_savings)
 
 
+async def _adjustment_item_exists(invoice_id: str, key: str) -> bool:
+    items = await _call(_stripe().v1.invoice_items.list, {"invoice": invoice_id, "limit": 100})
+    return any((item.metadata or {}).get("team_cycle_key") == key for item in items.data)
+
+
+async def _create_adjustment_item(team_id, start, key: str, cents: int, invoice_id: str, customer_id: str) -> None:
+    # The Stripe idempotency key includes the invoice: a retry against a different
+    # invoice must not reuse a key whose parameters (the invoice) have changed.
+    await _call(
+        _stripe().v1.invoice_items.create,
+        {
+            "customer": customer_id,
+            "invoice": invoice_id,
+            "currency": "usd",
+            "amount": cents,
+            "description": f"Team savings fee adjustment for {start:%Y-%m-%d} cycle",
+            "metadata": {"team_id": str(team_id), "team_cycle_key": key},
+        },
+        {"idempotency_key": f"{key}:{invoice_id}"},
+    )
+
+
+async def _attach_adjustment(conn, team_id, start, key: str, cents: int, live) -> None:
+    """Record an adjustment as applied. The intent and the cycle commit together."""
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE billing.team_fee_adjustments SET status='attached' WHERE adjustment_key=$1",
+            key,
+        )
+        await conn.execute(
+            "UPDATE billing.team_cycles SET fee_adjustment_cents=fee_adjustment_cents+$3,late_savings_usd=$4, "
+            "reconciliation_state='settled',updated_at=now() WHERE team_id=$1 AND period_start=$2",
+            team_id,
+            start,
+            cents,
+            money(live),
+        )
+
+
+async def _settle_pending_adjustment(conn, team_id, start, intent, live, current_invoice_id, customer_id) -> int:
+    """Apply an intent an earlier run recorded but never confirmed. Returns its cents.
+
+    The intent's recorded invoice is checked first. If Stripe already holds the
+    item there, the earlier run did charge it and only the bookkeeping was lost,
+    so nothing is charged again. Otherwise the item goes onto the current invoice.
+    """
+    key, cents, recorded = intent["adjustment_key"], int(intent["cents"]), intent["stripe_invoice_id"]
+    if recorded and await _adjustment_item_exists(recorded, key):
+        await _attach_adjustment(conn, team_id, start, key, cents, live)
+        return cents
+    if recorded != current_invoice_id:
+        await conn.execute(
+            "UPDATE billing.team_fee_adjustments SET stripe_invoice_id=$2 WHERE adjustment_key=$1",
+            key,
+            current_invoice_id,
+        )
+    if not await _adjustment_item_exists(current_invoice_id, key):
+        await _create_adjustment_item(team_id, start, key, cents, current_invoice_id, customer_id)
+    await _attach_adjustment(conn, team_id, start, key, cents, live)
+    return cents
+
+
+async def _reconcile_cycle(conn, team_id, row, current_invoice_id: str, customer_id: str) -> None:
+    start, end = row["period_start"], row["period_end"]
+    live = money(
+        await conn.fetchval(
+            f"SELECT {FEE_ELIGIBLE_SAVINGS_USD} FROM metrics.proxy_events WHERE team_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
+            team_id,
+            start,
+            end,
+        )
+    )
+    # Pending intents from earlier runs settle before any new delta is computed,
+    # so a delta is never charged a second time under a different key.
+    pending = await conn.fetch(
+        "SELECT adjustment_key,cents,stripe_invoice_id FROM billing.team_fee_adjustments "
+        "WHERE team_id=$1 AND period_start=$2 AND status='pending' ORDER BY created_at,adjustment_key",
+        team_id,
+        start,
+    )
+    applied = 0
+    for intent in pending:
+        applied += await _settle_pending_adjustment(
+            conn, team_id, start, dict(intent), live, current_invoice_id, customer_id
+        )
+    target = int(savings_fee(live) * 100)
+    already_charged = int(row["fee_cents"] or 0) + int(row["fee_adjustment_cents"] or 0) + applied
+    delta = target - already_charged
+    if not delta:
+        await conn.execute(
+            "UPDATE billing.team_cycles SET reconciliation_state='settled',late_savings_usd=$3,updated_at=now() "
+            "WHERE team_id=$1 AND period_start=$2",
+            team_id,
+            start,
+            live,
+        )
+        return
+    # The key depends on the cycle and target, not on the invoice, so a later run
+    # finds this intent again. The sequence keeps keys unique when a total moves
+    # back to an earlier value.
+    sequence = int(
+        await conn.fetchval(
+            "SELECT count(*) FROM billing.team_fee_adjustments WHERE team_id=$1 AND period_start=$2",
+            team_id,
+            start,
+        )
+        or 0
+    )
+    key = f"team-fee-adj-{team_id}-{int(start.timestamp())}-{target}-{sequence}"
+    # The intent commits before Stripe is called. No transaction stays open
+    # across a Stripe call.
+    await conn.execute(
+        "INSERT INTO billing.team_fee_adjustments(adjustment_key,team_id,period_start,cents,stripe_invoice_id,status,created_at) "
+        "VALUES($1,$2,$3,$4,$5,'pending',now())",
+        key,
+        team_id,
+        start,
+        delta,
+        current_invoice_id,
+    )
+    if not await _adjustment_item_exists(current_invoice_id, key):
+        await _create_adjustment_item(team_id, start, key, delta, current_invoice_id, customer_id)
+    await _attach_adjustment(conn, team_id, start, key, delta, live)
+
+
 async def _reconcile_late_cycles(team_id, current_invoice_id: str, customer_id: str, before_period_start) -> None:
-    """Carry fee deltas from completed cycles onto this invoice exactly once."""
-    lock_key = f"team-late-reconcile-{team_id}-{current_invoice_id}"
+    """Carry fee deltas from completed cycles onto this invoice, each charged once.
+
+    Each delta is recorded as a pending intent and committed before Stripe is
+    called. If a later step fails, the next run finds the intent and checks its
+    recorded invoice before charging anything again.
+    """
+    lock_key = f"team-late-reconcile-{team_id}"
     async with db._conn().acquire() as conn:
         locked = await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", lock_key)
         if not locked:
             raise HTTPException(503, "Team late usage reconciliation is already running")
         try:
-            async with conn.transaction():
-                rows = await conn.fetch(
-                    "SELECT period_start,period_end,savings_usd,fee_cents,fee_adjustment_cents "
-                    "FROM billing.team_cycles WHERE team_id=$1 AND period_end <= $2 "
-                    "AND payment_status='paid' AND reconciliation_state IN ('attached','needs_reconciliation','settled') "
-                    "ORDER BY period_start FOR UPDATE",
-                    team_id,
-                    before_period_start,
-                )
-                for row in rows:
-                    live = await conn.fetchval(
-                        f"SELECT {SAVINGS_USD} FROM metrics.proxy_events WHERE team_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
-                        team_id,
-                        row["period_start"],
-                        row["period_end"],
-                    )
-                    target = int(savings_fee(money(live)) * 100)
-                    already_charged = int(row["fee_cents"] or 0) + int(row["fee_adjustment_cents"] or 0)
-                    delta = target - already_charged
-                    if not delta:
-                        await conn.execute(
-                            "UPDATE billing.team_cycles SET reconciliation_state='settled',late_savings_usd=$3,updated_at=now() "
-                            "WHERE team_id=$1 AND period_start=$2",
-                            team_id,
-                            row["period_start"],
-                            money(live),
-                        )
-                        continue
-                    key = f"team-late-{team_id}-{int(row['period_start'].timestamp())}-{current_invoice_id}-{target}"
-                    existing_items = await _call(
-                        _stripe().v1.invoice_items.list,
-                        {"invoice": current_invoice_id, "limit": 100},
-                    )
-                    if not any((item.metadata or {}).get("team_cycle_key") == key for item in existing_items.data):
-                        await _call(
-                            _stripe().v1.invoice_items.create,
-                            {
-                                "customer": customer_id,
-                                "invoice": current_invoice_id,
-                                "currency": "usd",
-                                "amount": delta,
-                                "description": f"Team savings fee adjustment for {row['period_start']:%Y-%m-%d} cycle",
-                                "metadata": {"team_id": str(team_id), "team_cycle_key": key},
-                            },
-                            {"idempotency_key": key},
-                        )
-                    await conn.execute(
-                        "UPDATE billing.team_cycles SET fee_adjustment_cents=fee_adjustment_cents+$3,late_savings_usd=$4, "
-                        "reconciliation_state='settled',updated_at=now() WHERE team_id=$1 AND period_start=$2",
-                        team_id,
-                        row["period_start"],
-                        delta,
-                        money(live),
-                    )
+            rows = await conn.fetch(
+                "SELECT period_start,period_end,savings_usd,fee_cents,fee_adjustment_cents "
+                "FROM billing.team_cycles WHERE team_id=$1 AND period_end <= $2 "
+                "AND payment_status='paid' AND reconciliation_state IN ('attached','needs_reconciliation','settled') "
+                "ORDER BY period_start",
+                team_id,
+                before_period_start,
+            )
+            for row in rows:
+                await _reconcile_cycle(conn, team_id, row, current_invoice_id, customer_id)
         finally:
             await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", lock_key)
 

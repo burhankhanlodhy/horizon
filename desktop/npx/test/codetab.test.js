@@ -11,20 +11,18 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { EMAIL, PASSWORD, startFakeApi, makeSandbox, runCli, readJson } = require('./support');
-const { signatureProblem } = require('../lib/codetab');
+const { runCli, readJson } = require('./support');
+const code = require('./code-support');
+const { signatureProblem, configFor } = require('../lib/codetab');
 
-const SIGN_IN = `${EMAIL}\n${PASSWORD}\n`;
 const STUB = path.join(__dirname, 'fixtures', 'fake-codetab-helper.js');
 const SHIPPED_MANIFEST = path.join(__dirname, '..', 'lib', 'codetab-manifest.json');
 const VERSION = '0.9.0-test';
 const LAUNCHER_BYTES = Buffer.from('test launcher bytes\n');
 const HELPER_BYTES = Buffer.from('test helper bytes\n');
 const TAMPERED_LAUNCHER = Buffer.from(LAUNCHER_BYTES.toString().toUpperCase());
-const HEADER_KEY = 'X-Horizon-Proxy-Token';
-const HEADER_PREFIX = `${HEADER_KEY}: `;
-const BASE_RE = /^http:\/\/127\.0\.0\.1:9\/k\/[0-9a-f]{16}$/;
-const KEY_RE = /cs_live_[A-Za-z0-9_-]+/;
+const BASE_RE = /^http:\/\/127\.0\.0\.1:\d+$/;
+const KEY_RE = /cs_dev_[A-Za-z0-9_-]+/;
 const PLACEHOLDER = {
   version: '0.0.0-unset',
   files: {
@@ -81,9 +79,16 @@ function startReleases(served) {
 
 // A sandbox with a fake Claude Desktop folder, a releases server and the stub helper.
 async function withCodeTab(fn, { served = servedFiles(), manifest, platform = 'win32', signature = false } = {}) {
-  const api = await startFakeApi();
+  const api = await code.startCodeApi();
+  const engine = await code.startFakeEngine();
   const releases = await startReleases(served);
-  const sb = makeSandbox(api);
+  const sb = code.makeCodeSandbox(api, engine);
+  sb.configDir = path.join(sb.home, '.claude');
+  fs.mkdirSync(sb.configDir, { recursive: true });
+  sb.env.CLAUDE_CONFIG_DIR = sb.configDir;
+  sb.settings = path.join(sb.configDir, 'settings.json');
+  sb.dataDir = path.join(sb.root, 'ContextShrinkData');
+  sb.env.CONTEXTSHRINK_DATA_DIR = sb.dataDir;
   const log = path.join(sb.root, 'helper-log.jsonl');
   const manifestFile = path.join(sb.root, 'manifest.json');
   fs.writeFileSync(manifestFile, JSON.stringify(manifest || manifestFor(LAUNCHER_BYTES, HELPER_BYTES)));
@@ -124,10 +129,11 @@ async function withCodeTab(fn, { served = servedFiles(), manifest, platform = 'w
     helper: path.join(bin, 'contextshrink-codetab.exe'),
   };
   try {
-    await fn({ sb, api, releases, log, claudeExe, paths });
+    await fn({ sb, api, engine, releases, log, claudeExe, paths });
   } finally {
     sb.cleanup();
     await releases.close();
+    await engine.close();
     await api.close();
   }
 }
@@ -146,10 +152,6 @@ function commands(log) {
   return stubCalls(log).map((call) => call.args[0]);
 }
 
-function headerKeyOf(sb) {
-  return readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS.slice(HEADER_PREFIX.length);
-}
-
 function assertNoKeyText(texts) {
   for (const text of texts) {
     assert.ok(!KEY_RE.test(text), 'an account key was printed');
@@ -157,8 +159,8 @@ function assertNoKeyText(texts) {
 }
 
 test('connect sets up the Code tab: patches Claude Desktop and writes codetab.json owned by npx', () =>
-  withCodeTab(async ({ sb, log, paths, releases, claudeExe }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
+  withCodeTab(async ({ sb, engine, log, paths, releases, claudeExe }) => {
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
     assert.match(
       res.stdout,
@@ -166,14 +168,17 @@ test('connect sets up the Code tab: patches Claude Desktop and writes codetab.js
     );
 
     const env = readJson(sb.settings).env;
-    const config = readJson(paths.config);
-    assert.strictEqual(config.v, 1);
-    assert.strictEqual(config.enabled, true);
-    assert.strictEqual(config.owner, 'npx');
-    assert.strictEqual(config.mode, 'direct');
-    assert.strictEqual(config.base_url, env.ANTHROPIC_BASE_URL);
-    assert.deepStrictEqual(config.headers, { [HEADER_KEY]: headerKeyOf(sb) });
-    assert.deepStrictEqual(config.env, { ENABLE_TOOL_SEARCH: 'true' });
+    assert.strictEqual(env.ANTHROPIC_BASE_URL, engine.url);
+    // The forwarder format: v 1 and enabled (the launcher routes only then), owner npx,
+    // no launch mode, no account key.
+    assert.deepStrictEqual(readJson(paths.config), {
+      v: 1,
+      owner: 'npx',
+      enabled: true,
+      base_url: engine.url,
+      health_port: Number(new URL(engine.url).port),
+      env: { ENABLE_TOOL_SEARCH: 'true' },
+    });
 
     assert.ok(fs.readFileSync(paths.launcher).equals(LAUNCHER_BYTES));
     assert.ok(fs.readFileSync(paths.helper).equals(HELPER_BYTES));
@@ -193,7 +198,7 @@ test('connect sets up the Code tab: patches Claude Desktop and writes codetab.js
 
 test('a second connect reuses the downloaded files and runs the helper again', () =>
   withCodeTab(async ({ sb, log, releases }) => {
-    const first = await runCli(sb, [], { input: SIGN_IN });
+    const first = await runCli(sb, []);
     assert.strictEqual(first.code, 0, first.output);
     const hitsBefore = releases.hits.length;
 
@@ -207,7 +212,7 @@ test('a second connect reuses the downloaded files and runs the helper again', (
 test('a placeholder manifest sets nothing up and says the Code tab is not released yet', () =>
   withCodeTab(
     async ({ sb, paths, releases, log }) => {
-      const res = await runCli(sb, [], { input: SIGN_IN });
+      const res = await runCli(sb, []);
       assert.strictEqual(res.code, 0, res.output);
       assert.match(res.stdout, /Code tab support is not released yet; Code tab not set up\./);
       assert.ok(!fs.existsSync(paths.config));
@@ -235,7 +240,7 @@ test('the shipped manifest is either the unreleased placeholder or a pinned rele
 test('a failed startup shortcut keeps the patch and its config, and says updates will not be patched', () =>
   withCodeTab(async ({ sb, paths }) => {
     sb.env.CONTEXTSHRINK_NPX_STUB_AUTOSTART_FAIL = 'on';
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 1, res.output);
     assert.match(res.stderr, /startup shortcut could not be added/);
     assert.doesNotMatch(res.stdout, /stays patched/, 'a failed shortcut was reported as success');
@@ -248,7 +253,7 @@ test('a failed startup shortcut keeps the patch and its config, and says updates
 test('a file that does not match the manifest is refused and nothing is installed', () =>
   withCodeTab(
     async ({ sb, paths, log, claudeExe }) => {
-      const res = await runCli(sb, [], { input: SIGN_IN });
+      const res = await runCli(sb, []);
       assert.strictEqual(res.code, 1, res.output);
       assert.match(res.stderr, /did not match the release manifest/);
       assert.ok(!fs.existsSync(paths.launcher), 'a mismatched launcher was put in place');
@@ -273,7 +278,7 @@ test('a codetab.json owned by the desktop app is left alone and the terminal par
     const desktopConfig = JSON.stringify({ v: 1, enabled: true, base_url: 'https://proxy.contextshrink.com/k/desktopid' }) + '\n';
     fs.writeFileSync(paths.config, desktopConfig);
 
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
     assert.match(res.stdout, /Code tab left alone: the ContextShrink desktop app manages it\./);
     assert.strictEqual(fs.readFileSync(paths.config, 'utf8'), desktopConfig);
@@ -284,7 +289,7 @@ test('a codetab.json owned by the desktop app is left alone and the terminal par
 
 test('--no-code-tab connects the terminal only and downloads nothing', () =>
   withCodeTab(async ({ sb, paths, releases, log }) => {
-    const res = await runCli(sb, ['--no-code-tab'], { input: SIGN_IN });
+    const res = await runCli(sb, ['--no-code-tab']);
     assert.strictEqual(res.code, 0, res.output);
     assert.match(res.stdout, /Code tab skipped \(--no-code-tab\)\./);
     assert.ok(!fs.existsSync(paths.config));
@@ -294,32 +299,27 @@ test('--no-code-tab connects the terminal only and downloads nothing', () =>
 
     const misuse = await runCli(sb, ['disconnect', '--no-code-tab']);
     assert.strictEqual(misuse.code, 2);
-    assert.match(misuse.stderr, /--no-code-tab only applies to connect and login/);
+    assert.match(misuse.stderr, /--no-code-tab only applies to connect\./);
   }));
 
-test('login gives the Code tab the new key, also with --no-code-tab', () =>
-  withCodeTab(async ({ sb, paths }) => {
-    const first = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(first.code, 0, first.output);
-    const oldKey = readJson(paths.config).headers[HEADER_KEY];
-
-    const again = await runCli(sb, ['login'], { input: SIGN_IN });
-    assert.strictEqual(again.code, 0, again.output);
-    const newKey = headerKeyOf(sb);
-    assert.notStrictEqual(newKey, oldKey);
-    assert.strictEqual(readJson(paths.config).headers[HEADER_KEY], newKey);
-
-    const skipped = await runCli(sb, ['login', '--no-code-tab'], { input: SIGN_IN });
-    assert.strictEqual(skipped.code, 0, skipped.output);
-    const rotated = headerKeyOf(sb);
-    assert.notStrictEqual(rotated, newKey);
-    assert.strictEqual(readJson(paths.config).headers[HEADER_KEY], rotated, 'the Code tab kept the old key');
-    assertNoKeyText([again.stdout, again.stderr, skipped.stdout, skipped.stderr]);
+test('connect rewrites a codetab.json from before the forwarder format, and it is still owned by npx', () =>
+  withCodeTab(async ({ sb, paths, engine }) => {
+    fs.mkdirSync(paths.dir, { recursive: true });
+    fs.writeFileSync(
+      paths.config,
+      JSON.stringify({ v: 1, enabled: true, owner: 'npx', mode: 'direct', base_url: 'http://127.0.0.1:9/k/old', headers: {}, env: {} })
+    );
+    const res = await runCli(sb, []);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.strictEqual(readJson(paths.config).base_url, engine.url);
+    assert.strictEqual(readJson(paths.config).mode, undefined, 'the launch mode was kept');
+    assert.strictEqual(readJson(paths.config).owner, 'npx');
+    assertNoKeyText([res.stdout, res.stderr]);
   }));
 
 test('disconnect restores Claude Desktop, removes the Code tab files, and keeps unrelated files', () =>
   withCodeTab(async ({ sb, paths, log, claudeExe }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
     const unrelated = path.join(paths.dir, 'notes.txt');
     fs.writeFileSync(unrelated, 'not ours');
@@ -339,7 +339,7 @@ test('disconnect restores Claude Desktop, removes the Code tab files, and keeps 
 
 test('disconnect leaves a codetab.json owned by the desktop app alone and runs no helper', () =>
   withCodeTab(async ({ sb, paths, log }) => {
-    const res = await runCli(sb, ['--no-code-tab'], { input: SIGN_IN });
+    const res = await runCli(sb, ['--no-code-tab']);
     assert.strictEqual(res.code, 0, res.output);
     const desktopConfig = JSON.stringify({ v: 1, enabled: true, base_url: 'https://proxy.contextshrink.com/k/desktopid' });
     fs.mkdirSync(paths.dir, { recursive: true });
@@ -354,7 +354,7 @@ test('disconnect leaves a codetab.json owned by the desktop app alone and runs n
 
 test('a Code tab that is still patched is kept, and disconnect says so', () =>
   withCodeTab(async ({ sb, paths, log }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
 
     sb.env.CONTEXTSHRINK_NPX_STUB_REMOVE_STATE = 'locked';
@@ -373,7 +373,7 @@ test('status shows one Code tab line and never the key', () =>
     assert.strictEqual(before.code, 0, before.output);
     assert.match(before.stdout, /Code tab: not set up\. Run npx contextshrink-claude to set it up\./);
 
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
     const status = await runCli(sb, ['status']);
     assert.strictEqual(status.code, 0, status.output);
@@ -381,22 +381,10 @@ test('status shows one Code tab line and never the key', () =>
     assertNoKeyText([status.stdout, status.stderr]);
   }));
 
-test('on a system other than Windows the Code tab is skipped in one line', () =>
-  withCodeTab(
-    async ({ sb, paths, releases }) => {
-      const res = await runCli(sb, [], { input: SIGN_IN });
-      assert.strictEqual(res.code, 0, res.output);
-      assert.match(res.stdout, /Code tab is only set up on Windows; skipped\./);
-      assert.deepStrictEqual(releases.hits, []);
-      assert.ok(!fs.existsSync(paths.config));
-    },
-    { platform: 'linux' }
-  ));
-
 test('without Claude Desktop the Code tab is skipped in one line', () =>
   withCodeTab(async ({ sb, paths, releases }) => {
     fs.rmSync(path.join(sb.localAppData, 'Packages'), { recursive: true, force: true });
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 0, res.output);
     assert.match(res.stdout, /Claude Desktop not found; Code tab not set up\./);
     assert.deepStrictEqual(releases.hits, []);
@@ -406,7 +394,7 @@ test('without Claude Desktop the Code tab is skipped in one line', () =>
 test('the releases address must be https, or http on 127.0.0.1', () =>
   withCodeTab(async ({ sb, paths, releases }) => {
     sb.env.CONTEXTSHRINK_RELEASES_URL = 'http://releases.example.test';
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, []);
     assert.strictEqual(res.code, 1, res.output);
     assert.match(res.stderr, /must be an https URL/);
     assert.ok(!fs.existsSync(paths.config));
@@ -415,11 +403,12 @@ test('the releases address must be https, or http on 127.0.0.1', () =>
 
 test(
   'a file without the publisher signature is refused before it is put in place',
-  { skip: process.platform !== 'win32' ? 'checks Authenticode with Windows PowerShell' : false },
+  // Runs the real Authenticode check through Windows PowerShell, so it is opt-in.
+  { skip: process.env.CONTEXTSHRINK_NPX_LIVE_SIGNATURE !== '1' && 'set CONTEXTSHRINK_NPX_LIVE_SIGNATURE=1 to run the live check' },
   () =>
     withCodeTab(
       async ({ sb, paths, log }) => {
-        const res = await runCli(sb, [], { input: SIGN_IN });
+        const res = await runCli(sb, []);
         assert.strictEqual(res.code, 1, res.output);
         assert.match(res.stderr, /failed the publisher check/);
         assert.ok(!fs.existsSync(paths.launcher));
@@ -439,4 +428,20 @@ test('signatureProblem accepts only the ContextShrink publisher, from the expect
   assert.ok(signatureProblem({ Status: 'Valid', Subject: 'CN=Muhammad Burhan Khan Lodhi Extra, O=x', Issuer: issuer }));
   assert.ok(signatureProblem({ Status: 'Valid', Subject: subject, Issuer: 'CN=Some Other CA' }));
   assert.ok(signatureProblem(null));
+});
+
+test('the forwarder config the launcher reads has v 1 and enabled, and health_port is the engine port', () => {
+  // The launcher routes only when v is 1 and enabled is true, and checks
+  // http://127.0.0.1:<health_port>/__cs/health. This is the exact object it reads.
+  assert.deepStrictEqual(
+    configFor({ base: 'http://127.0.0.1:18793', env: { ENABLE_TOOL_SEARCH: 'true' } }),
+    {
+      v: 1,
+      owner: 'npx',
+      enabled: true,
+      base_url: 'http://127.0.0.1:18793',
+      health_port: 18793,
+      env: { ENABLE_TOOL_SEARCH: 'true' },
+    }
+  );
 });

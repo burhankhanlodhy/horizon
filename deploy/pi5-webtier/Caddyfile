@@ -57,7 +57,8 @@
 	# the caller's session against ADMIN_EMAILS in the API.
 	# Public control-plane routes only; /internal/* (service token), the
 	# legacy /ingest and FastAPI's /docs and /openapi.json stay private.
-	@public_api path_regexp api ^/(healthz|auth/(signup|login|logout|me|sso/(start|callback|exchange)|password/(forgot|reset)|email/(verify|resend))|teams(?:/[0-9a-fA-F-]{36}(?:/sso(?:/identity)?|/members/[0-9a-fA-F-]{36}|/invitations(?:/[0-9a-fA-F-]{36}(?:/resend)?)?|/billing/(?:checkout|portal|seats(?:/preview)?|estimate)|/transfer-ownership)?)?|team-invitations/accept|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/(summary|key-summary)|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?)$
+	# /code/* is ContextShrink Code: the npx CLI, the code.contextshrink.com site.
+	@public_api path_regexp api ^/(healthz|auth/(signup|login|logout|me|sso/(start|callback|exchange)|password/(forgot|reset)|email/(verify|resend))|teams(?:/[0-9a-fA-F-]{36}(?:/sso(?:/identity)?|/members/[0-9a-fA-F-]{36}|/invitations(?:/[0-9a-fA-F-]{36}(?:/resend)?)?|/billing/(?:checkout|portal|seats(?:/preview)?|estimate)|/transfer-ownership)?)?|team-invitations/accept|subscription|billing/(estimate|checkout|portal|renew|invoices)|usage/(summary|key-summary)|keys(/[^/]+)?|analytics/(summary|feed|history\.csv)|stripe/webhook|contact|admin/contact-messages(/[0-9a-fA-F-]{36}/handled)?|code/(cli/(start|request|approve|poll)|account|checkout|portal|device|devices/[0-9a-fA-F-]{36}|entitlement|usage(/summary)?))$
 	handle @public_api {
 		reverse_proxy 127.0.0.1:8788 {
 			header_up -Cdn-Loop

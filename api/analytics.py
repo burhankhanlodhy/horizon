@@ -100,6 +100,9 @@ class EventIn(BaseModel):
     # Savings of Flash Observations and the price policies, per feature, already
     # inside savings_usd (horizon/proxy/policy_savings.py).
     policy_usd: dict[PolicyFeature, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
+    # How the request authenticated. Stored in data; the Pro savings fee counts only "payg"
+    # (api/savings_ledger.py). Rows from older proxies carry no tag and count as payg.
+    auth_mode: Literal["payg", "oauth", "subscription"] = "payg"
 
     @model_validator(mode="after")
     def graph_diagnostics_are_not_usage_or_dollar_credit(self):

@@ -303,3 +303,4 @@ desktop/dist-windows/
 horizon/pricing/_model_prices.json
 desktop/app/src-tauri/tauri.signing.generated.json
 desktop/dist-claude-code-tools/
+desktop/dist-engine/

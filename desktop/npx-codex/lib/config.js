@@ -1,22 +1,29 @@
 'use strict';
-const os = require('node:os');
+
+// Paths for contextshrink-codex. Every path and URL can be overridden through the
+// environment (USERPROFILE, HOME, CODEX_HOME, CONTEXTSHRINK_HOME, CONTEXTSHRINK_API_URL,
+// CONTEXTSHRINK_ENGINE_URL, LOCALAPPDATA, APPDATA), so tests never touch a real ~/.codex.
+
 const path = require('node:path');
-function endpoint(value, fallback) {
-  const url = new URL(value || fallback);
-  if (url.username || url.password || url.search || url.hash ||
-      (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === '127.0.0.1'))) {
-    throw new Error('Service URL must be HTTPS (or HTTP on 127.0.0.1 for tests).');
-  }
-  return url.href.replace(/\/+$/, '');
-}
+const { homeOf, apiUrlOf, engineUrlOf } = require('./code-env');
+const device = require('./code-device');
+
 function resolvePaths(env) {
-  const home = env.USERPROFILE || env.HOME || os.homedir();
-  const dir = path.resolve(env.CODEX_HOME || path.join(home, '.codex'));
+  const dir = path.resolve(env.CODEX_HOME || path.join(homeOf(env), '.codex'));
+  const files = device.devicePathsOf(env);
   return {
-    dir, config: path.join(dir, 'config.toml'), state: path.join(dir, '.contextshrink-npx-codex.json'),
-    account: path.join(home, '.contextshrink', 'npx-codex.json'),
-    apiUrl: endpoint(env.CONTEXTSHRINK_API_URL, 'https://api.contextshrink.com'),
-    proxyUrl: endpoint(env.CONTEXTSHRINK_PROXY_URL, 'https://proxy.contextshrink.com'),
+    dir,
+    config: path.join(dir, 'config.toml'),
+    state: path.join(dir, '.contextshrink-npx-codex.json'),
+    csHome: files.home,
+    device: files.device,
+    license: files.license,
+    usage: files.usage,
+    // The per-computer record of versions before 0.3.0. Removed once this version connects.
+    legacyAccount: path.join(files.home, 'npx-codex.json'),
+    apiUrl: apiUrlOf(env),
+    engineUrl: engineUrlOf(env),
   };
 }
-module.exports = { resolvePaths, KEY_PREFIX: 'cs_live_', KEY_SCOPES: ['proxy:responses'] };
+
+module.exports = { resolvePaths };

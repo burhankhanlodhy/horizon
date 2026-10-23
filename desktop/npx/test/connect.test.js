@@ -4,207 +4,220 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { EMAIL, PASSWORD, startFakeApi, makeSandbox, runCli, readJson, writeSettingsFile } = require('./support');
+const { withSandbox, runCli, writeSettingsFile, readSettings, readJson, adapterCalls } = require('./support');
+const { MACHINE_ID, ENGINE_VERSION, sha256, ENGINE_ZIP } = require('./code-support');
+const { deviceHashOf } = require('../lib/code-device');
 
-const SIGN_IN = `${EMAIL}\n${PASSWORD}\n`;
-const BASE_RE = /^http:\/\/127\.0\.0\.1:9\/k\/[0-9a-f]{16}$/;
-const HEADER_RE = /^X-Horizon-Proxy-Token: cs_live_\S+$/;
+const DEVICE_KEY_RE = /cs_dev_[A-Za-z0-9_-]+/;
 
-// Runs `fn` with a fresh fake API and sandbox, and always cleans both up.
-async function withSandbox(fn, options) {
-  const api = await startFakeApi();
-  const sb = makeSandbox(api, options);
-  try {
-    await fn({ api, sb });
-  } finally {
-    sb.cleanup();
-    await api.close();
-  }
-}
-
-function assertNoKeyLeak(api, outputs) {
+function assertNoDeviceKeyText(api, texts) {
   for (const key of api.issued) {
-    for (const text of outputs) {
-      assert.ok(!text.includes(key), 'an account key was printed');
-    }
+    for (const text of texts) assert.ok(!text.includes(key), 'a device key was printed');
   }
+  for (const text of texts) assert.ok(!DEVICE_KEY_RE.test(text), 'a device key-shaped value was printed');
 }
 
-test('Team sign-in scopes creation and revocation while keeping auth personal', () =>
-  withSandbox(async ({ api, sb }) => {
-    const team = '00000000-0000-4000-8000-000000000099';
-    const result = await runCli(sb, ['connect', '--team', team, '--no-code-tab'], { input: SIGN_IN });
-    assert.strictEqual(result.code, 0, result.output);
-    assert.strictEqual(api.calls.find(c => c.path === '/keys').headers['x-contextshrink-team'], team);
-    assert.strictEqual(api.calls.find(c => c.path === '/auth/login').headers['x-contextshrink-team'], undefined);
-    const logout = await runCli(sb, ['logout'], { input: SIGN_IN });
-    assert.strictEqual(logout.code, 0, logout.output);
-    assert.strictEqual(api.calls.find(c => c.method === 'DELETE').headers['x-contextshrink-team'], team);
-  })
-);
+test('connect signs in, installs the engine, and points Claude Code at it, keeping every other setting', () =>
+  withSandbox(async ({ api, engine, sb }) => {
+    writeSettingsFile(
+      sb,
+      [
+        '{',
+        '    "model": "opus",',
+        '    "permissions": { "allow": ["Bash(npm test)"] },',
+        '    "env": {',
+        '        "FOO": "bar"',
+        '    }',
+        '}',
+        '',
+      ].join('\n')
+    );
 
-test('connect writes the three env keys and savings bar, keeping every other setting', () =>
-  withSandbox(async ({ api, sb }) => {
-    const original = [
-      '{',
-      '    "model": "opus",',
-      '    "permissions": { "allow": ["Bash(npm test)"] },',
-      '    "env": {',
-      '        "FOO": "bar"',
-      '    }',
-      '}',
-      '',
-    ].join('\n');
-    writeSettingsFile(sb, original);
-
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
+    assert.match(res.stdout, /Connected\. Claude Code now sends its requests through the ContextShrink engine/);
+    assert.match(res.stdout, /Free trial: 7 days left/);
+    assert.match(res.stdout, /Start a new Claude Code session/);
 
-    const settings = readJson(sb.settings);
-    assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env', 'statusLine']);
+    const settings = readSettings(sb);
+    assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env', 'hooks', 'statusLine']);
     assert.deepStrictEqual(settings.permissions, { allow: ['Bash(npm test)'] });
     assert.strictEqual(settings.model, 'opus');
-    assert.deepStrictEqual(Object.keys(settings.env), [
-      'FOO',
-      'ANTHROPIC_BASE_URL',
-      'ANTHROPIC_CUSTOM_HEADERS',
-      'ENABLE_TOOL_SEARCH',
-    ]);
-    assert.strictEqual(settings.env.FOO, 'bar');
-    assert.match(settings.env.ANTHROPIC_BASE_URL, BASE_RE);
-    assert.match(settings.env.ANTHROPIC_CUSTOM_HEADERS, HEADER_RE);
-    assert.strictEqual(settings.env.ENABLE_TOOL_SEARCH, 'true');
-    assert.strictEqual(Object.keys(settings.env).length, 4);
-    assert.match(res.stdout, /Tool search is on \(ENABLE_TOOL_SEARCH=true\)/);
-    assert.deepStrictEqual(readJson(sb.state).written.ENABLE_TOOL_SEARCH, 'true');
+    assert.deepStrictEqual(settings.env, {
+      FOO: 'bar',
+      ANTHROPIC_BASE_URL: engine.url,
+      ENABLE_TOOL_SEARCH: 'true',
+    });
+    assert.ok(!('ANTHROPIC_CUSTOM_HEADERS' in settings.env), 'the old account key header is still set');
+    assert.deepStrictEqual(settings.hooks, {
+      SessionStart: [{ hooks: [{ type: 'command', command: `"${sb.engineExe}" code-engine ensure` }] }],
+    });
+    assert.ok(settings.statusLine, 'the savings bar was not set');
 
     const raw = fs.readFileSync(sb.settings, 'utf8');
     assert.ok(raw.startsWith('{\n    "model"'), 'indentation of the file was not kept');
     assert.ok(raw.endsWith('}\n'), 'trailing newline was not kept');
 
-    assert.deepStrictEqual(
-      api.calls.map((c) => `${c.method} ${c.path}`),
-      ['POST /auth/login', 'POST /keys', 'POST /auth/logout']
-    );
-    assertNoKeyLeak(api, [res.stdout, res.stderr]);
+    const device = readJson(sb.deviceFile);
+    assert.deepStrictEqual(device.tools, ['claude']);
+    assert.strictEqual(device.device_hash, deviceHashOf(MACHINE_ID));
+    assert.strictEqual(device.device_key, api.issued[0]);
+    assert.strictEqual((fs.statSync(sb.deviceFile).mode & 0o777) === 0o600 || process.platform === 'win32', true);
+    assert.ok(fs.existsSync(sb.licenseFile), 'license.json was not written');
+    assert.ok(fs.existsSync(sb.engineExe), 'the engine was not installed');
+    assert.ok(fs.existsSync(sb.startup), 'the Startup shortcut was not created');
+
+    const calls = adapterCalls(sb).map((c) => c.fn);
+    assert.ok(calls.includes('openBrowser'));
+    assert.ok(calls.includes('signatureStatus'));
+    assert.ok(calls.includes('writeShortcut'));
+    assert.ok(fs.readFileSync(sb.log, 'utf8').includes('"code-engine","ensure"'));
+    assertNoDeviceKeyText(api, [res.stdout, res.stderr]);
   }));
 
-test('a second connect changes nothing and signs in again only once', () =>
+test('a second connect changes no settings and only refreshes the plan (no new sign-in)', () =>
   withSandbox(async ({ api, sb }) => {
-    const first = await runCli(sb, [], { input: SIGN_IN });
+    const first = await runCli(sb, ['connect']);
     assert.strictEqual(first.code, 0, first.output);
     const before = fs.readFileSync(sb.settings, 'utf8');
-    const callsBefore = api.calls.length;
+    const startsBefore = api.calls.filter((c) => c.path === '/code/cli/start').length;
 
-    const second = await runCli(sb, [], { input: '' });
+    const second = await runCli(sb, ['connect']);
     assert.strictEqual(second.code, 0, second.output);
-    assert.match(second.stdout, /Already connected/);
+    assert.match(second.stdout, /Already connected\. Nothing to change in Claude Code settings\./);
     assert.strictEqual(fs.readFileSync(sb.settings, 'utf8'), before);
-    assert.strictEqual(api.calls.length, callsBefore, 'a second connect called the API');
+    assert.strictEqual(api.calls.filter((c) => c.path === '/code/cli/start').length, startsBefore, 'a second sign-in started');
+    assert.ok(api.calls.some((c) => c.path === '/code/entitlement'));
   }));
 
-test('disconnect removes the settings it created when the file did not exist', () =>
+test('uninstall removes the settings it created, releases the device, and removes the engine and shortcut', () =>
   withSandbox(async ({ api, sb }) => {
     assert.ok(!fs.existsSync(sb.settings));
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
     assert.ok(fs.existsSync(sb.settings));
 
-    const off = await runCli(sb, ['disconnect']);
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
     assert.ok(!fs.existsSync(sb.settings), 'settings.json was left behind');
     assert.ok(!fs.existsSync(sb.state), 'state file was left behind');
-    assertNoKeyLeak(api, [off.stdout, off.stderr]);
+    assert.ok(!fs.existsSync(sb.deviceFile), 'device.json was left behind');
+    assert.ok(!fs.existsSync(sb.licenseFile), 'license.json was left behind');
+    assert.ok(!fs.existsSync(sb.engineRoot), 'the engine was left behind');
+    assert.ok(!fs.existsSync(sb.startup), 'the Startup shortcut was left behind');
+    assert.strictEqual(api.devices.get(api.issued[0]).revoked, true, 'the device was not released');
+    assert.match(off.stdout, /This device is disconnected\. You can connect another device now\./);
+    assertNoDeviceKeyText(api, [off.stdout, off.stderr]);
   }));
 
-test('disconnect restores a value that was there before connect', () =>
-  withSandbox(async ({ sb, api }) => {
-    const manual = `http://127.0.0.1:9/k/manualid01`;
+test('disconnect and logout are aliases of uninstall', () =>
+  withSandbox(async ({ sb }) => {
+    for (const alias of ['disconnect', 'logout']) {
+      assert.strictEqual((await runCli(sb, ['connect'])).code, 0);
+      const off = await runCli(sb, [alias]);
+      assert.strictEqual(off.code, 0, off.output);
+      assert.ok(!fs.existsSync(sb.deviceFile), `${alias} did not release the device`);
+    }
+  }));
+
+test('uninstall restores a value that was there before connect', () =>
+  withSandbox(async ({ sb }) => {
+    const manual = 'http://127.0.0.1:9/manual-gateway';
     writeSettingsFile(sb, JSON.stringify({ env: { FOO: 'bar', ANTHROPIC_BASE_URL: manual } }, null, 2) + '\n');
 
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect', '--force']);
     assert.strictEqual(res.code, 0, res.output);
-    assert.notStrictEqual(readJson(sb.settings).env.ANTHROPIC_BASE_URL, manual);
-
-    const off = await runCli(sb, ['disconnect']);
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
-    const settings = readJson(sb.settings);
+    const settings = readSettings(sb);
     assert.deepStrictEqual(settings, { env: { FOO: 'bar', ANTHROPIC_BASE_URL: manual } });
-    assertNoKeyLeak(api, [off.stdout, off.stderr]);
   }));
 
-test('disconnect leaves a value the user edited alone and says so', () =>
+test('uninstall leaves a value the user edited alone, and says so', () =>
   withSandbox(async ({ sb }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
-
-    const settings = readJson(sb.settings);
+    const settings = readSettings(sb);
     settings.env.ANTHROPIC_BASE_URL = 'https://edited.example/';
     fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
 
-    const off = await runCli(sb, ['disconnect']);
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
     assert.match(off.stdout, /Left alone because they changed since connect: ANTHROPIC_BASE_URL/);
-    const after = readJson(sb.settings);
+    const after = readSettings(sb);
     assert.strictEqual(after.env.ANTHROPIC_BASE_URL, 'https://edited.example/');
-    assert.ok(!('ANTHROPIC_CUSTOM_HEADERS' in after.env), 'our unedited header was not removed');
+    assert.ok(!('ENABLE_TOOL_SEARCH' in after.env) || after.env.ENABLE_TOOL_SEARCH === 'true');
   }));
 
-test('refuses when the desktop app already manages the connection', () =>
+test('a SessionStart hook the user already had is kept on uninstall', () =>
+  withSandbox(async ({ sb }) => {
+    const mine = { hooks: [{ type: 'command', command: 'echo mine' }] };
+    writeSettingsFile(sb, JSON.stringify({ hooks: { SessionStart: [mine] } }, null, 2) + '\n');
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.strictEqual(readSettings(sb).hooks.SessionStart.length, 2);
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.deepStrictEqual(readSettings(sb), { hooks: { SessionStart: [mine] } });
+  }));
+
+test('refuses when the desktop app already manages the connection, before any sign-in', () =>
   withSandbox(async ({ api, sb }) => {
     writeSettingsFile(sb, '{"env":{"FOO":"bar"}}\n');
     fs.writeFileSync(sb.desktopState, '{"version":1}\n');
     const before = fs.readFileSync(sb.settings, 'utf8');
 
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 1);
-    assert.match(res.stderr, /desktop app already connects/);
+    assert.match(res.stderr, /desktop app already connects Claude Code/);
     assert.strictEqual(fs.readFileSync(sb.settings, 'utf8'), before);
-    assert.ok(!fs.existsSync(sb.state));
     assert.strictEqual(api.calls.length, 0, 'the API was called for a refused connect');
   }));
 
-test('refuses another gateway unless --force, and disconnect restores it', () =>
-  withSandbox(async ({ api, sb }) => {
+test('refuses another gateway unless --force, and uninstall restores it', () =>
+  withSandbox(async ({ api, sb, engine }) => {
     const vachi = 'https://gateway.vachi.example/v1';
     writeSettingsFile(sb, JSON.stringify({ env: { ANTHROPIC_BASE_URL: vachi } }, null, 2) + '\n');
     const before = fs.readFileSync(sb.settings, 'utf8');
 
-    const refused = await runCli(sb, [], { input: SIGN_IN });
+    const refused = await runCli(sb, ['connect']);
     assert.strictEqual(refused.code, 1);
     assert.match(refused.stderr, /another gateway/);
     assert.strictEqual(fs.readFileSync(sb.settings, 'utf8'), before);
     assert.strictEqual(api.calls.length, 0);
 
-    const forced = await runCli(sb, ['connect', '--force'], { input: SIGN_IN });
+    const forced = await runCli(sb, ['connect', '--force']);
     assert.strictEqual(forced.code, 0, forced.output);
-    assert.match(readJson(sb.settings).env.ANTHROPIC_BASE_URL, BASE_RE);
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
 
-    const off = await runCli(sb, ['disconnect']);
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
-    assert.strictEqual(readJson(sb.settings).env.ANTHROPIC_BASE_URL, vachi);
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, vachi);
   }));
 
-test('refuses existing custom headers unless --force', () =>
+test('an existing ANTHROPIC_CUSTOM_HEADERS is refused unless --force; --force removes it and uninstall puts it back', () =>
   withSandbox(async ({ api, sb }) => {
     writeSettingsFile(sb, JSON.stringify({ env: { ANTHROPIC_CUSTOM_HEADERS: 'X-Corp-Trace: 1' } }) + '\n');
-    const refused = await runCli(sb, [], { input: SIGN_IN });
+    const refused = await runCli(sb, ['connect']);
     assert.strictEqual(refused.code, 1);
     assert.match(refused.stderr, /ANTHROPIC_CUSTOM_HEADERS is already set/);
     assert.strictEqual(api.calls.length, 0);
 
-    const forced = await runCli(sb, ['--force'], { input: SIGN_IN });
+    const forced = await runCli(sb, ['connect', '--force']);
     assert.strictEqual(forced.code, 0, forced.output);
-    const off = await runCli(sb, ['disconnect']);
+    assert.ok(!('ANTHROPIC_CUSTOM_HEADERS' in readSettings(sb).env));
+
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
-    assert.strictEqual(readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS, 'X-Corp-Trace: 1');
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_CUSTOM_HEADERS, 'X-Corp-Trace: 1');
   }));
 
 test('invalid JSON is refused and the file is never overwritten', () =>
   withSandbox(async ({ api, sb }) => {
     const broken = '{ "env": ';
     writeSettingsFile(sb, broken);
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 1);
     assert.match(res.stderr, /not valid JSON/);
     assert.strictEqual(fs.readFileSync(sb.settings, 'utf8'), broken);
@@ -215,229 +228,216 @@ test('invalid JSON is refused and the file is never overwritten', () =>
 test('an empty settings file is treated as an empty object', () =>
   withSandbox(async ({ sb }) => {
     writeSettingsFile(sb, '');
-    const res = await runCli(sb, [], { input: SIGN_IN });
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
-    assert.match(readJson(sb.settings).env.ANTHROPIC_BASE_URL, BASE_RE);
-
-    const off = await runCli(sb, ['disconnect']);
+    const off = await runCli(sb, ['uninstall']);
     assert.strictEqual(off.code, 0, off.output);
-    assert.deepStrictEqual(readJson(sb.settings), {});
+    // The file existed (empty) before connect, so it stays, as an empty object.
+    assert.deepStrictEqual(readSettings(sb), {});
   }));
 
-test('a wrong password changes nothing', () =>
-  withSandbox(async ({ sb }) => {
-    const res = await runCli(sb, [], { input: `${EMAIL}\nnot-the-password\n` });
-    assert.strictEqual(res.code, 1);
-    assert.match(res.stderr, /Incorrect email or password/);
-    assert.ok(!fs.existsSync(sb.settings));
-    assert.ok(!fs.existsSync(sb.state));
-    assert.ok(!fs.existsSync(sb.homeFile));
-  }));
-
-test('status shows the host and the keep-alive prefix, never the key', () =>
+test('a device limit names the two devices once and keeps waiting; expiring there exits with code 3, with no settings changed', () =>
   withSandbox(async ({ api, sb }) => {
-    const before = await runCli(sb, ['status']);
-    assert.strictEqual(before.code, 0);
-    assert.match(before.stdout, /Not connected/);
-    assert.match(before.stdout, /Tool search: not set/);
+    api.state.deviceLimit = [{ name: 'Office PC' }, { name: 'Home laptop' }];
+    api.state.expireAfterLimitPolls = 2;
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 3, res.output);
+    assert.strictEqual(
+      res.stdout.split('This account already has 2 devices connected').length - 1,
+      1,
+      'the device limit is printed once'
+    );
+    assert.match(res.stdout, /This account already has 2 devices connected: Office PC, Home laptop\./);
+    assert.match(res.stdout, /Or disconnect one in the browser window and approve again; this command is still waiting\./);
+    assert.strictEqual(
+      res.stderr,
+      'The sign-in code expired while this account was still at its device limit. ' +
+        'Disconnect a device, then run this command again. Nothing was changed.\n'
+    );
+    assert.ok(!fs.existsSync(sb.settings));
+    assert.ok(!fs.existsSync(sb.deviceFile));
+    assert.ok(!fs.existsSync(sb.engineRoot), 'the engine was installed past the device limit');
+  }));
 
-    const res = await runCli(sb, [], { input: SIGN_IN });
+test('a device.json the server no longer accepts sends the computer through sign-in again', () =>
+  withSandbox(async ({ api, sb, engine }) => {
+    fs.mkdirSync(path.dirname(sb.deviceFile), { recursive: true });
+    fs.writeFileSync(
+      sb.deviceFile,
+      JSON.stringify({
+        version: 1,
+        api_url: api.url,
+        device_id: 'dev-stale',
+        device_key: 'cs_dev_staleStaleStaleStale00',
+        device_hash: deviceHashOf(MACHINE_ID),
+        tools: ['claude'],
+        created_at: new Date().toISOString(),
+      })
+    );
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.match(res.stdout, /sign-in has expired\. Signing in again\./);
+    assert.strictEqual(readJson(sb.deviceFile).device_key, api.issued[0]);
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
+  }));
+
+test('a trial that has ended still connects the engine, and says Claude works without compression', () =>
+  withSandbox(async ({ api, sb, engine }) => {
+    api.state.plan = 'ended';
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.ok(
+      res.stdout.includes(
+        'Your trial has ended. Subscribe for $5/month at https://code.contextshrink.com/account. ' +
+          'Until then, Claude works normally without compression.'
+      ),
+      res.stdout
+    );
+    assert.ok(!fs.existsSync(sb.licenseFile), 'an expired note was kept');
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
+  }));
+
+test('the engine that does not start leaves Claude Code settings untouched', () =>
+  withSandbox(async ({ sb, engine }) => {
+    engine.state.up = false;
+    const res = await runCli(sb, ['connect'], { env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail' } });
+    assert.strictEqual(res.code, 1, res.output);
+    assert.match(res.stderr, /The ContextShrink engine did not start\. Nothing was changed/);
+    assert.ok(!fs.existsSync(sb.settings), 'settings were written although the engine did not start');
+    engine.state.up = true;
+  }));
+
+test('on a system other than Windows connect exits 1 with the spec message and calls nothing', () =>
+  withSandbox(async ({ api, sb }) => {
+    const res = await runCli(sb, ['connect'], { env: { CONTEXTSHRINK_NPX_TEST_PLATFORM: 'linux' } });
+    assert.strictEqual(res.code, 1);
+    assert.match(res.stderr, /ContextShrink Code runs on Windows today\. macOS and Linux are coming\./);
+    assert.strictEqual(api.calls.length, 0);
+  }));
+
+test('an engine manifest with no url says the engine is not published yet, and nothing is changed', () =>
+  withSandbox(
+    async ({ api, sb }) => {
+      const res = await runCli(sb, ['connect']);
+      assert.strictEqual(res.code, 1, res.output);
+      assert.match(res.stderr, /Engine not published yet\. Nothing was changed\./);
+      assert.strictEqual(api.calls.length, 0);
+      assert.ok(!fs.existsSync(sb.settings));
+    },
+    { manifest: { version: '0.0.0', url: '', sha256: '', size: 0 } }
+  ));
+
+test('an engine download that does not match the manifest is refused and nothing is changed', () =>
+  withSandbox(
+    async ({ api, sb }) => {
+      const res = await runCli(sb, ['connect']);
+      assert.strictEqual(res.code, 1, res.output);
+      assert.match(res.stderr, /did not match the release manifest/);
+      assert.ok(!fs.existsSync(sb.settings));
+      assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)));
+      assert.ok(api.calls.some((c) => c.path === '/engine.zip'));
+    },
+    {
+      // The size in the manifest is one byte more than the served engine.
+      manifest: (api) => ({
+        version: ENGINE_VERSION,
+        url: `${api.url}/engine.zip`,
+        sha256: sha256(ENGINE_ZIP),
+        size: ENGINE_ZIP.length + 1,
+      }),
+    }
+  ));
+
+test('an older 0.2.x connection is taken over: the account header is removed and the old key record retired', () =>
+  withSandbox(async ({ api, sb, engine }) => {
+    const oldBase = 'https://proxy.contextshrink.com/k/0123456789abcdef';
+    const oldHeader = 'X-Horizon-Proxy-Token: cs_live_OLDKEY0123456789abcdefghijk';
+    writeSettingsFile(
+      sb,
+      JSON.stringify({ env: { FOO: 'bar', ANTHROPIC_BASE_URL: oldBase, ANTHROPIC_CUSTOM_HEADERS: oldHeader, ENABLE_TOOL_SEARCH: 'true' } }, null, 2) + '\n'
+    );
+    fs.writeFileSync(
+      sb.state,
+      JSON.stringify({
+        version: 1,
+        settings_existed: true,
+        env_existed: true,
+        previous: {
+          ANTHROPIC_BASE_URL: { present: false },
+          ANTHROPIC_CUSTOM_HEADERS: { present: false },
+          ENABLE_TOOL_SEARCH: { present: false },
+        },
+        written: { ANTHROPIC_BASE_URL: oldBase, ANTHROPIC_CUSTOM_HEADERS: oldHeader, ENABLE_TOOL_SEARCH: 'true' },
+        proxy_host: 'proxy.contextshrink.com',
+        connected_at: new Date().toISOString(),
+      }, null, 2) + '\n'
+    );
+    fs.mkdirSync(path.dirname(sb.legacyHome), { recursive: true });
+    fs.writeFileSync(sb.legacyHome, JSON.stringify({ version: 1, keepalive_id: '0123456789abcdef', device_key_id: 'old-key-id' }));
+
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.match(res.stdout, /The account key from the earlier version is no longer used/);
+    const env = readSettings(sb).env;
+    assert.deepStrictEqual(env, { FOO: 'bar', ANTHROPIC_BASE_URL: engine.url, ENABLE_TOOL_SEARCH: 'true' });
+    assert.ok(!fs.existsSync(sb.legacyHome), 'the old record was kept');
+    assert.strictEqual(readJson(sb.state).version, 2);
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    // The old connect wrote all three keys, so uninstall removes them again.
+    assert.deepStrictEqual(readSettings(sb).env, { FOO: 'bar' });
+    assert.ok(api.calls.some((c) => c.path === '/code/cli/start'), 'the takeover did not sign the computer in');
+  }));
+
+test('status shows the engine, the device, the plan and usage, and never the key', () =>
+  withSandbox(async ({ api, sb, engine }) => {
+    const before = await runCli(sb, ['status']);
+    assert.strictEqual(before.code, 0, before.output);
+    assert.match(before.stdout, /Not connected\./);
+    assert.match(before.stdout, /Device: not connected\./);
+
+    const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
     const status = await runCli(sb, ['status']);
     assert.strictEqual(status.code, 0, status.output);
-    assert.match(status.stdout, /Connected to 127\.0\.0\.1:9 \(keep-alive id [0-9a-f]{4}\.\.\.\)/);
+    assert.match(status.stdout, /Connected through the ContextShrink engine at 127\.0\.0\.1:\d+\./);
     assert.match(status.stdout, /Tool search: on/);
-    assertNoKeyLeak(api, [status.stdout, status.stderr]);
+    assert.match(status.stdout, /Device: .* \(tools: claude\)/);
+    assert.match(status.stdout, /Free trial: 7 days left/);
+    assert.match(status.stdout, /Usage saved today: 22%/);
+    assert.match(status.stdout, /Engine: running\./);
+    assertNoDeviceKeyText(api, [status.stdout, status.stderr]);
   }));
 
-test('logout disconnects, revokes the key and removes the saved state', () =>
-  withSandbox(async ({ api, sb }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-    assert.strictEqual(api.live.size, 1);
-    assert.ok(fs.existsSync(sb.homeFile));
-
-    const out = await runCli(sb, ['logout'], { input: SIGN_IN });
-    assert.strictEqual(out.code, 0, out.output);
-    assert.ok(!fs.existsSync(sb.settings), 'settings were not restored');
-    assert.strictEqual(api.live.size, 0, 'the key was not revoked');
-    assert.ok(!fs.existsSync(sb.homeFile), 'the saved state was not removed');
-    assertNoKeyLeak(api, [out.stdout, out.stderr]);
-  }));
-
-test('login --key stores a pasted key without calling the API', () =>
-  withSandbox(async ({ api, sb }) => {
-    const pasted = 'cs_live_PASTEDKEY0123456789abcdefghijk';
-    const res = await runCli(sb, ['login', '--key'], { input: `${pasted}\n` });
-    assert.strictEqual(res.code, 0, res.output);
-    assert.strictEqual(api.calls.length, 0);
-    assert.strictEqual(readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS, `X-Horizon-Proxy-Token: ${pasted}`);
-    assert.ok(!res.output.includes(pasted), 'the pasted key was printed');
-
-    const bad = await runCli(sb, ['login', '--key', '--force'], { input: 'not-a-key\n' });
-    assert.strictEqual(bad.code, 1);
-    assert.match(bad.stderr, /not a ContextShrink account key/);
-  }));
-
-test('login mints a new key and revokes the one connect made', () =>
-  withSandbox(async ({ api, sb }) => {
-    const first = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(first.code, 0, first.output);
-    const oldHeader = readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS;
-
-    const again = await runCli(sb, ['login'], { input: SIGN_IN });
-    assert.strictEqual(again.code, 0, again.output);
-    const newHeader = readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS;
-    assert.notStrictEqual(newHeader, oldHeader);
-    assert.strictEqual(api.live.size, 1, 'the old key was not revoked');
-    assertNoKeyLeak(api, [again.stdout, again.stderr]);
-  }));
-
-// Rewrites a connected sandbox the way the prototype before tool search left it:
-// no ENABLE_TOOL_SEARCH in settings.json and no record of it in the state file.
-function makePrototypeState(sb) {
-  const settings = readJson(sb.settings);
-  delete settings.env.ENABLE_TOOL_SEARCH;
-  fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
-  const state = readJson(sb.state);
-  delete state.written.ENABLE_TOOL_SEARCH;
-  delete state.previous.ENABLE_TOOL_SEARCH;
-  fs.writeFileSync(sb.state, JSON.stringify(state, null, 2) + '\n');
-}
-
-test('ENABLE_TOOL_SEARCH already "true" is left alone, not recorded, and kept by disconnect', () =>
+test('the command line rejects what 0.3.0 removed, and unknown commands, with exit code 2', () =>
   withSandbox(async ({ sb }) => {
-    writeSettingsFile(sb, JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'true' } }, null, 2) + '\n');
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'true');
-    assert.ok(!res.output.includes('Tool search is off'), 'a "true" value was reported as off');
-    assert.ok(!('ENABLE_TOOL_SEARCH' in readJson(sb.state).written), 'the user value was recorded as ours');
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.deepStrictEqual(readJson(sb.settings), { env: { ENABLE_TOOL_SEARCH: 'true' } });
-  }));
-
-test('ENABLE_TOOL_SEARCH set to another value is left alone, reported, and --force does not change it', () =>
-  withSandbox(async ({ sb }) => {
-    writeSettingsFile(
-      sb,
-      JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'false', ANTHROPIC_CUSTOM_HEADERS: 'X-Corp-Trace: 1' } }, null, 2) + '\n'
-    );
-    const forced = await runCli(sb, ['--force'], { input: SIGN_IN });
-    assert.strictEqual(forced.code, 0, forced.output);
-    assert.match(forced.stdout, /Tool search is off by your choice/);
-    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'false');
-    assert.ok(!('ENABLE_TOOL_SEARCH' in readJson(sb.state).written), 'the user value was recorded as ours');
-
-    const status = await runCli(sb, ['status']);
-    assert.match(status.stdout, /Tool search: off by your choice/);
-
-    const again = await runCli(sb, ['connect'], { input: '' });
-    assert.strictEqual(again.code, 0, again.output);
-    assert.match(again.stdout, /Tool search is off by your choice/);
-    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'false');
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    const after = readJson(sb.settings).env;
-    assert.strictEqual(after.ENABLE_TOOL_SEARCH, 'false');
-    assert.strictEqual(after.ANTHROPIC_CUSTOM_HEADERS, 'X-Corp-Trace: 1');
-  }));
-
-test('disconnect removes the ENABLE_TOOL_SEARCH that connect added', () =>
-  withSandbox(async ({ sb }) => {
-    writeSettingsFile(sb, JSON.stringify({ env: { FOO: 'bar' } }, null, 2) + '\n');
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-    assert.strictEqual(readJson(sb.settings).env.ENABLE_TOOL_SEARCH, 'true');
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.deepStrictEqual(readJson(sb.settings), { env: { FOO: 'bar' } });
-  }));
-
-test('disconnect leaves an ENABLE_TOOL_SEARCH the user changed, and reports it', () =>
-  withSandbox(async ({ sb }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-
-    const settings = readJson(sb.settings);
-    settings.env.ENABLE_TOOL_SEARCH = 'false';
-    fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.match(off.stdout, /Left alone because they changed since connect: ENABLE_TOOL_SEARCH/);
-    const after = readJson(sb.settings);
-    assert.strictEqual(after.env.ENABLE_TOOL_SEARCH, 'false');
-    assert.ok(!('ANTHROPIC_BASE_URL' in after.env), 'our unedited base URL was not removed');
-  }));
-
-test('a state file from before tool search disconnects cleanly', () =>
-  withSandbox(async ({ sb }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-    makePrototypeState(sb);
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.doesNotMatch(off.stdout, /Left alone/);
-    assert.ok(!fs.existsSync(sb.settings), 'settings.json was left behind');
-    assert.ok(!fs.existsSync(sb.state), 'state file was left behind');
-  }));
-
-test('a state file from before tool search keeps a tool search value the user set later', () =>
-  withSandbox(async ({ sb }) => {
-    const res = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(res.code, 0, res.output);
-    makePrototypeState(sb);
-    const settings = readJson(sb.settings);
-    settings.env.ENABLE_TOOL_SEARCH = 'true';
-    fs.writeFileSync(sb.settings, JSON.stringify(settings, null, 2) + '\n');
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.deepStrictEqual(readJson(sb.settings), { env: { ENABLE_TOOL_SEARCH: 'true' } });
-  }));
-
-test('connect on an install from before tool search turns it on without signing in again', () =>
-  withSandbox(async ({ api, sb }) => {
-    const first = await runCli(sb, [], { input: SIGN_IN });
-    assert.strictEqual(first.code, 0, first.output);
-    makePrototypeState(sb);
-    const callsBefore = api.calls.length;
-    const headerBefore = readJson(sb.settings).env.ANTHROPIC_CUSTOM_HEADERS;
-
-    const res = await runCli(sb, [], { input: '' });
-    assert.strictEqual(res.code, 0, res.output);
-    assert.match(res.stdout, /Turned on Claude Code tool search/);
-    assert.strictEqual(api.calls.length, callsBefore, 'the API was called to add tool search');
-    const after = readJson(sb.settings).env;
-    assert.strictEqual(after.ENABLE_TOOL_SEARCH, 'true');
-    assert.strictEqual(after.ANTHROPIC_CUSTOM_HEADERS, headerBefore, 'the account key changed');
-    assert.strictEqual(readJson(sb.state).written.ENABLE_TOOL_SEARCH, 'true');
-
-    const again = await runCli(sb, [], { input: '' });
-    assert.match(again.stdout, /Already connected/);
-    assert.strictEqual(api.calls.length, callsBefore);
-
-    const off = await runCli(sb, ['disconnect']);
-    assert.strictEqual(off.code, 0, off.output);
-    assert.ok(!fs.existsSync(sb.settings), 'settings.json was left behind');
-  }));
-
-test('unknown commands and options exit with code 2', () =>
-  withSandbox(async ({ sb }) => {
+    assert.strictEqual((await runCli(sb, ['login'])).code, 2);
+    assert.strictEqual((await runCli(sb, ['connect', '--key'])).code, 2);
     assert.strictEqual((await runCli(sb, ['bogus'])).code, 2);
     assert.strictEqual((await runCli(sb, ['status', '--nope'])).code, 2);
+    assert.strictEqual((await runCli(sb, ['uninstall', '--force'])).code, 2);
     assert.strictEqual((await runCli(sb, ['--help'])).code, 0);
+    assert.strictEqual((await runCli(sb, ['--version'])).code, 0);
   }));
 
 test('the lib directory keeps no absolute user paths', () => {
   const root = path.join(__dirname, '..');
-  for (const file of ['bin/contextshrink.js', 'lib/cli.js', 'lib/config.js', 'lib/connect.js', 'lib/files.js', 'lib/api.js', 'lib/prompt.js', 'lib/codetab.js', 'lib/codetab-manifest.json']) {
+  for (const file of [
+    'bin/contextshrink.js',
+    'lib/cli.js',
+    'lib/config.js',
+    'lib/connect.js',
+    'lib/files.js',
+    'lib/api.js',
+    'lib/codetab.js',
+    'lib/code-env.js',
+    'lib/code-login.js',
+    'lib/code-engine.js',
+    'lib/code-device.js',
+    'lib/engine-manifest.json',
+    'lib/codetab-manifest.json',
+  ]) {
     const text = fs.readFileSync(path.join(root, file), 'utf8');
     assert.ok(!/C:\\Users\\|\/Users\/|\/home\/[a-z]/i.test(text), `${file} contains a personal path`);
   }
