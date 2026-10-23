@@ -151,31 +151,66 @@ function daysLeft(untilMs, now = Date.now()) {
   return Math.max(0, Math.ceil((untilMs - now) / 86400000));
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// "Nov 1, 2026" in UTC, from an ISO time. '' when the value is not a time.
+function dateTextOf(value) {
+  if (typeof value !== 'string') return '';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '';
+  const day = new Date(time);
+  return `${MONTH_NAMES[day.getUTCMonth()]} ${day.getUTCDate()}, ${day.getUTCFullYear()}`;
+}
+
+// The end of the free week, in unix seconds: free_week_ends_at from the 200 body,
+// else the note's until (older servers). null when neither is a number.
+function freeWeekEndsOf(body) {
+  const raw = body.free_week_ends_at !== undefined && body.free_week_ends_at !== null ? body.free_week_ends_at : body.until;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+// The text for a 402: why the free week is not available, when it resumes, and how to subscribe.
+function freeWeekEndedLine(env, body, toolName) {
+  const detail = body && body.detail && typeof body.detail === 'object' ? body.detail : {};
+  const account = `${codeSiteUrlOf(env)}/account`;
+  const resumes = dateTextOf(detail.free_week_renews_at);
+  if (detail.free_week_reason === undefined && resumes === '') {
+    // An answer without the free-week fields: say only what is known.
+    return `Your free week has ended. Subscribe for $5/month at ${account}. Until then, ${toolName} works normally without compression.`;
+  }
+  const subscribe = `subscribe for $5/month at ${account}`;
+  const lead =
+    detail.free_week_reason === 'device_used'
+      ? "This computer already used this month's free week."
+      : "This month's free week is used.";
+  const when = resumes ? `Compression resumes on ${resumes}` : 'Compression resumes next month';
+  return `${lead} ${when}, or ${subscribe}. ${toolName} works normally meanwhile.`;
+}
+
 /**
- * Shows the plan from a note: "Free trial: N days left", "Subscribed", or the
- * trial-ended text (402). Writes or removes license.json to match. Returns the plan.
+ * Shows the plan from a note: "Free week: N days left", "Subscribed", or the free-week
+ * text (402). Writes or removes license.json to match. Returns the plan.
  */
 function applyPlanNote(ctx, env, note, toolName, now = Date.now()) {
   if (note.status === 200 && note.body && typeof note.body.token === 'string' && note.body.token) {
-    const { plan, until } = note.body;
+    const { plan } = note.body;
     if (plan === 'active') {
       writeLicense(env, note.body.token);
       ctx.out('Subscribed');
       return 'active';
     }
-    if (plan === 'trial' && Number.isFinite(Number(until))) {
+    const endsAt = plan === 'trial' ? freeWeekEndsOf(note.body) : null;
+    if (endsAt !== null) {
       writeLicense(env, note.body.token);
-      const days = daysLeft(Number(until) * 1000, now);
-      ctx.out(`Free trial: ${days} ${days === 1 ? 'day' : 'days'} left`);
+      const days = daysLeft(endsAt * 1000, now);
+      ctx.out(`Free week: ${days} ${days === 1 ? 'day' : 'days'} left (renews monthly).`);
       return 'trial';
     }
   }
   if (note.status === 402) {
     files.removeFile(devicePathsOf(env).license);
-    ctx.out(
-      `Your trial has ended. Subscribe for $5/month at ${codeSiteUrlOf(env)}/account. ` +
-        `Until then, ${toolName} works normally without compression.`
-    );
+    ctx.out(freeWeekEndedLine(env, note.body, toolName));
     return 'ended';
   }
   throw new CsError('ContextShrink could not confirm your plan right now. Nothing was changed. Run this command again.');

@@ -57,6 +57,8 @@ function startCodeApi() {
     state: {
       plan: 'trial',
       trialDays: 7,
+      freeWeekRenewsAt: '2026-11-01T00:00:00Z',
+      freeWeekReason: 'used',
       pollsBeforeApproval: 1,
       deviceLimit: null,
       entitlementStatus: null,
@@ -134,7 +136,16 @@ function startCodeApi() {
       if (body.device_hash !== device.deviceHash) return [403, { detail: 'Device does not match' }];
       if (api.state.entitlementStatus) return [api.state.entitlementStatus, { detail: 'Unavailable' }];
       if (api.state.plan === 'ended') {
-        return [402, { detail: { code: 'plan_required', trial_ended_at: '2026-10-01T00:00:00Z' } }];
+        return [
+          402,
+          {
+            detail: {
+              code: 'plan_required',
+              free_week_renews_at: api.state.freeWeekRenewsAt,
+              free_week_reason: api.state.freeWeekReason,
+            },
+          },
+        ];
       }
       const now = Math.floor(Date.now() / 1000);
       const until = now + (api.state.plan === 'trial' ? api.state.trialDays * 86400 : 30 * 86400);
@@ -150,7 +161,8 @@ function startCodeApi() {
         until,
       };
       const token = `${b64url(JSON.stringify(payload))}.${b64url('test-signature')}`;
-      return [200, { token, plan: api.state.plan, until }];
+      const freeWeekEndsAt = api.state.plan === 'trial' ? until : null;
+      return [200, { token, plan: api.state.plan, until, free_week_ends_at: freeWeekEndsAt }];
     }
     if (method === 'GET' && url === '/code/usage/summary') {
       const device = deviceOf(req);

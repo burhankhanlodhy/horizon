@@ -21,7 +21,7 @@ is not touched.
 ## Price and devices
 
 - 7 days free, no card needed. Then $5 a month. Cancel anytime.
-- Without an active trial or subscription, compression stops and Claude works
+- Without an active free week or subscription, compression stops and Claude works
   normally. Claude never stops working.
 - Up to 2 devices per account. A third device is refused with the two connected
   devices named. Disconnect one, then run the command again.
@@ -44,7 +44,7 @@ npx contextshrink-claude uninstall
 - `connect` (the default) signs this computer in and sets everything up. `--force`
   replaces another gateway or an existing `ANTHROPIC_CUSTOM_HEADERS`; uninstall puts
   them back. `--no-code-tab` skips the Claude Desktop Code tab.
-- `status` shows this device, the plan and trial days left, whether the engine is
+- `status` shows this device, the plan and free-week days left, whether the engine is
   running, and the usage saved today.
 - `uninstall` restores Claude Code's settings and the Code tab. When no ContextShrink
   tool is left on this computer, it also releases the device, stops the engine and

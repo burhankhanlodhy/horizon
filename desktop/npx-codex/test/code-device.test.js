@@ -95,7 +95,7 @@ test('a first connect signs in through the browser and writes device.json with t
     assert.equal(readJson(sb.deviceFile).device_key, api.issued[0]);
     assert.ok(lines.some((line) => line.includes('https://code.contextshrink.com/connect?code=ABCD-BFGH')));
     device.applyPlanNote(ctx, sb.env, result.note, 'Claude');
-    assert.ok(lines.includes('Free trial: 7 days left'), lines.join('\n'));
+    assert.ok(lines.includes('Free week: 7 days left (renews monthly).'), lines.join('\n'));
     assert.ok(fs.existsSync(sb.licenseFile), 'license.json was not written');
     assert.ok(!lines.join('\n').includes(api.issued[0]), 'the device key was printed');
     assert.ok(
@@ -122,19 +122,68 @@ test('a device.json the server no longer accepts (401) sends the computer throug
     assert.ok(api.calls.some((c) => c.method === 'POST' && c.path === '/code/cli/start'));
   }));
 
-test('a trial that has ended prints the subscribe message and removes license.json', () =>
+test('a used free week prints when it resumes and removes license.json', () =>
   withEnv(async ({ api, sb, ctx, lines, deps }) => {
     api.state.plan = 'ended';
     const { note } = await device.ensureDevice(ctx, sb.env, { tool: 'codex', toolName: 'Codex', commandName: 'contextshrink-codex', deps });
     device.applyPlanNote(ctx, sb.env, note, 'Codex');
     assert.ok(
       lines.includes(
-        'Your trial has ended. Subscribe for $5/month at https://code.contextshrink.com/account. ' +
-          'Until then, Codex works normally without compression.'
+        "This month's free week is used. Compression resumes on Nov 1, 2026, or subscribe for $5/month at " +
+          'https://code.contextshrink.com/account. Codex works normally meanwhile.'
       ),
       lines.join('\n')
     );
     assert.ok(!fs.existsSync(sb.licenseFile));
+  }));
+
+// Plan notes are applied directly here: the wording depends only on the note's fields.
+const NOW = Date.UTC(2026, 9, 23, 12);
+const NOW_SECONDS = NOW / 1000;
+const FAKE_TOKEN = `${Buffer.from('{"plan":"trial"}').toString('base64url')}.sig`;
+
+test('the free week shows its days left from free_week_ends_at', () =>
+  withEnv(async ({ sb, ctx, lines }) => {
+    const note = { status: 200, body: { token: FAKE_TOKEN, plan: 'trial', until: 0, free_week_ends_at: NOW_SECONDS + 3 * 86400 } };
+    assert.equal(device.applyPlanNote(ctx, sb.env, note, 'Claude', NOW), 'trial');
+    assert.deepEqual(lines, ['Free week: 3 days left (renews monthly).']);
+    assert.ok(fs.existsSync(sb.licenseFile), 'license.json was not written');
+  }));
+
+test('an answer without free_week_ends_at falls back to until, and one day is singular', () =>
+  withEnv(async ({ sb, ctx, lines }) => {
+    const note = { status: 200, body: { token: FAKE_TOKEN, plan: 'trial', until: NOW_SECONDS + 86400 } };
+    device.applyPlanNote(ctx, sb.env, note, 'Claude', NOW);
+    assert.deepEqual(lines, ['Free week: 1 day left (renews monthly).']);
+  }));
+
+test('a 402 with free_week_reason device_used says this computer used the week', () =>
+  withEnv(async ({ sb, ctx, lines }) => {
+    const note = {
+      status: 402,
+      body: { detail: { code: 'plan_required', free_week_renews_at: '2026-11-01T00:00:00Z', free_week_reason: 'device_used' } },
+    };
+    assert.equal(device.applyPlanNote(ctx, sb.env, note, 'Claude', NOW), 'ended');
+    assert.deepEqual(lines, [
+      'This computer already used this month\'s free week. Compression resumes on Nov 1, 2026, or subscribe for ' +
+        '$5/month at https://code.contextshrink.com/account. Claude works normally meanwhile.',
+    ]);
+  }));
+
+test('a 402 without a renewal date says compression resumes next month', () =>
+  withEnv(async ({ sb, ctx, lines }) => {
+    const note = { status: 402, body: { detail: { code: 'plan_required', free_week_reason: 'used' } } };
+    device.applyPlanNote(ctx, sb.env, note, 'Claude', NOW);
+    assert.match(lines[0], /^This month's free week is used\. Compression resumes next month, or subscribe for \$5\/month at /);
+  }));
+
+test('a 402 with no free-week fields keeps a plain fallback', () =>
+  withEnv(async ({ sb, ctx, lines }) => {
+    device.applyPlanNote(ctx, sb.env, { status: 402, body: { detail: 'Unavailable' } }, 'Codex', NOW);
+    assert.deepEqual(lines, [
+      'Your free week has ended. Subscribe for $5/month at https://code.contextshrink.com/account. ' +
+        'Until then, Codex works normally without compression.',
+    ]);
   }));
 
 test('a subscribed account prints Subscribed', () =>
@@ -191,7 +240,7 @@ test('reportDevice shows the device, the plan and usage, and never the key', () 
     await device.reportDevice(ctx, sb.env, { toolName: 'Claude' });
     const text = lines.join('\n');
     assert.match(text, /Device: .*\(tools: claude\)/);
-    assert.match(text, /Free trial: 7 days left/);
+    assert.match(text, /Free week: 7 days left \(renews monthly\)\./);
     assert.match(text, /Usage saved today: 22%/);
     assert.match(text, /Engine: running\./);
     assert.ok(!text.includes(seeded.device_key), 'the device key was printed');

@@ -26,7 +26,7 @@ const HELP = `contextshrink-codex ${VERSION}
 Usage: npx contextshrink-codex [connect|status|savings|savings-window|chats|${GRAPH_AVAILABLE ? 'graph|' : ''}uninstall]
   connect       Sign this computer in and point local Codex at the ContextShrink engine
   status        Show the device, plan, engine and usage saved today (no model requests)
-  savings       Show usage saved today and the trial days left
+  savings       Show usage saved today and the free week days left
   savings-window Open a live Windows companion window (refreshes every 30s)
 ${GRAPH_HELP}chats list    List local chat IDs and their saved providers (Node 22.13+)
   chats migrate <ID...>|--all [--include-archived] [--apply]

@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 import click
 
@@ -59,11 +60,14 @@ def run_engine(port: int) -> None:
     from horizon.code_engine.engine import Engine
 
     home = home_dir()
+    # The starter saved its environment for us (WMI does not pass one on). Apply it first.
+    runtime.take_launch_environment(home, os.environ)
     lock = runtime.InstanceLock(home / runtime.LOCK_FILE)
     if not lock.acquire():
         click.echo("ContextShrink engine is already running.")
         return
     engine = None
+    code = 0
     try:
         # Set before the proxy reads any flag.
         force_engine_environment(os.environ)
@@ -85,12 +89,21 @@ def run_engine(port: int) -> None:
             prog_name="horizon code-engine run",
             standalone_mode=False,
         )
+    except KeyboardInterrupt:
+        code = 0  # a stop request: the proxy shut down
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+    except BaseException:
+        traceback.print_exc()
+        code = 1
     finally:
         if engine is not None:
-            engine.stop()
+            engine.stop()  # the final usage upload
         engine_hooks.reset()
         runtime.remove_pid(home)
         lock.release()
+    # Last: interpreter shutdown can hang on the proxy's background threads.
+    runtime.exit_now(code)
 
 
 @code_engine.command("ensure")

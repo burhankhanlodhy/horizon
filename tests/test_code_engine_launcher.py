@@ -1,0 +1,309 @@
+"""The engine launcher: WMI first on Windows, the detached start as the fallback, and a stop that waits for the process to end."""
+
+from __future__ import annotations
+
+import base64
+import json
+import subprocess
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+from horizon import bundled_client
+from horizon.code_engine import runtime
+from horizon.code_engine.store import HOME_ENV
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    path = tmp_path / "home"
+    path.mkdir()
+    monkeypatch.setenv(HOME_ENV, str(path))
+    return path
+
+
+@pytest.fixture
+def as_windows(monkeypatch):
+    """Make the runtime take its Windows branches on any host."""
+    monkeypatch.setattr(runtime, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(bundled_client, "cli_command", lambda: ["C:/ContextShrink/horizon.exe"])
+
+
+def _no_popen(*args, **kwargs):
+    raise AssertionError("the detached start must not run when WMI works")
+
+
+def _log_first_line(home) -> str:
+    return (home / runtime.LOG_FILE).read_text(encoding="utf-8").splitlines()[0]
+
+
+# ── Launcher choice ───────────────────────────────────────────────────
+
+
+def test_windows_starts_the_engine_through_wmi_and_not_popen(home, as_windows, monkeypatch) -> None:
+    monkeypatch.setenv("CS_TEST_MARK", "from-the-starter")
+    created = []
+
+    def wmi(command, cwd):
+        created.append((command, cwd))
+
+    result = runtime.spawn_detached(home, 18793, wmi_start=wmi, popen=_no_popen)
+
+    assert result == "wmi"
+    command, cwd = created[0]
+    assert cwd == str(home)
+    assert f'set "{HOME_ENV}={home}"' in command
+    assert "code-engine run --port 18793" in command
+    assert f'>> "{home / runtime.LOG_FILE}" 2>&1' in command
+    assert _log_first_line(home) == "launcher: WMI Win32_Process.Create"
+    saved = json.loads((home / runtime.LAUNCH_ENV_FILE).read_text(encoding="utf-8"))
+    assert saved["env"]["CS_TEST_MARK"] == "from-the-starter"
+
+
+def test_a_wmi_failure_falls_back_to_the_detached_start_and_says_so(
+    home, as_windows, monkeypatch
+) -> None:
+    started = []
+
+    class _Popen:
+        def __init__(self, argv, **kwargs):
+            started.append((argv, kwargs))
+
+    def refused(command, cwd):
+        raise OSError("access is denied")
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
+
+    assert runtime.spawn_detached(home, 18793, wmi_start=refused) == "detached"
+
+    argv, kwargs = started[0]
+    assert argv[-4:] == ["code-engine", "run", "--port", "18793"]
+    assert kwargs["creationflags"] & runtime._DETACHED_PROCESS
+    assert kwargs["creationflags"] & runtime._CREATE_NEW_PROCESS_GROUP
+    assert kwargs["creationflags"] & runtime._CREATE_BREAKAWAY_FROM_JOB
+    assert (
+        _log_first_line(home) == "launcher: detached (WMI start failed: OSError: access is denied)"
+    )
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists(), "the saved environment was left behind"
+
+
+def test_the_detached_start_retries_without_breakaway_when_the_job_refuses_it(
+    home, as_windows, monkeypatch
+) -> None:
+    flags_seen = []
+
+    class _Popen:
+        def __init__(self, argv, **kwargs):
+            flags_seen.append(kwargs["creationflags"])
+            if kwargs["creationflags"] & runtime._CREATE_BREAKAWAY_FROM_JOB:
+                raise PermissionError("breakaway is not allowed")
+
+    def refused(command, cwd):
+        raise OSError("no WMI here")
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
+    runtime.spawn_detached(home, 18793, wmi_start=refused)
+    assert len(flags_seen) == 2
+    assert not flags_seen[1] & runtime._CREATE_BREAKAWAY_FROM_JOB
+
+
+def test_a_home_path_cmd_cannot_carry_falls_back(home, as_windows, monkeypatch) -> None:
+    odd_home = home.parent / "a&b"
+    odd_home.mkdir()
+    monkeypatch.setenv(HOME_ENV, str(odd_home))
+    started = []
+
+    class _Popen:
+        def __init__(self, argv, **kwargs):
+            started.append(argv)
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
+    assert runtime.spawn_detached(odd_home, 18793, wmi_start=lambda c, d: None) == "detached"
+    assert started, "the engine was not started at all"
+    assert "WMI start failed: ValueError" in _log_first_line(odd_home)
+
+
+def test_wmi_command_line_sets_the_home_and_appends_output_to_the_log(home) -> None:
+    command = runtime.wmi_command_line(
+        ["C:/Program Files/Python/python.exe", "-m", "horizon.cli"], home
+    )
+    assert command.startswith('"')
+    assert "/d /s /c" in command
+    assert f'set "{HOME_ENV}={home}" && ' in command
+    assert '"C:/Program Files/Python/python.exe" -m horizon.cli' in command
+    assert f'>> "{home / runtime.LOG_FILE}" 2>&1' in command
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the POSIX start; Windows starts through WMI")
+def test_non_windows_starts_in_a_new_session(home, monkeypatch) -> None:
+    started = []
+
+    class _Popen:
+        def __init__(self, argv, **kwargs):
+            started.append(kwargs)
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
+    assert runtime.spawn_detached(home, 18793) == "detached"
+    assert started[0]["start_new_session"] is True
+
+
+# ── The WMI call ──────────────────────────────────────────────────────
+
+
+def test_the_wmi_call_passes_the_command_by_environment_only(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(argv, 0, stdout="4321\n", stderr="")
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+    runtime._wmi_create('"C:\\cmd.exe" /d /s /c "echo hi"', "C:\\home")
+
+    assert seen["env"]["CONTEXTSHRINK_ENGINE_COMMAND"] == '"C:\\cmd.exe" /d /s /c "echo hi"'
+    assert seen["env"]["CONTEXTSHRINK_ENGINE_DIR"] == "C:\\home"
+    script = base64.b64decode(seen["argv"][-1]).decode("utf-16-le")
+    assert "Win32_Process" in script and "-MethodName Create" in script
+    assert "echo hi" not in script, "the command must not be written into the script"
+    assert "ShowWindow = [uint16]0" in script
+
+
+@pytest.mark.parametrize(
+    "returncode, stdout",
+    [(1, "4321"), (0, ""), (0, "not a pid")],
+)
+def test_the_wmi_call_fails_when_powershell_fails(monkeypatch, returncode, stdout) -> None:
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, returncode, stdout=stdout, stderr=""
+        ),
+    )
+    with pytest.raises(OSError):
+        runtime._wmi_create("cmd", "dir")
+
+
+def test_the_wmi_call_times_out_as_a_failure(monkeypatch) -> None:
+    def slow(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 60)
+
+    monkeypatch.setattr(runtime.subprocess, "run", slow)
+    with pytest.raises(OSError, match="did not answer"):
+        runtime._wmi_create("cmd", "dir")
+
+
+# ── The starter's environment ─────────────────────────────────────────
+
+
+def test_the_engine_applies_the_starters_environment_once(home, monkeypatch) -> None:
+    monkeypatch.setenv("CS_TEST_MARK", "saved")
+    runtime._write_launch_env(home)
+    target: dict[str, str] = {"KEEP": "yes"}
+
+    assert runtime.take_launch_environment(home, target) > 0
+    assert target["CS_TEST_MARK"] == "saved"
+    assert target["KEEP"] == "yes"
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()
+    assert runtime.take_launch_environment(home, {}) == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json", '{"env": ["a"]}', '{"env": {"=C:": "x", "GOOD": 3}}', "[]"],
+)
+def test_a_malformed_saved_environment_applies_nothing(home, content) -> None:
+    (home / runtime.LAUNCH_ENV_FILE).write_text(content, encoding="utf-8")
+    target: dict[str, str] = {}
+    assert runtime.take_launch_environment(home, target) == 0
+    assert target == {}
+    assert not (home / runtime.LAUNCH_ENV_FILE).exists()
+
+
+# ── Stop ──────────────────────────────────────────────────────────────
+
+
+class _Health:
+    """Answers like an engine for ``answers`` calls, then not at all."""
+
+    def __init__(self, answers: int) -> None:
+        self.calls = 0
+        self.answers = answers
+
+    def __call__(self, port=runtime.DEFAULT_PORT, **kwargs):
+        self.calls += 1
+        return {"engine": "test", "ok": True} if self.calls <= self.answers else None
+
+
+def test_stop_reports_stopped_only_when_the_process_has_ended(home, monkeypatch) -> None:
+    runtime.write_pid(home, 4242)
+    alive_checks = []
+
+    def alive(pid):
+        alive_checks.append(pid)
+        return len(alive_checks) < 3  # the port closes at once, the process ends a little later
+
+    monkeypatch.setattr(runtime, "health", _Health(answers=1))
+    monkeypatch.setattr(runtime, "pid_alive", alive)
+    monkeypatch.setattr(
+        runtime, "_kill_pid", lambda pid: pytest.fail("a stopping engine must not be killed")
+    )
+
+    assert runtime.stop(home, 18999, wait_seconds=5) == "stopped"
+    assert len(alive_checks) >= 3
+    assert runtime.read_pid(home) is None
+
+
+def test_stop_never_kills_an_engine_whose_port_closed(home, monkeypatch) -> None:
+    runtime.write_pid(home, 4242)
+    monkeypatch.setattr(runtime, "health", _Health(answers=1))
+    monkeypatch.setattr(runtime, "pid_alive", lambda pid: True)
+    killed = []
+    monkeypatch.setattr(runtime, "_kill_pid", lambda pid: killed.append(pid))
+
+    assert runtime.stop(home, 18999, wait_seconds=0.6) == "still_running"
+    assert killed == []
+
+
+def test_stop_kills_by_pid_only_while_the_engine_still_answers(home, monkeypatch) -> None:
+    runtime.write_pid(home, 4242)
+    monkeypatch.setattr(runtime, "health", lambda port=0, **k: {"engine": "test", "ok": True})
+    killed = []
+    monkeypatch.setattr(runtime, "_kill_pid", lambda pid: killed.append(pid))
+
+    assert runtime.stop(home, 18999, wait_seconds=0.6) == "killed"
+    assert killed == [4242]
+
+
+def test_stop_when_nothing_answers_says_not_running(home, monkeypatch) -> None:
+    runtime.write_pid(home, 4242)
+    monkeypatch.setattr(runtime, "health", lambda port=0, **k: None)
+    assert runtime.stop(home, 18999) == "not_running"
+    assert runtime.read_pid(home) is None
+
+
+def test_pid_alive_knows_this_process_and_an_unused_pid() -> None:
+    import os
+
+    assert runtime.pid_alive(os.getpid()) is True
+    assert runtime.pid_alive(2**31 - 2) is False
+
+
+# ── Exit ──────────────────────────────────────────────────────────────
+
+
+def test_exit_now_flushes_output_and_ends_with_the_given_code() -> None:
+    code = (
+        "import sys\n"
+        "from horizon.code_engine import runtime\n"
+        "sys.stdout.write('flushed')\n"
+        "runtime.exit_now(7)\n"
+        "print('never reached')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert result.returncode == 7
+    assert result.stdout == "flushed"

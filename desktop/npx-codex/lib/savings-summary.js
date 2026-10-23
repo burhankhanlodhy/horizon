@@ -1,8 +1,8 @@
 'use strict';
 const { ApiError } = require('./api');
 
-// Today's usage from GET /code/usage/summary, plus the trial days left (null when
-// there is no trial). Dollar amounts are not shown: the plan is a flat fee.
+// Today's usage from GET /code/usage/summary, plus the free-week days left (null when
+// there is no free week). Dollar amounts are not shown: the plan is a flat fee.
 function summary(data, trialDays = null, now = new Date()) {
   const today = data && data.today;
   if (!today || !Number.isFinite(today.pct) || !Number.isSafeInteger(today.requests) || today.requests < 0) {
@@ -19,7 +19,7 @@ function summary(data, trialDays = null, now = new Date()) {
 }
 
 function format(data) {
-  const trial = data.trialDays === null ? '' : ` · trial ${data.trialDays}d left`;
+  const trial = data.trialDays === null ? '' : ` · free week ${data.trialDays}d left`;
   return `ContextShrink · usage saved ${data.pct}% today${trial}`;
 }
 

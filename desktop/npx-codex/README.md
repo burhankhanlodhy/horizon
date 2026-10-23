@@ -20,7 +20,7 @@ kept as it is. Ordinary ChatGPT chats and cloud tasks are not changed.
 ## Price and devices
 
 - 7 days free, no card needed. Then $5 a month. Cancel anytime.
-- Without an active trial or subscription, compression stops and Codex works normally.
+- Without an active free week or subscription, compression stops and Codex works normally.
   Codex never stops working.
 - Up to 2 devices per account. A third device is refused with the two connected
   devices named. Disconnect one, then run the command again.
@@ -42,9 +42,9 @@ npx contextshrink-codex uninstall
 ```
 
 - `connect` (the default) signs this computer in and points Codex at the engine.
-- `status` shows this device, the plan and trial days left, whether the engine is
+- `status` shows this device, the plan and free-week days left, whether the engine is
   running, and the usage saved today. It makes no model requests.
-- `savings` prints the usage saved today and the trial days left.
+- `savings` prints the usage saved today and the free-week days left.
 - `uninstall` restores the Codex configuration. When no ContextShrink tool is left on
   this computer, it also releases the device, stops the engine and deletes the engine
   files. `disconnect` and `logout` do the same.
@@ -100,7 +100,7 @@ npx contextshrink-codex chats restore CHAT_ID --apply
 npx contextshrink-codex savings-window
 ```
 
-A small window shows the usage saved today and the trial days left. It refreshes every
+A small window shows the usage saved today and the free-week days left. It refreshes every
 30 seconds, and shows "Savings unavailable" on errors or stale data.
 
 ## Development
