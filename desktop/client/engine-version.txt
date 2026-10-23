@@ -1,0 +1,5 @@
+# ContextShrink Code engine version: the engine zip, engine-manifest.json and the R2 path engine/<version>/.
+# Independent of the desktop app version (tauri.conf.json). Bump it whenever the engine changes:
+# horizon/code_engine, the proxy it serves, or desktop/client/engine-requirements.txt.
+# Read by desktop/client/build-engine-embed.ps1 (the first line that is not a comment).
+0.8.0
