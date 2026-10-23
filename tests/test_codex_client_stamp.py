@@ -41,6 +41,13 @@ def test_other_path_is_not_stamped() -> None:
     assert not should_stamp_codex_client("/v1/chat/completions", {"user-agent": CODEX_DESKTOP_UA})
 
 
+def test_chatgpt_signed_in_codex_on_backend_route_is_stamped() -> None:
+    # ChatGPT sign-in sends Responses calls to the backend Codex route, with the Rust CLI UA.
+    headers = {"user-agent": "codex_cli_rs/0.50.0 (Windows 10.0.26100)"}
+    assert should_stamp_codex_client("/backend-api/codex/responses", headers)
+    assert not should_stamp_codex_client("/backend-api/codex/models", headers)
+
+
 def test_recognized_non_codex_client_is_not_stamped() -> None:
     assert not should_stamp_codex_client("/v1/responses", {"user-agent": "claude-code/1.2.3"})
 
