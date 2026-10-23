@@ -1,0 +1,5 @@
+# Cloudflare Pages project behind code.contextshrink.com.
+# Deploy with deploy/cloudflare-pages/deploy.ps1 -Site code (see its README).
+name = "contextshrink-code"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-09-01"

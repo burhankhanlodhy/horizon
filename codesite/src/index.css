@@ -1,0 +1,268 @@
+@import "tailwindcss";
+
+/*
+ * Colours are tokens on :root. Light is the default; dark follows the system
+ * setting unless a data-theme attribute forces one. Utilities below read the
+ * tokens through @theme, so every class flips with the theme.
+ */
+:root {
+  color-scheme: light;
+  --cs-paper: #f0e9da;
+  --cs-paper-2: #e7ddc8;
+  --cs-card: #f8f4ea;
+  --cs-ink: #1d1712;
+  --cs-ink-2: #4a4137;
+  --cs-ink-3: #6b5f50;
+  --cs-line: #d9cfb9;
+  --cs-line-2: #c4b89e;
+  --cs-ember: #c14d1b;
+  --cs-ember-2: #9e3c12;
+  --cs-ember-soft: #f6e0cd;
+  --cs-sage: #4f6344;
+  --cs-sage-soft: #dfe4cf;
+  --cs-shadow: rgba(29, 23, 18, 0.9);
+  --cs-code-bg: #171310;
+  --cs-code-ink: #efe7d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --cs-paper: #171310;
+    --cs-paper-2: #211b16;
+    --cs-card: #211b17;
+    --cs-ink: #f0e9da;
+    --cs-ink-2: #d2c7b3;
+    --cs-ink-3: #aa9e8a;
+    --cs-line: #3a322a;
+    --cs-line-2: #55493c;
+    --cs-ember: #e8703f;
+    --cs-ember-2: #f29366;
+    --cs-ember-soft: #3a2519;
+    --cs-sage: #a4bb93;
+    --cs-sage-soft: #26301f;
+    --cs-shadow: rgba(0, 0, 0, 0.7);
+    --cs-code-bg: #0e0b09;
+    --cs-code-ink: #efe7d6;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --cs-paper: #171310;
+  --cs-paper-2: #211b16;
+  --cs-card: #211b17;
+  --cs-ink: #f0e9da;
+  --cs-ink-2: #d2c7b3;
+  --cs-ink-3: #aa9e8a;
+  --cs-line: #3a322a;
+  --cs-line-2: #55493c;
+  --cs-ember: #e8703f;
+  --cs-ember-2: #f29366;
+  --cs-ember-soft: #3a2519;
+  --cs-sage: #a4bb93;
+  --cs-sage-soft: #26301f;
+  --cs-shadow: rgba(0, 0, 0, 0.7);
+  --cs-code-bg: #0e0b09;
+  --cs-code-ink: #efe7d6;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-paper: var(--cs-paper);
+  --color-paper-2: var(--cs-paper-2);
+  --color-card: var(--cs-card);
+  --color-ink: var(--cs-ink);
+  --color-ink-2: var(--cs-ink-2);
+  --color-ink-3: var(--cs-ink-3);
+  --color-line: var(--cs-line);
+  --color-line-2: var(--cs-line-2);
+  --color-ember: var(--cs-ember);
+  --color-ember-2: var(--cs-ember-2);
+  --color-ember-soft: var(--cs-ember-soft);
+  --color-sage: var(--cs-sage);
+  --color-sage-soft: var(--cs-sage-soft);
+  --color-code-bg: var(--cs-code-bg);
+  --color-code-ink: var(--cs-code-ink);
+}
+
+html {
+  background-color: var(--cs-paper);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--cs-paper);
+  color: var(--cs-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--cs-ember);
+  color: var(--cs-card);
+}
+
+:focus-visible {
+  outline: 2px dashed var(--cs-ember);
+  outline-offset: 3px;
+}
+
+/* Component classes sit in a layer below utilities, so className overrides win. */
+@layer components {
+
+/* ---------- editorial primitives ---------- */
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--cs-ink-2);
+}
+.kicker::before {
+  content: "";
+  width: 26px;
+  height: 2px;
+  background: var(--cs-ember);
+}
+
+/* Cards: hard offset shadow, hairline border. */
+.ink-card {
+  background: var(--cs-card);
+  border: 1.5px solid var(--cs-ink);
+  border-radius: 2px;
+  box-shadow: 6px 6px 0 0 var(--cs-shadow);
+}
+.paper-panel {
+  background: var(--cs-card);
+  border: 1px solid var(--cs-line-2);
+  border-radius: 2px;
+}
+
+/* Buttons. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  padding: 12px 18px;
+  border: 1.5px solid var(--cs-ink);
+  border-radius: 2px;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.btn-ink {
+  background: var(--cs-ink);
+  color: var(--cs-paper);
+}
+.btn-ink:hover:not(:disabled) {
+  background: var(--cs-ember);
+  border-color: var(--cs-ember);
+  color: var(--cs-card);
+  transform: translate(-2px, -2px);
+  box-shadow: 4px 4px 0 0 var(--cs-ink);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--cs-ink);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--cs-ink);
+  color: var(--cs-paper);
+  transform: translate(-2px, -2px);
+  box-shadow: 4px 4px 0 0 var(--cs-ember);
+}
+.btn-danger {
+  background: transparent;
+  color: var(--cs-ember-2);
+  border-color: var(--cs-ember-2);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--cs-ember-soft);
+}
+.btn:active:not(:disabled) {
+  transform: translate(0, 0);
+  box-shadow: none;
+}
+
+/* Dark code panel (install commands). */
+.codeblock {
+  font-family: var(--font-mono);
+  background: var(--cs-code-bg);
+  color: var(--cs-code-ink);
+  border: 1.5px solid var(--cs-ink);
+  border-radius: 4px;
+  box-shadow: 6px 6px 0 0 var(--cs-shadow);
+}
+
+/* Inputs share one look across the auth pages. */
+.field {
+  width: 100%;
+  border-radius: 2px;
+  border: 1.5px solid var(--cs-line-2);
+  background: var(--cs-paper);
+  color: var(--cs-ink);
+  padding: 11px 14px;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.field::placeholder {
+  color: var(--cs-ink-3);
+}
+.field:focus {
+  border-color: var(--cs-ember);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cs-ember) 22%, transparent);
+}
+
+/* Native disclosure for FAQ rows. */
+.faq summary {
+  list-style: none;
+}
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+.faq[open] .faq-icon {
+  transform: rotate(45deg);
+}
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
