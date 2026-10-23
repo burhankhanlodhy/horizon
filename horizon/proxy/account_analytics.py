@@ -24,6 +24,9 @@ from uuid import UUID, uuid4, uuid5
 
 import httpx
 
+from horizon.proxy.auth_mode import classify_auth_mode
+from horizon.proxy.engine_hooks import license_denied
+
 logger = logging.getLogger("horizon.proxy.accounts")
 
 
@@ -38,6 +41,9 @@ class AccountContext:
     emitted: set[str] = field(default_factory=set)
     graph_estimates: dict[str, dict] = field(default_factory=dict)
     graph_estimates_supported: bool = False
+    # "payg" | "oauth" | "subscription": how the inbound request authenticated.
+    # Stamped on every uploaded event so the savings fee can skip subscription logins.
+    auth_mode: str = "payg"
 
 
 _account: ContextVar[AccountContext | None] = ContextVar("verified_proxy_account", default=None)
@@ -60,10 +66,20 @@ def capture_graph_estimates(items) -> None:
         context.graph_estimates = {}
 
 
-def compression_paused() -> bool:
-    """True when the verified account must be served as plain passthrough."""
+def account_compression_paused() -> bool:
+    """True when the verified account has reached its plan's compression cap."""
     context = _account.get()
     return context is not None and not context.compression_allowed
+
+
+def compression_paused() -> bool:
+    """True when the request must be served as plain passthrough.
+
+    Two sources: the verified account's plan cap, and the engine's license
+    gate (``horizon.proxy.engine_hooks``). Both take the same path through
+    ``_horizon_bypass_enabled``.
+    """
+    return account_compression_paused() or license_denied()
 
 
 COMPRESSION_STATUS_HEADER = (b"x-contextshrink-compression", b"paused")
@@ -304,6 +320,7 @@ async def record_account_outcome(
         "cost_usd": cost,
         "pricing_basis": prices.get("basis", "unavailable"),
         "transforms": [str(t)[:150] for t in outcome.transforms_applied][:100],
+        "auth_mode": context.auth_mode,
     }
     if success and keepalive_usd > 0:
         # Only when present: an ordinary row keeps the shape older APIs accept.
@@ -317,8 +334,13 @@ async def record_account_outcome(
         from horizon.proxy.graph_savings import events
 
         for graph_event in events(context, outcome):
-            graph_event.update(user_id=context.user_id, key_id=context.key_id,
-                               runtime_id=context.service.runtime_id, occurred_at=event["occurred_at"])
+            graph_event.update(
+                user_id=context.user_id,
+                key_id=context.key_id,
+                runtime_id=context.service.runtime_id,
+                occurred_at=event["occurred_at"],
+                auth_mode=context.auth_mode,
+            )
             await asyncio.to_thread(context.service._enqueue, graph_event)
     except Exception as exc:
         logger.warning("Graph estimate unavailable (%s)", type(exc).__name__)
@@ -360,6 +382,9 @@ async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
         + (":estimated" if record.get("estimated") else ""),
         "transforms": ["cache_keepalive:ping"],
         "kind": "keepalive",
+        # The owning session's login mode: a ping bills the same subscription
+        # or API key the session was opened with.
+        "auth_mode": getattr(context, "auth_mode", "payg"),
     }
     await asyncio.to_thread(context.service._enqueue, event)
 
@@ -441,6 +466,8 @@ class AccountMiddleware:
             self.service,
             compression_allowed=data.get("compression_allowed", True) is not False,
             graph_estimates_supported=data.get("graph_estimates_supported") is True,
+            # Classified from the inbound headers, before credentials are stripped below.
+            auth_mode=classify_auth_mode(headers).value,
         )
         scope.setdefault("state", {})["account_user_id"] = context.user_id
         # Never send account or service credentials upstream, or trust identity hints.

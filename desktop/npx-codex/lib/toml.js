@@ -29,7 +29,9 @@ function layout(text) {
   }
   return { doc, lines, index };
 }
-function connectText(original, base, key) {
+// The provider carries no account key: the local engine adds nothing and holds the
+// device key itself. ChatGPT sign-in is kept (requires_openai_auth).
+function connectText(original, base) {
   const { doc, lines, index } = layout(original);
   if (doc.model_provider && doc.model_provider !== 'openai') throw new ConfigError('Another model provider already manages Codex. Disconnect it first; no settings were changed.');
   if (doc.openai_base_url || doc.profile || doc.profiles || doc.model_providers?.horizon) {
@@ -45,7 +47,7 @@ function connectText(original, base, key) {
   const block = [START, `[model_providers.${ID}]`, 'name = "ContextShrink"',
     `base_url = ${JSON.stringify(base)}`, 'wire_api = "responses"',
     'requires_openai_auth = true', 'supports_websockets = true',
-    `http_headers = { "X-Horizon-Proxy-Token" = ${JSON.stringify(key)}, "X-Horizon-Model-Catalog" = "codex" }`, END, ''].join(newline);
+    'http_headers = { "X-Horizon-Model-Catalog" = "codex" }', END, ''].join(newline);
   const written = body + separator + block;
   const result = document(written);
   const expected = structuredClone(doc);

@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Build and deploy the landing page and/or dashboard to Cloudflare Pages.
+  Build and deploy the landing page, dashboard and/or ContextShrink Code site
+  (-Site code) to Cloudflare Pages.
 
 .DESCRIPTION
   Builds each site with the production URLs and Turnstile site key baked in,
@@ -10,7 +11,7 @@
   values. See README.md in this folder.
 #>
 param(
-    [ValidateSet("landing", "dashboard")]
+    [ValidateSet("landing", "dashboard", "code")]
     [string[]]$Site = @("landing", "dashboard"),
     [switch]$Create
 )
@@ -26,8 +27,8 @@ $env:VITE_PROXY_URL = "https://proxy.contextshrink.com"
 # Public by design (it is in every page); the secret half lives on the Pi 5.
 $env:VITE_TURNSTILE_SITE_KEY = "0x4AAAAAAFUGeYKmz2vHEYhU"
 
-$projects = @{ landing = "contextshrink-landing"; dashboard = "contextshrink-dashboard" }
-$dirs = @{ landing = "landingpage"; dashboard = "dashboard" }
+$projects = @{ landing = "contextshrink-landing"; dashboard = "contextshrink-dashboard"; code = "contextshrink-code" }
+$dirs = @{ landing = "landingpage"; dashboard = "dashboard"; code = "codesite" }
 
 foreach ($s in $Site) {
     $dir = Join-Path $root $dirs[$s]

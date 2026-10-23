@@ -8,7 +8,7 @@ const NAME = 'contextshrink-npx';
 const PLUGIN = `${NAME}@${NAME}`;
 const VERSION = require('../package.json').version;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const directoryOf = paths => path.join(path.dirname(paths.home), 'npx-ui');
+const directoryOf = paths => path.join(paths.csHome, 'npx-ui');
 const fields = [['statusLine', null], ['extraKnownMarketplaces', NAME], ['enabledPlugins', PLUGIN]];
 
 function valueAt(payload, group, name) {
@@ -28,7 +28,9 @@ function installRuntime(paths) {
   const dir = directoryOf(paths);
   const runtime = path.join(dir, 'savings-runtime.cjs');
   files.writePrivateText(runtime, fs.readFileSync(path.join(__dirname, 'savings-runtime.cjs'), 'utf8'));
-  files.writePrivateJson(path.join(dir, 'ui-config.json'), { state: paths.state, settings: paths.settings, apiUrl: paths.apiUrl });
+  files.writePrivateJson(path.join(dir, 'ui-config.json'), {
+    state: paths.state, settings: paths.settings, device: paths.device, license: paths.license,
+  });
   const plugin = path.join(dir, 'plugin');
   files.writePrivateJson(path.join(plugin, '.claude-plugin', 'plugin.json'), {
     name: NAME, version: VERSION, description: 'ContextShrink savings for this API key today',
@@ -89,7 +91,7 @@ function ensure(ctx, paths, { codeTab = true } = {}) {
     try { files.writeSettings(paths.settings, settings); }
     catch (err) { files.writePrivateJson(paths.state, previousState); throw err; }
     ctx.out(records.length
-      ? 'Savings bar configured. It shows this API key\'s totals today (UTC); open a new session.'
+      ? 'Savings bar configured. It shows your usage saved today; open a new session.'
       : 'Savings bar: your existing display settings were kept.');
   }
 }
@@ -132,7 +134,7 @@ function describe(payload, record) {
     same(valueAt(payload, entry.group, entry.name), entry.value));
   return `Savings bar: terminal ${owns('statusLine') ? 'configured' : 'left alone'}; ` +
     `Code tab ${owns('extraKnownMarketplaces') && owns('enabledPlugins') ? 'configured' : 'left alone'}; ` +
-    'totals for this key today (UTC).';
+    'usage saved today.';
 }
 
 module.exports = { ensure, restore, cleanup, directoryOf, describe };

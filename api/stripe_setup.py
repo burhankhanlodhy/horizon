@@ -3,6 +3,8 @@
 Creates (only when missing):
   * the "ContextShrink Pro" product and its $0/month price (lookup key
     STRIPE_PRO_PRICE_LOOKUP_KEY), which Checkout uses to save a card;
+  * the "ContextShrink Code" product and its $5/month price (lookup key
+    STRIPE_CODE_PRICE_LOOKUP_KEY);
   * a Customer Portal configuration (card updates, invoices, cancel at
     period end);
   * with --webhook-url, a webhook endpoint for the events billing.py handles.
@@ -22,6 +24,7 @@ import sys
 import stripe
 
 PRO_PRICE_LOOKUP_KEY = os.environ.get("STRIPE_PRO_PRICE_LOOKUP_KEY", "contextshrink_pro_monthly")
+CODE_PRICE_LOOKUP_KEY = os.environ.get("STRIPE_CODE_PRICE_LOOKUP_KEY", "contextshrink_code_monthly")
 WEBHOOK_EVENTS = [
     "checkout.session.completed",
     "customer.subscription.created",
@@ -65,6 +68,33 @@ def ensure_pro_price(client: stripe.StripeClient) -> None:
         {"idempotency_key": "contextshrink-pro-price-v1"},
     )
     log(f"Created Pro product {product.id} and price {price.id}")
+
+
+def ensure_code_price(client: stripe.StripeClient) -> None:
+    found = client.v1.prices.list({"lookup_keys": [CODE_PRICE_LOOKUP_KEY], "limit": 1})
+    if found.data:
+        log(f"Code price exists: {found.data[0].id}")
+        return
+    product = client.v1.products.create(
+        {
+            "name": "ContextShrink Code",
+            "description": "Extra usage for Claude Code and Codex. 7 days free, then $5 a month. "
+            "Up to 2 devices.",
+        },
+        {"idempotency_key": "contextshrink-code-product-v1"},
+    )
+    price = client.v1.prices.create(
+        {
+            "product": product.id,
+            "currency": "usd",
+            "unit_amount": 500,
+            "recurring": {"interval": "month"},
+            "lookup_key": CODE_PRICE_LOOKUP_KEY,
+            "nickname": "Code monthly",
+        },
+        {"idempotency_key": "contextshrink-code-price-v1"},
+    )
+    log(f"Created Code product {product.id} and price {price.id}")
 
 
 def ensure_portal(client: stripe.StripeClient, return_url: str) -> None:
@@ -114,6 +144,7 @@ def main() -> None:
     client = stripe.StripeClient(key)
     app_url = os.environ.get("APP_URL", "https://app.contextshrink.com").rstrip("/")
     ensure_pro_price(client)
+    ensure_code_price(client)
     ensure_portal(client, f"{app_url}/subscriptions")
     if args.webhook_url:
         ensure_webhook(client, args.webhook_url, args.print_webhook_secret)

@@ -1,34 +1,32 @@
 'use strict';
 
-// connect, disconnect, status and logout for Claude Code's user settings.
+// connect, uninstall and status for Claude Code's user settings and Code tab.
 //
-// What connect writes, in settings.json under "env":
-//   ANTHROPIC_BASE_URL       <proxy>/k/<keep-alive id>
-//   ANTHROPIC_CUSTOM_HEADERS X-Horizon-Proxy-Token: <account key>
-//   ENABLE_TOOL_SEARCH       "true"   (only when the user has not set it)
-// savings.js also manages the optional display entries outside the env block.
+// What connect writes, in settings.json:
+//   env.ANTHROPIC_BASE_URL        http://127.0.0.1:18793 (the local engine)
+//   env.ANTHROPIC_CUSTOM_HEADERS  removed when present (0.2.x wrote the account key here)
+//   env.ENABLE_TOOL_SEARCH        "true"   (only when the user has not set it)
+//   hooks.SessionStart            "<engine>\horizon.exe" code-engine ensure
+// savings.js also manages the status line entry outside the env block.
 //
-// Before writing, connect records the previous value of each key, and the
-// values it wrote, in a state file next to settings.json. A key that connect
-// did not write has no entry in the state's "written" map. Disconnect restores
-// a key only while it still holds the value this installer wrote.
+// Before writing, connect records the previous value of each key it touches, and the
+// value it wrote (null when it removed the key), in a state file next to settings.json.
+// A key that connect did not write has no entry in the state's "written" map.
+// Uninstall restores a key only while it still holds the value this installer wrote.
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const cfg = require('./config');
 const files = require('./files');
-const api = require('./api');
-const { Cancelled } = require('./prompt');
 const codetab = require('./codetab');
 const savings = require('./savings');
+const device = require('./code-device');
+const engine = require('./code-engine');
+const { CsError, platformOf } = require('./code-env');
 
 /** A refusal: the message is shown as is, and nothing was changed. */
-class Refusal extends Error {}
+class Refusal extends CsError {}
 
-const STATE_VERSION = 1;
-const KEEPALIVE_SHAPE = /^[A-Za-z0-9_-]{8,64}$/;
-const KEY_SHAPE = /^cs_live_[A-Za-z0-9_-]{20,200}$/;
+const STATE_VERSION = 2;
 const { hasOwn } = files;
 
 function hasText(value) {
@@ -56,9 +54,15 @@ function isContextShrinkHost(value, proxyUrl) {
   return url.hostname === 'contextshrink.com' || url.hostname.endsWith('.contextshrink.com');
 }
 
+// A recorded value of null means "connect removed this key": it holds while the key is absent.
+function holds(block, key, value) {
+  if (value === null) return !hasOwn(block, key);
+  return hasOwn(block, key) && block[key] === value;
+}
+
 // True when every key this installer wrote still holds its value.
 function matchesWritten(block, written) {
-  return Object.keys(written).every((key) => hasOwn(block, key) && block[key] === written[key]);
+  return Object.keys(written).every((key) => holds(block, key, written[key]));
 }
 
 function entryOf(block, key) {
@@ -74,63 +78,57 @@ function envBlockOf(payload, settingsFile) {
   return block;
 }
 
+function hooksOf(payload, settingsFile) {
+  const hooks = payload.hooks;
+  if (hooks === undefined) return undefined;
+  if (!files.isPlainObject(hooks)) {
+    throw new Refusal(`"hooks" in ${settingsFile} is not an object, so it was not touched.`);
+  }
+  if (hooks.SessionStart !== undefined && !Array.isArray(hooks.SessionStart)) {
+    throw new Refusal(`"hooks.SessionStart" in ${settingsFile} is not a list, so it was not touched.`);
+  }
+  return hooks;
+}
+
 function readState(file) {
   const state = files.readOwnJson(file, 'contextshrink state file');
   if (!state) return null;
-  // Files from before tool search was added have no record for ENABLE_TOOL_SEARCH.
-  // That is accepted: a missing record means connect never wrote the key.
+  // Version 1 (0.2.x) recorded the account key header; version 2 records null for keys it removed.
   const ok =
-    state.version === STATE_VERSION &&
+    [1, STATE_VERSION].includes(state.version) &&
     files.isPlainObject(state.written) &&
     files.isPlainObject(state.previous) &&
     cfg.MANAGED_KEYS.every((key) => hasOwn(state.written, key)) &&
     Object.keys(state.written).every(
       (key) =>
         cfg.OWNED_KEYS.includes(key) &&
-        typeof state.written[key] === 'string' &&
+        (state.written[key] === null || typeof state.written[key] === 'string') &&
         files.isPlainObject(state.previous[key])
-    );
+    ) &&
+    (state.hook === undefined ||
+      (files.isPlainObject(state.hook) &&
+        files.isPlainObject(state.hook.entry) &&
+        typeof state.hook.hooks_existed === 'boolean' &&
+        typeof state.hook.session_start_existed === 'boolean'));
   if (!ok) {
     throw new Refusal(`${file} is not in a format this version knows. Nothing was changed.`);
   }
   return state;
 }
 
-// The per-computer record: keep-alive id and device key id. Never the key.
-function readHome(paths) {
-  const home = files.readOwnJson(paths.home, 'contextshrink account file');
-  return home || {};
-}
-
-function newKeepaliveId() {
-  return crypto.randomBytes(8).toString('hex');
-}
-
-function deviceKeyName() {
-  const host = (os.hostname() || 'this computer').slice(0, 60);
-  return host + cfg.KEY_NAME_SUFFIX;
-}
-
-async function askCredentials(ctx) {
-  const email = (await ctx.prompter.ask('Email: ')).trim();
-  if (!email) throw new Cancelled();
-  const password = await ctx.prompter.ask('Password: ', { hidden: true });
-  if (!password) throw new Cancelled();
-  return { email, password };
-}
-
-function refuseIfForeign(paths, block, state, force) {
-  if (state || force) return;
-  if (block && hasText(block[cfg.BASE_URL_KEY]) && !isContextShrinkHost(block[cfg.BASE_URL_KEY], paths.proxyUrl)) {
+function refuseIfForeign(paths, block, force) {
+  if (force) return;
+  const base = block && block[cfg.BASE_URL_KEY];
+  if (hasText(base) && base !== paths.engineUrl && !isContextShrinkHost(base, paths.proxyUrl)) {
     throw new Refusal(
-      `ANTHROPIC_BASE_URL already points at ${displayHost(block[cfg.BASE_URL_KEY])}, another gateway. ` +
-        'Remove it, or add --force to replace it (disconnect restores the old value). Nothing was changed.'
+      `ANTHROPIC_BASE_URL already points at ${displayHost(base)}, another gateway. ` +
+        'Remove it, or add --force to replace it (uninstall restores the old value). Nothing was changed.'
     );
   }
   if (block && hasText(block[cfg.HEADERS_KEY])) {
     throw new Refusal(
       'ANTHROPIC_CUSTOM_HEADERS is already set. Remove it, or add --force to replace it ' +
-        '(disconnect restores the old value). Nothing was changed.'
+        '(uninstall restores the old value). Nothing was changed.'
     );
   }
 }
@@ -157,48 +155,77 @@ function reportToolSearch(ctx, plan) {
   }
 }
 
-// The keys this run writes, and the previous value of each key it writes.
-// `gateway` holds the two proxy keys. The previous values of a fresh connect come
-// from settings.json; a re-connect keeps the values recorded by the first one.
-function planWrite({ block, state, gateway, plan }) {
-  const written = { ...gateway };
-  const previous = state ? { ...state.previous } : {};
-  if (!state) {
-    for (const k of cfg.MANAGED_KEYS) previous[k] = entryOf(block || {}, k);
+// The values this run writes (null for a key it removes), and the previous value of
+// every key the state records. A re-connect keeps the values recorded by the first one.
+function planWrite({ block, state, plan, engineUrl }) {
+  const work = block || {};
+  const written = { ...(state ? state.written : {}) };
+  written[cfg.BASE_URL_KEY] = engineUrl;
+  if (hasOwn(work, cfg.HEADERS_KEY) || (state && hasOwn(state.written, cfg.HEADERS_KEY))) {
+    written[cfg.HEADERS_KEY] = null;
   }
-  if (plan.action === 'write') {
-    written[cfg.TOOL_SEARCH_KEY] = cfg.TOOL_SEARCH_VALUE;
-    previous[cfg.TOOL_SEARCH_KEY] = entryOf(block || {}, cfg.TOOL_SEARCH_KEY);
-  } else if (plan.action === 'keep') {
-    written[cfg.TOOL_SEARCH_KEY] = state.written[cfg.TOOL_SEARCH_KEY];
+  if (plan.action === 'write') written[cfg.TOOL_SEARCH_KEY] = cfg.TOOL_SEARCH_VALUE;
+  const previous = { ...(state ? state.previous : {}) };
+  for (const key of Object.keys(written)) {
+    if (!hasOwn(previous, key)) previous[key] = entryOf(work, key);
   }
   return { written, previous };
 }
 
-function nextStateOf(paths, settings, block, state, written, previous) {
+// The SessionStart entry connect appends. The first connect records whether
+// hooks and SessionStart existed, so uninstall can remove them again.
+function planHook(payload, state, entry) {
+  const prior = state && state.hook ? state.hook : null;
+  return {
+    entry,
+    hooks_existed: prior ? prior.hooks_existed : payload.hooks !== undefined,
+    session_start_existed: prior
+      ? prior.session_start_existed
+      : Boolean(payload.hooks && payload.hooks.SessionStart !== undefined),
+  };
+}
+
+function applyHook(payload, oldEntry, entry) {
+  if (payload.hooks === undefined) payload.hooks = {};
+  const current = Array.isArray(payload.hooks.SessionStart) ? payload.hooks.SessionStart : [];
+  const same = (item) => JSON.stringify(item) === JSON.stringify(entry);
+  const sameOld = (item) => oldEntry && JSON.stringify(item) === JSON.stringify(oldEntry);
+  payload.hooks.SessionStart = current.filter((item) => !same(item) && !sameOld(item)).concat([entry]);
+}
+
+// true: our entry was removed. false: it was not found (the user removed or edited it).
+function restoreHook(payload, hook) {
+  const hooks = payload.hooks;
+  if (!files.isPlainObject(hooks) || !Array.isArray(hooks.SessionStart)) return false;
+  const json = JSON.stringify(hook.entry);
+  const list = hooks.SessionStart.filter((item) => JSON.stringify(item) !== json);
+  if (list.length === hooks.SessionStart.length) return false;
+  if (list.length === 0 && !hook.session_start_existed) delete hooks.SessionStart;
+  else hooks.SessionStart = list;
+  if (Object.keys(hooks).length === 0 && !hook.hooks_existed) delete payload.hooks;
+  return true;
+}
+
+function nextStateOf(state, settings, block, written, previous, hook, engineUrl) {
+  // A re-connect keeps the first connect's record of what existed before it.
   return {
     version: STATE_VERSION,
     settings_existed: state ? state.settings_existed : settings.exists,
     env_existed: state ? state.env_existed : block !== undefined,
     previous,
     written,
-    proxy_host: new URL(paths.proxyUrl).host,
-    connected_at: new Date().toISOString(),
+    hook,
+    engine_url: engineUrl,
+    connected_at: state && state.connected_at ? state.connected_at : new Date().toISOString(),
     ...(state && state.ui ? { ui: state.ui } : {}),
   };
 }
 
-function withKeys(block, written) {
-  const next = block || {};
-  for (const k of Object.keys(written)) next[k] = written[k];
-  return next;
-}
-
 // Writes the state, then settings.json. The state goes first, so a settings write
 // that fails leaves a state that matches the file; the old state is put back then.
-function persist(paths, settings, state, nextState, nextBlock) {
-  settings.payload.env = nextBlock;
+function persist(paths, settings, state, nextState, settingsChanged) {
   files.writePrivateJson(paths.state, nextState);
+  if (!settingsChanged) return;
   try {
     files.writeSettings(paths.settings, settings);
   } catch (err) {
@@ -209,18 +236,39 @@ function persist(paths, settings, state, nextState, nextBlock) {
 }
 
 async function finishConnect(ctx, paths, options) {
-  const code = await codetab.setUpCodeTab(ctx, paths, options);
+  const code = await codetab.setUpCodeTab(ctx, { settings: paths.settings, engineUrl: paths.engineUrl }, options);
   savings.ensure(ctx, paths, { codeTab: !options.skip });
   return code;
 }
 
+// Removes the 0.2.x per-computer record. Its account key stays active until revoked there.
+function retireLegacyRecord(ctx, paths) {
+  let legacy = null;
+  try {
+    legacy = files.readOwnJson(paths.legacyHome, 'contextshrink account file');
+  } catch {
+    legacy = null;
+  }
+  if (!legacy) return;
+  files.removeFile(paths.legacyHome);
+  if (legacy.device_key_id) {
+    ctx.out('The account key from the earlier version is no longer used. Revoke it on the API Keys page.');
+  }
+}
+
 /**
- * Connects Claude Code to the hosted proxy. `login` always mints a new key, even
- * when already connected; `keyFromStdin` uses a key the user pastes instead of
- * signing in. `codeTab` false skips the Claude Desktop Code tab part (Windows).
+ * Connects Claude Code to the local engine on this computer. Windows only. Order:
+ * device sign-in, engine install, plan note, engine start, Startup shortcut, then
+ * the settings. Nothing is written to Claude Code until the engine answers.
  */
-async function connect(ctx, { force = false, login = false, keyFromStdin = false, codeTab = true } = {}) {
-  const paths = cfg.resolvePaths(ctx.env);
+async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
+  const env = ctx.env;
+  const paths = cfg.resolvePaths(env);
+  if (platformOf(env) !== 'win32') {
+    throw new Refusal('ContextShrink Code runs on Windows today. macOS and Linux are coming.');
+  }
+  const manifest = engine.loadManifest(env);
+  if (!manifest.published) throw new Refusal(engine.UNPUBLISHED);
   if (fs.existsSync(paths.desktopState)) {
     throw new Refusal(
       'The ContextShrink desktop app already connects Claude Code on this computer. ' +
@@ -228,120 +276,76 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     );
   }
 
+  const adapter = deps.adapter || engine.resolveAdapter(env);
   const settings = files.readSettings(paths.settings);
   const block = envBlockOf(settings.payload, paths.settings);
+  hooksOf(settings.payload, paths.settings);
   const state = readState(paths.state);
-  const home = readHome(paths);
   const plan = toolSearchPlan(block, state);
-
   if (state) {
-    if (matchesWritten(block || {}, state.written)) {
-      if (!login) {
-        if (plan.action === 'write') {
-          // Connected by an earlier version, which did not set tool search. Add it
-          // now. The proxy keys stay as they are, so no sign-in is needed.
-          const gateway = Object.fromEntries(cfg.MANAGED_KEYS.map((k) => [k, state.written[k]]));
-          const { written, previous } = planWrite({ block, state, gateway, plan });
-          const nextBlock = withKeys(block, written);
-          persist(paths, settings, state, nextStateOf(paths, settings, block, state, written, previous), nextBlock);
-          ctx.out('Turned on Claude Code tool search (ENABLE_TOOL_SEARCH=true).');
-          return finishConnect(ctx, paths, { skip: !codeTab });
-        }
-        ctx.out('Already connected. Nothing to change.');
-        reportToolSearch(ctx, plan);
-        return finishConnect(ctx, paths, { skip: !codeTab });
-      }
-    } else if (!force) {
+    if (!matchesWritten(block || {}, state.written) && !force) {
       throw new Refusal(
         'Claude Code settings changed since contextshrink connected them. ' +
-          'Run "npx contextshrink-claude disconnect" to restore them, or add --force to connect again. Nothing was changed.'
+          'Run "npx contextshrink-claude uninstall" to restore them, or add --force to connect again. Nothing was changed.'
       );
     }
   } else {
-    refuseIfForeign(paths, block, state, force);
+    refuseIfForeign(paths, block, force);
   }
 
-  let key;
-  let deviceKeyId = null;
-  let token = null;
-  try {
-    if (keyFromStdin) {
-      const typed = (await ctx.prompter.ask('Account key (cs_live_...): ', { hidden: true })).trim();
-      if (!KEY_SHAPE.test(typed)) {
-        throw new Refusal('That is not a ContextShrink account key (it starts with cs_live_). Nothing was changed.');
-      }
-      key = typed;
-    } else {
-      const creds = await askCredentials(ctx);
-      token = await api.signIn(paths.apiUrl, creds.email, creds.password);
-      const created = await api.createDeviceKey(paths.apiUrl, token, deviceKeyName());
-      key = created.key;
-      deviceKeyId = created.id;
-    }
+  const beforeJson = JSON.stringify(settings.payload);
+  const { note } = await device.ensureDevice(ctx, env, {
+    tool: 'claude',
+    toolName: 'Claude',
+    commandName: 'contextshrink-claude',
+    deps: { adapter, sleep: deps.sleep },
+  });
+  const exe = await engine.installEngine(ctx, env, manifest, adapter);
+  device.applyPlanNote(ctx, env, note, 'Claude');
+  await engine.startEngine(env, exe, adapter);
+  await engine.installStartup(env, exe, adapter);
 
-    const keepalive =
-      typeof home.keepalive_id === 'string' && KEEPALIVE_SHAPE.test(home.keepalive_id)
-        ? home.keepalive_id
-        : newKeepaliveId();
-    const gateway = {
-      [cfg.BASE_URL_KEY]: `${paths.proxyUrl}/k/${keepalive}`,
-      [cfg.HEADERS_KEY]: `${cfg.PROXY_TOKEN_HEADER}: ${key}`,
-    };
-    const { written, previous } = planWrite({ block, state, gateway, plan });
-    const nextState = nextStateOf(paths, settings, block, state, written, previous);
-    const nextBlock = withKeys(block, written);
-
-    // The key id is recorded first, so a failure below can still be cleaned up.
-    files.writePrivateJson(paths.home, {
-      version: 1,
-      keepalive_id: keepalive,
-      device_key_id: deviceKeyId,
-      updated_at: new Date().toISOString(),
-    });
-    persist(paths, settings, state, nextState, nextBlock);
-
-    // A key from an earlier connect is ours. Revoke it now the new one is in place.
-    if (token && home.device_key_id && home.device_key_id !== deviceKeyId) {
-      try {
-        await api.revokeDeviceKey(paths.apiUrl, token, home.device_key_id);
-      } catch {
-        ctx.out('Could not revoke the key from the earlier connect. Revoke it on the API Keys page.');
-      }
-    }
-    if (!token && home.device_key_id) {
-      ctx.out('The key from the earlier login is still active. Revoke it on the API Keys page.');
-    }
-  } catch (err) {
-    // A key made in this run must not stay active when nothing points at it.
-    if (token && deviceKeyId) {
-      try {
-        await api.revokeDeviceKey(paths.apiUrl, token, deviceKeyId);
-      } catch {
-        // Reported below with the original error; the key can be revoked on the API Keys page.
-      }
-    }
-    throw err;
-  } finally {
-    if (token) await api.signOut(paths.apiUrl, token);
+  const entry = { hooks: [{ type: 'command', command: `"${exe}" code-engine ensure` }] };
+  const { written, previous } = planWrite({ block, state, plan, engineUrl: paths.engineUrl });
+  const hook = planHook(settings.payload, state, entry);
+  const nextBlock = block || {};
+  for (const key of Object.keys(written)) {
+    if (written[key] === null) delete nextBlock[key];
+    else nextBlock[key] = written[key];
   }
+  settings.payload.env = nextBlock;
+  applyHook(settings.payload, state && state.hook ? state.hook.entry : null, entry);
+  const settingsChanged = JSON.stringify(settings.payload) !== beforeJson;
+  const nextState = nextStateOf(state, settings, block, written, previous, hook, paths.engineUrl);
+  const stateChanged = !state || JSON.stringify(nextState) !== JSON.stringify(state);
+  if (settingsChanged || stateChanged) persist(paths, settings, state, nextState, settingsChanged);
+  retireLegacyRecord(ctx, paths);
 
-  ctx.out(login ? 'Saved a new account key for this computer.' : 'Connected.');
-  ctx.out(`Claude Code now sends its requests to ${new URL(paths.proxyUrl).host}.`);
-  if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
+  if (!settingsChanged && state) {
+    ctx.out('Already connected. Nothing to change in Claude Code settings.');
+  } else {
+    ctx.out('Connected. Claude Code now sends its requests through the ContextShrink engine on this computer.');
+    if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
+    ctx.out('Start a new Claude Code session to use the connection.');
+  }
   reportToolSearch(ctx, plan);
-  ctx.out('Start a new Claude Code session to use the connection.');
   return finishConnect(ctx, paths, { skip: !codeTab });
 }
 
 /**
- * Restores the Code tab (Windows) and the settings this installer changed. The Code
- * tab is restored first, and a key the user edited is left alone.
+ * Restores the Code tab (Windows) and the settings this installer changed, then
+ * leaves the device: the device is released only when no ContextShrink tool is left.
  */
-async function disconnect(ctx) {
-  const paths = cfg.resolvePaths(ctx.env);
-  const codeTabCode = await codetab.undoCodeTab(ctx);
-  const terminalCode = await disconnectTerminal(ctx);
-  return codeTabCode || terminalCode;
+async function uninstall(ctx, { deps = {} } = {}) {
+  const undone = await codetab.undoCodeTab(ctx);
+  await disconnectTerminal(ctx);
+  if (undone !== 0) {
+    // The device stays registered while the Code tab still points at the engine.
+    ctx.err('Device not released, because the Code tab is still set up. Run uninstall again after fixing it.');
+    return undone;
+  }
+  await device.leaveDevice(ctx, ctx.env, { tool: 'claude', deps });
+  return 0;
 }
 
 async function disconnectTerminal(ctx) {
@@ -361,7 +365,7 @@ async function disconnectTerminal(ctx) {
   for (const key of cfg.OWNED_KEYS) {
     // No record means connect never wrote this key (or an older version did not set it).
     if (!hasOwn(state.written, key)) continue;
-    if (hasOwn(work, key) && work[key] === state.written[key]) {
+    if (holds(work, key, state.written[key])) {
       const prev = state.previous[key];
       if (prev.present) work[key] = prev.value;
       else delete work[key];
@@ -370,8 +374,13 @@ async function disconnectTerminal(ctx) {
       left.push(key);
     }
   }
+  let hookChanged = false;
+  if (state.hook) {
+    if (restoreHook(settings.payload, state.hook)) hookChanged = true;
+    else left.push('the SessionStart hook');
+  }
 
-  if (restored.length || uiResult.changed) {
+  if (restored.length || uiResult.changed || hookChanged) {
     if (state.env_existed === false && Object.keys(work).length === 0) {
       delete settings.payload.env;
     } else {
@@ -386,17 +395,14 @@ async function disconnectTerminal(ctx) {
   files.removeFile(paths.state);
   savings.cleanup(paths, settings.payload);
 
-  if (restored.length) ctx.out(`Restored: ${restored.join(', ')}.`);
+  if (restored.length || hookChanged) ctx.out(`Restored: ${[...restored, ...(hookChanged ? ['SessionStart hook'] : [])].join(', ')}.`);
   else ctx.out('No settings needed restoring.');
-  if (left.length) {
-    ctx.out(`Left alone because they changed since connect: ${left.join(', ')}.`);
-  }
+  if (left.length) ctx.out(`Left alone because they changed since connect: ${left.join(', ')}.`);
   if (uiResult.left.length) ctx.out('Kept savings-bar settings you changed since connect.');
-  ctx.out('Your account key stays active until you run logout or revoke it on the API Keys page.');
   return 0;
 }
 
-/** Reports the connection state. Never prints the key. */
+/** Reports the connection, the device and the engine. Never prints the device key. */
 async function status(ctx) {
   const paths = cfg.resolvePaths(ctx.env);
   if (fs.existsSync(paths.desktopState)) {
@@ -408,14 +414,11 @@ async function status(ctx) {
   const block = envBlockOf(settings.payload, paths.settings) || {};
 
   if (state) {
-    const host = displayHost(state.written[cfg.BASE_URL_KEY]);
-    const match = /\/k\/([A-Za-z0-9_-]+)$/.exec(state.written[cfg.BASE_URL_KEY]);
-    const idPrefix = match ? `${match[1].slice(0, 4)}...` : 'none';
     if (matchesWritten(block, state.written)) {
-      ctx.out(`Connected to ${host} (keep-alive id ${idPrefix}).`);
+      ctx.out(`Connected through the ContextShrink engine at ${displayHost(paths.engineUrl)}.`);
     } else {
-      ctx.out(`Changed: settings.json no longer matches what contextshrink wrote (${host}).`);
-      ctx.out('Run "npx contextshrink-claude disconnect" to restore them.');
+      ctx.out('Changed: settings.json no longer matches what contextshrink wrote.');
+      ctx.out('Run "npx contextshrink-claude uninstall" to restore them.');
     }
   } else if (hasText(block[cfg.BASE_URL_KEY])) {
     ctx.out(`Not connected by contextshrink. ANTHROPIC_BASE_URL points at ${displayHost(block[cfg.BASE_URL_KEY])}.`);
@@ -424,6 +427,7 @@ async function status(ctx) {
   }
   ctx.out(toolSearchLine(block));
   if (state) ctx.out(savings.describe(settings.payload, state.ui));
+  await device.reportDevice(ctx, ctx.env, { toolName: 'Claude' });
   await codetab.codeTabStatus(ctx);
   return 0;
 }
@@ -436,48 +440,4 @@ function toolSearchLine(block) {
   return 'Tool search: not set (ENABLE_TOOL_SEARCH is absent; connect sets it to "true").';
 }
 
-/**
- * Disconnects, then revokes this computer's account key. Revoking needs a
- * sign-in, so the user is asked for their credentials again.
- */
-async function logout(ctx) {
-  const paths = cfg.resolvePaths(ctx.env);
-  const undone = await disconnect(ctx);
-  if (undone !== 0) {
-    ctx.err('Logout stopped before revoking the key, because the Code tab is still set up. Run logout again after fixing it.');
-    return undone;
-  }
-  const saved = files.readOwnJson(paths.home, 'contextshrink account file');
-  if (!saved) {
-    ctx.out('No saved contextshrink state to remove.');
-    return 0;
-  }
-  if (!saved.device_key_id) {
-    files.removeFile(paths.home);
-    ctx.out('The saved key was pasted with "login --key", so it was not revoked here. Revoke it on the API Keys page.');
-    return 0;
-  }
-
-  ctx.out('Sign in once more to revoke this computer\'s account key.');
-  let creds;
-  try {
-    creds = await askCredentials(ctx);
-  } catch (err) {
-    if (err instanceof Cancelled) {
-      ctx.out('Skipped. The account key stays active until you revoke it on the API Keys page. Run logout again to retry.');
-      return 0;
-    }
-    throw err;
-  }
-  const token = await api.signIn(paths.apiUrl, creds.email, creds.password);
-  try {
-    await api.revokeDeviceKey(paths.apiUrl, token, saved.device_key_id);
-  } finally {
-    await api.signOut(paths.apiUrl, token);
-  }
-  files.removeFile(paths.home);
-  ctx.out('Revoked the account key and removed the saved sign-in state.');
-  return 0;
-}
-
-module.exports = { Refusal, connect, disconnect, status, logout, isContextShrinkHost, displayHost };
+module.exports = { Refusal, connect, uninstall, status, isContextShrinkHost, displayHost };
