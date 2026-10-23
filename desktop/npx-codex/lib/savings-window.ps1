@@ -53,18 +53,15 @@ function Update-Savings {
     try {
         $data = [System.IO.File]::ReadAllText($SnapshotPath) | ConvertFrom-Json
         $stamp = [DateTimeOffset]::Parse([string]$data.updatedAt, $invariant)
-        if ($data.version -ne 1 -or $data.available -ne $true -or $null -eq $data.pct -or $null -eq $data.netUsd -or $null -eq $data.requests -or ([DateTimeOffset]::UtcNow - $stamp).TotalSeconds -gt 90) { throw 'Unavailable' }
+        if ($data.version -ne 1 -or $data.available -ne $true -or $null -eq $data.pct -or $null -eq $data.requests -or ([DateTimeOffset]::UtcNow - $stamp).TotalSeconds -gt 90) { throw 'Unavailable' }
         $percent = [double]$data.pct
-        $money = [double]$data.netUsd
         $requests = [double]$data.requests
-        if ([double]::IsNaN($money) -or [double]::IsInfinity($money) -or $percent -lt 0 -or $percent -gt 100 -or $requests -lt 0) { throw 'Invalid' }
-        $term = if ($money -lt 0) { 'Net cost' } else { 'Net saved' }
-        # Same rule as the npx savings line: cents from $0.01, up to four decimals below a cent.
-        $abs = [Math]::Abs($money)
-        $amount = if ($abs -eq 0) { '$0.00' } elseif ($abs -ge 0.005) { '$' + $abs.ToString('F2', $invariant) } elseif ($abs -ge 0.00005) { '$' + $abs.ToString('F4', $invariant).TrimEnd('0') } else { '<$0.0001' }
-        $stats.Text = 'Trimmed ' + $percent.ToString('0', $invariant) + '%' + $dot + $term + ' ' + $amount
-        $scope.Text = $requests.ToString('0', $invariant) + ' requests' + $dot + 'This key today (UTC)'
-        $updated.Text = 'Estimated token costs' + $dot + 'Updated ' + $stamp.ToLocalTime().ToString('HH:mm:ss')
+        if ($percent -lt 0 -or $percent -gt 100 -or $requests -lt 0) { throw 'Invalid' }
+        # Usage only, no dollar amounts: the plan is a flat fee.
+        $stats.Text = 'Usage saved ' + $percent.ToString('0', $invariant) + '% today'
+        if ($null -ne $data.trialDays) { $stats.Text += $dot + 'trial ' + ([int]$data.trialDays).ToString($invariant) + 'd left' }
+        $scope.Text = $requests.ToString('0', $invariant) + ' requests' + $dot + 'This computer today (UTC)'
+        $updated.Text = 'ContextShrink Code' + $dot + 'Updated ' + $stamp.ToLocalTime().ToString('HH:mm:ss')
         $stats.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#72DFBD')
     } catch {
         $stats.Text = 'Savings unavailable'

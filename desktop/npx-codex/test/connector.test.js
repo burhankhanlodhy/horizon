@@ -2,58 +2,42 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const http = require('node:http');
-const { execFile } = require('node:child_process');
 const { parse } = require('smol-toml');
 const { connectText, restore, ID } = require('../lib/toml');
-const KEY = 'cs_live_TESTabcdefghijklmnopqrstuv123';
+const code = require('./code-support');
+const { MACHINE_ID } = code;
+const { deviceHashOf } = require('../lib/code-device');
+
 const BIN = path.join(__dirname, '../bin/contextshrink-codex.js');
+const DEVICE_KEY_RE = /cs_dev_[A-Za-z0-9_-]+/;
+
+// A sandbox with its own CODEX_HOME, a fake API and a fake engine.
 async function fixture(fn) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-codex-test-'));
-  const home = path.join(root, 'home');
-  const dir = path.join(home, '.codex');
-  fs.mkdirSync(dir, { recursive: true });
-  const calls = [], live = new Map(), issued = [];
-  let seq = 0;
-  const server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', c => { raw += c; });
-    req.on('end', () => {
-      const body = raw ? JSON.parse(raw) : {};
-      calls.push({ path: req.url, method: req.method, headers: req.headers, body });
-      const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(data ? JSON.stringify(data) : ''); };
-      if (req.url === '/auth/login') return body.email === 'test@example.test' && body.password === 'test-pass'
-        ? send(200, { token: 'session' }) : send(401, { detail: 'Invalid' });
-      if (req.url === '/auth/logout') return send(204);
-      if (req.url === '/usage/key-summary') return live.has([...live.entries()].find(([, key]) => req.headers.authorization === `Bearer ${key}`)?.[0])
-        ? send(200, { scope: 'key', period: 'today_utc', requests: 4, tokens_before: 1000, tokens_saved: 250, savings_usd: 0.12 }) : send(401);
-      if (req.headers.authorization !== 'Bearer session') return send(401);
-      if (req.url === '/keys') {
-        const id = `00000000-0000-4000-8000-${String(++seq).padStart(12, '0')}`;
-        const key = KEY + seq;
-        issued.push(key); live.set(id, key);
-        return send(201, { id, key });
-      }
-      if (req.method === 'DELETE' && req.url.startsWith('/keys/')) { live.delete(req.url.slice(6)); return send(204); }
-      send(404);
-    });
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot || '', HOME: home, USERPROFILE: home,
-    CODEX_HOME: dir, TEMP: root, TMP: root, LOCALAPPDATA: path.join(root, 'local'), APPDATA: path.join(root, 'roaming'),
-    CONTEXTSHRINK_API_URL: `http://127.0.0.1:${server.address().port}`, CONTEXTSHRINK_PROXY_URL: `http://127.0.0.1:${server.address().port}` };
-  const config = path.join(dir, 'config.toml'), state = path.join(dir, '.contextshrink-npx-codex.json');
-  const run = (args = [], input = 'test@example.test\ntest-pass\n') => new Promise(resolve => {
-    const child = execFile(process.execPath, [BIN, ...args], { cwd: root, env, timeout: 10000, windowsHide: true }, (err, stdout, stderr) => resolve({ code: err ? err.code || 1 : 0, stdout, stderr, output: stdout + stderr }));
-    child.stdin.end(input);
-  });
-  try { await fn({ root, home, dir, env, config, state, calls, live, issued, run }); }
-  finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); }
+  const api = await code.startCodeApi();
+  const engine = await code.startFakeEngine();
+  const sb = code.makeCodeSandbox(api, engine);
+  sb.dir = path.join(sb.home, '.codex');
+  fs.mkdirSync(sb.dir, { recursive: true });
+  sb.env.CODEX_HOME = sb.dir;
+  sb.config = path.join(sb.dir, 'config.toml');
+  sb.state = path.join(sb.dir, '.contextshrink-npx-codex.json');
+  const run = (args = []) => code.runBin(BIN, sb, args);
+  try {
+    await fn({ api, engine, sb, run, dir: sb.dir, config: sb.config, state: sb.state });
+  } finally {
+    sb.cleanup();
+    await engine.close();
+    await api.close();
+  }
 }
 
-test('connect configures a ChatGPT-auth Responses provider with separate gateway header', () => fixture(async f => {
+function assertNoDeviceKey(api, texts) {
+  for (const key of api.issued) for (const text of texts) assert.ok(!text.includes(key), 'a device key was printed');
+  for (const text of texts) assert.ok(!DEVICE_KEY_RE.test(text), 'a device key-shaped value was printed');
+}
+
+test('connect points a ChatGPT-auth Responses provider at the engine, with no account key header', () => fixture(async f => {
   const original = '# keep comment\nmodel = "my-existing-model"\n[features]\nfoo = true\n';
   fs.writeFileSync(f.config, original);
   const res = await f.run(); assert.equal(res.code, 0, res.output);
@@ -61,103 +45,177 @@ test('connect configures a ChatGPT-auth Responses provider with separate gateway
   assert.equal(config.model_provider, ID); assert.equal(config.model, 'my-existing-model'); assert.equal(config.features.foo, true);
   assert.ok(raw.includes(original));
   assert.equal(provider.requires_openai_auth, true); assert.equal(provider.supports_websockets, true);
-  assert.equal(provider.wire_api, 'responses'); assert.match(provider.base_url, /\/k\/[a-f0-9]{24}\/v1$/);
-  assert.equal(provider.http_headers['X-Horizon-Proxy-Token'], f.issued[0]);
+  assert.equal(provider.wire_api, 'responses');
+  assert.equal(provider.base_url, `${f.engine.url}/v1`);
+  assert.deepEqual(Object.keys(provider.http_headers), ['X-Horizon-Model-Catalog']);
   assert.equal(provider.http_headers['X-Horizon-Model-Catalog'], 'codex');
+  assert.ok(!raw.includes('X-Horizon-Proxy-Token'), 'the account key header is still written');
+  assert.ok(!raw.includes('cs_dev_'), 'the device key was written to config.toml');
   assert.ok(!provider.env_key); assert.ok(!provider.auth);
-  const created = f.calls.find(c => c.path === '/keys'); assert.deepEqual(created.body.scopes, ['proxy:responses']);
-  assert.ok(!res.output.includes(f.issued[0]));
+  assert.match(res.stdout, /Codex configured for the ContextShrink engine/);
+  assert.deepEqual(readDevice(f).tools, ['codex']);
+  assert.equal(readDevice(f).device_hash, deviceHashOf(MACHINE_ID));
+  assert.ok(fs.existsSync(f.sb.engineExe), 'the engine was not installed');
+  assert.ok(fs.existsSync(f.sb.startup), 'the Startup shortcut was not created');
+  assert.equal(f.api.issued.length, 1);
+  assertNoDeviceKey(f.api, [res.stdout, res.stderr]);
   const status = await f.run(['status']); assert.equal(status.code, 0, status.output);
-  assert.match(status.stdout, /Configured for 127.0.0.1/); assert.ok(!status.output.includes(f.issued[0]));
-  const off = await f.run(['disconnect']); assert.equal(off.code, 0, off.output);
+  assert.match(status.stdout, /Configured for 127\.0\.0\.1/); assert.match(status.stdout, /Device: .*\(tools: codex\)/);
+  assert.match(status.stdout, /Free trial: 7 days left/); assert.match(status.stdout, /Usage saved today: 22%/);
+  assertNoDeviceKey(f.api, [status.stdout, status.stderr]);
+  const off = await f.run(['uninstall']); assert.equal(off.code, 0, off.output);
   assert.equal(fs.readFileSync(f.config, 'utf8'), original); assert.ok(!fs.existsSync(f.state));
+  assert.ok(!fs.existsSync(f.sb.deviceFile), 'device.json was left behind');
+  assert.equal(f.api.devices.get(f.api.issued[0]).revoked, true, 'the device was not released');
+  assert.ok(!fs.existsSync(f.sb.engineRoot), 'the engine was left behind');
+  assert.match(off.stdout, /This device is disconnected/);
 }));
 
-test('second connect needs no credentials and is byte-for-byte idempotent', () => fixture(async f => {
+test('a second connect needs no sign-in and leaves the config byte-for-byte the same', () => fixture(async f => {
   assert.equal((await f.run()).code, 0);
-  const before = fs.readFileSync(f.config, 'utf8'), calls = f.calls.length;
-  assert.equal((await f.run([], '')).code, 0);
-  assert.equal(fs.readFileSync(f.config, 'utf8'), before); assert.equal(f.calls.length, calls);
+  const before = fs.readFileSync(f.config, 'utf8'), starts = f.api.calls.filter(c => c.path === '/code/cli/start').length;
+  const again = await f.run(); assert.equal(again.code, 0, again.output);
+  assert.match(again.stdout, /Already configured/);
+  assert.equal(fs.readFileSync(f.config, 'utf8'), before);
+  assert.equal(f.api.calls.filter(c => c.path === '/code/cli/start').length, starts);
 }));
 
 for (const original of ['', 'model_provider = "openai"', '# settings\r\nmodel_provider = "openai" # mine\r\n[features]\r\nfoo = true\r\n']) {
   test('round-trip restores original formatting: ' + JSON.stringify(original.slice(0, 35)), () => fixture(async f => {
     fs.writeFileSync(f.config, original);
     assert.equal((await f.run()).code, 0);
-    const off = await f.run(['disconnect']); assert.equal(off.code, 0, off.output);
+    const off = await f.run(['uninstall']); assert.equal(off.code, 0, off.output);
     assert.equal(fs.readFileSync(f.config, 'utf8'), original);
   }));
 }
-test('a new config is removed on disconnect without touching auth or other files', () => fixture(async f => {
+
+test('a new config is removed on uninstall without touching auth or other files', () => fixture(async f => {
   fs.writeFileSync(path.join(f.dir, 'auth.json'), '{"auth_mode":"chatgpt","tokens":{"fake":"unchanged"}}');
-  assert.equal((await f.run()).code, 0); assert.equal((await f.run(['disconnect'])).code, 0);
+  assert.equal((await f.run()).code, 0); assert.equal((await f.run(['uninstall'])).code, 0);
   assert.ok(!fs.existsSync(f.config));
   assert.equal(fs.readFileSync(path.join(f.dir, 'auth.json'), 'utf8'), '{"auth_mode":"chatgpt","tokens":{"fake":"unchanged"}}');
 }));
 
 for (const original of ['bad = [', 'model_provider = "horizon"\n', 'openai_base_url = "http://other.example"\n', '[profiles.work]\nmodel_provider="mine"\n', '[model_providers.contextshrink_npx]\nname="mine"\n']) {
-  test('refuses conflicting/invalid routing before sign-in: ' + original.split('\n')[0], () => fixture(async f => {
+  test('refuses conflicting or invalid routing before sign-in: ' + original.split('\n')[0], () => fixture(async f => {
     fs.writeFileSync(f.config, original);
-    const r = await f.run(); assert.equal(r.code, 1); assert.equal(f.calls.length, 0);
+    const r = await f.run(); assert.equal(r.code, 1); assert.equal(f.api.calls.length, 0);
     assert.equal(fs.readFileSync(f.config, 'utf8'), original); assert.ok(!fs.existsSync(f.state));
   }));
 }
+
 test('API-key Codex auth is refused without reading or changing its key', () => fixture(async f => {
   const auth = '{"auth_mode":"apikey","OPENAI_API_KEY":"fake-private-api-key"}';
   fs.writeFileSync(path.join(f.dir, 'auth.json'), auth);
-  const r = await f.run(); assert.equal(r.code, 1); assert.equal(f.calls.length, 0);
+  const r = await f.run(); assert.equal(r.code, 1); assert.equal(f.api.calls.length, 0);
   assert.ok(!r.output.includes('fake-private-api-key')); assert.equal(fs.readFileSync(path.join(f.dir, 'auth.json'), 'utf8'), auth);
 }));
-test('wrong password leaves config and key list unchanged', () => fixture(async f => {
-  const r = await f.run([], 'test@example.test\nwrong\n'); assert.equal(r.code, 1);
-  assert.ok(!fs.existsSync(f.config)); assert.equal(f.live.size, 0);
+
+test('a device limit exits with code 3 and leaves the config untouched', () => fixture(async f => {
+  const original = 'model = "keep"\n'; fs.writeFileSync(f.config, original);
+  f.api.state.deviceLimit = [{ name: 'Office PC' }, { name: 'Home laptop' }];
+  const r = await f.run(); assert.equal(r.code, 3, r.output);
+  assert.match(r.stderr, /This account already has 2 devices connected: Office PC, Home laptop\./);
+  assert.match(r.stderr, /run "npx contextshrink-codex uninstall" on that device/);
+  assert.equal(fs.readFileSync(f.config, 'utf8'), original); assert.ok(!fs.existsSync(f.state));
 }));
-test('unrelated edits before and after the block survive disconnect', () => fixture(async f => {
+
+test('a sign-in the server no longer accepts (401) starts sign-in again', () => fixture(async f => {
+  fs.mkdirSync(path.dirname(f.sb.deviceFile), { recursive: true });
+  fs.writeFileSync(f.sb.deviceFile, JSON.stringify({ version: 1, api_url: f.api.url, device_id: 'dev-old', device_key: 'cs_dev_staleStaleStaleStale00', device_hash: deviceHashOf(MACHINE_ID), tools: ['codex'], created_at: new Date().toISOString() }));
+  const r = await f.run(); assert.equal(r.code, 0, r.output);
+  assert.match(r.stdout, /sign-in has expired/);
+  assert.equal(readDevice(f).device_key, f.api.issued[0]);
+}));
+
+test('a trial that has ended still points Codex at the engine, and says Codex works without compression', () => fixture(async f => {
+  f.api.state.plan = 'ended';
+  const r = await f.run(); assert.equal(r.code, 0, r.output);
+  assert.match(r.stdout, /Your trial has ended\. Subscribe for \$5\/month at https:\/\/code\.contextshrink\.com\/account\. Until then, Codex works normally without compression\./);
+  assert.match(fs.readFileSync(f.config, 'utf8'), /127\.0\.0\.1:\d+\/v1/);
+}));
+
+test('unrelated edits before and after the block survive uninstall', () => fixture(async f => {
   const original = 'model_provider="openai"\nmodel="keep"\n'; fs.writeFileSync(f.config, original);
   assert.equal((await f.run()).code, 0);
   fs.writeFileSync(f.config, fs.readFileSync(f.config, 'utf8').replace('model="keep"', 'model="edited"') + '\n[features]\nnew_feature=true\n');
-  const off = await f.run(['disconnect']); assert.equal(off.code, 0, off.output);
+  const off = await f.run(['uninstall']); assert.equal(off.code, 0, off.output);
   const raw = fs.readFileSync(f.config, 'utf8'); assert.ok(raw.includes('model="edited"')); assert.ok(raw.includes('new_feature=true'));
   assert.equal(parse(raw).model_provider, 'openai'); assert.ok(!parse(raw).model_providers);
 }));
-test('edits to managed routing block disconnect and logout before revocation', () => fixture(async f => {
+
+test('edits to the managed routing block stop uninstall, and nothing is removed', () => fixture(async f => {
   assert.equal((await f.run()).code, 0);
   const raw = fs.readFileSync(f.config, 'utf8').replace('supports_websockets = true', 'supports_websockets = false'); fs.writeFileSync(f.config, raw);
-  const off = await f.run(['logout']); assert.equal(off.code, 1); assert.equal(f.live.size, 1);
+  const off = await f.run(['uninstall']); assert.equal(off.code, 1);
   assert.equal(fs.readFileSync(f.config, 'utf8'), raw); assert.ok(fs.existsSync(f.state));
+  assert.ok(fs.existsSync(f.sb.deviceFile), 'the device was released after a failed restore');
 }));
-test('login rotates only this connector key and restores on logout', () => fixture(async f => {
-  assert.equal((await f.run()).code, 0); assert.equal((await f.run(['login'])).code, 0);
-  assert.equal(f.live.size, 1); assert.equal(f.issued.length, 2);
-  assert.ok(fs.readFileSync(f.config, 'utf8').includes(f.issued[1]));
-  assert.equal((await f.run(['logout'])).code, 0); assert.equal(f.live.size, 0); assert.ok(!fs.existsSync(f.config));
+
+test('uninstall shares the device with Claude Code: the device and engine stay while Claude is still connected', () => fixture(async f => {
+  assert.equal((await f.run()).code, 0);
+  const device = readDevice(f);
+  device.tools = ['claude', 'codex'];
+  fs.writeFileSync(f.sb.deviceFile, JSON.stringify(device));
+  const off = await f.run(['uninstall']); assert.equal(off.code, 0, off.output);
+  assert.deepEqual(readDevice(f).tools, ['claude']);
+  assert.ok(!f.api.devices.get(device.device_key).revoked, 'the device was released while Claude Code was still connected');
+  assert.ok(fs.existsSync(f.sb.engineExe), 'the engine was deleted while Claude Code was still connected');
+  assert.match(off.stdout, /Claude Code still connected on this device/);
 }));
-test('pasted keys require no login and are not revoked by logout', () => fixture(async f => {
-  assert.equal((await f.run(['login', '--key'], KEY + '\n')).code, 0); assert.equal(f.calls.length, 0);
-  assert.equal((await f.run(['logout'], '')).code, 0); assert.equal(f.calls.length, 0);
+
+test('the last tool releases the device; disconnect and logout are aliases of uninstall', () => fixture(async f => {
+  for (const alias of ['disconnect', 'logout']) {
+    assert.equal((await f.run()).code, 0);
+    const off = await f.run([alias]); assert.equal(off.code, 0, off.output);
+    assert.ok(!fs.existsSync(f.sb.deviceFile), `${alias} did not release the device`);
+  }
 }));
-test('savings uses the existing key endpoint and never prints credentials', () => fixture(async f => {
+
+test('savings shows usage saved and the trial days, with no dollar amounts and no key', () => fixture(async f => {
   assert.equal((await f.run()).code, 0);
   const r = await f.run(['savings']); assert.equal(r.code, 0, r.output);
-  assert.match(r.stdout, /trimmed 25% · net saved \$0.12 · 4 req · this key today/);
-  assert.ok(!r.output.includes(f.issued[0]));
+  assert.equal(r.stdout.trim(), 'ContextShrink · usage saved 22% today · trial 7d left');
+  assertNoDeviceKey(f.api, [r.stdout, r.stderr]);
 }));
+
 test('a connector lock prevents a second writer without deleting the other lock', () => fixture(async f => {
   fs.writeFileSync(f.state + '.lock', 'other operation');
-  assert.equal((await f.run()).code, 1); assert.equal(f.calls.length, 0);
+  assert.equal((await f.run()).code, 1); assert.equal(f.api.calls.length, 0);
   assert.equal(fs.readFileSync(f.state + '.lock', 'utf8'), 'other operation');
 }));
-test('multiline TOML cannot trick the editor into silently changing another field', () => {
-  const original = 'description = """\nmodel_provider = "openai"\n"""\n';
-  assert.throws(() => connectText(original, 'https://example.test/v1', KEY), /safely/);
-});
-test('invalid arguments do not initialize or read personal config', () => fixture(async f => {
-  for (const args of [['no-such-command'], ['connect', '--key'], ['disconnect', '--force'], ['chats'], ['chats', 'list', '--apply'], ['chats', 'migrate'], ['chats', 'migrate', '--all', 'bad-id']]) assert.equal((await f.run(args)).code, 2);
-  assert.equal((await f.run(['--version'])).stdout.trim(), require('../package.json').version); assert.equal(f.calls.length, 0);
+
+test('on a system other than Windows connect refuses with the spec message, before any call', () => fixture(async f => {
+  const r = await code.runBin(BIN, f.sb, ['connect'], { env: { CONTEXTSHRINK_NPX_TEST_PLATFORM: 'linux' } });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /ContextShrink Code runs on Windows today\. macOS and Linux are coming\./);
+  assert.equal(f.api.calls.length, 0);
 }));
-test('version-one preview connections remain readable by the new package', () => fixture(async f => {
+
+test('an engine that does not start leaves the Codex config untouched', () => fixture(async f => {
+  f.engine.state.up = false;
+  const original = 'model = "keep"\n'; fs.writeFileSync(f.config, original);
+  const r = await code.runBin(BIN, f.sb, [], { env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail' } });
+  assert.equal(r.code, 1, r.output);
+  assert.match(r.stderr, /The ContextShrink engine did not start\. Nothing was changed/);
+  assert.equal(fs.readFileSync(f.config, 'utf8'), original);
+  f.engine.state.up = true;
+}));
+
+test('invalid arguments do not initialize or read personal config', () => fixture(async f => {
+  for (const args of [['no-such-command'], ['login'], ['connect', '--key'], ['uninstall', '--force'], ['chats'], ['chats', 'list', '--apply'], ['chats', 'migrate'], ['chats', 'migrate', '--all', 'bad-id']]) {
+    assert.equal((await f.run(args)).code, 2, args.join(' '));
+  }
+  assert.equal((await f.run(['--version'])).stdout.trim(), require('../package.json').version);
+  assert.equal(f.api.calls.length, 0);
+}));
+
+test('version-one preview connections remain readable, and disconnect cleanly', () => fixture(async f => {
   assert.equal((await f.run()).code, 0);
   const state = JSON.parse(fs.readFileSync(f.state)); state.version = 1; fs.writeFileSync(f.state, JSON.stringify(state));
   assert.equal((await f.run(['status'])).code, 0);
-  assert.equal((await f.run(['disconnect'])).code, 0);
+  assert.equal((await f.run(['uninstall'])).code, 0);
+  assert.ok(!fs.existsSync(f.state));
 }));
+
+function readDevice(f) { return JSON.parse(fs.readFileSync(f.sb.deviceFile, 'utf8')); }
