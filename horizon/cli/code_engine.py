@@ -71,6 +71,7 @@ def run_engine(port: int, home_arg: str | None) -> None:
     home = home_dir()
     # Without a console (pythonw.exe) the output goes to engine.log.
     runtime.attach_background_output(home)
+    runtime.attach_engine_log(home)
     # The starter saved its environment for us (WMI does not pass one on). Apply it first.
     runtime.take_launch_environment(home, os.environ)
     lock = runtime.InstanceLock(home / runtime.LOCK_FILE)

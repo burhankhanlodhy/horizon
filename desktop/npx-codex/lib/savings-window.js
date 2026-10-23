@@ -9,11 +9,12 @@ async function refresh(readSnapshot, file) {
   let data;
   try {
     const raw = await readSnapshot();
-    if (raw?.available !== true || !Number.isInteger(raw.pct) || raw.pct < 0 || raw.pct > 100 ||
+    if (raw?.available !== true || !Number.isFinite(raw.pct) || raw.pct < 0 || raw.pct > 100 ||
         !Number.isSafeInteger(raw.requests) || raw.requests < 0 ||
+        ![null, 'trial', 'active'].includes(raw.plan) ||
         (raw.trialDays !== null && !(Number.isSafeInteger(raw.trialDays) && raw.trialDays >= 0)) ||
         !Number.isFinite(Date.parse(raw.updatedAt))) throw new Error('Invalid snapshot');
-    data = { version: 1, available: true, pct: raw.pct, requests: raw.requests, trialDays: raw.trialDays, updatedAt: new Date(raw.updatedAt).toISOString() };
+    data = { version: 1, available: true, pct: raw.pct, requests: raw.requests, plan: raw.plan, trialDays: raw.trialDays, updatedAt: new Date(raw.updatedAt).toISOString() };
   }
   catch { data = { version: 1, available: false, updatedAt: new Date().toISOString() }; }
   // Only numeric savings and a timestamp cross into the window. Never pass keys,

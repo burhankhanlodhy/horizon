@@ -5,14 +5,16 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { summary, format } = require('../lib/savings-summary');
+const { summary, fromLocal, format } = require('../lib/savings-summary');
 const window = require('../lib/savings-window');
 const data = { today: { requests: 15, tokens_before: 10000, tokens_after: 9700, tokens_saved: 300, pct: 3 } };
 test('the usage line shows the percent and the free-week days, with no dollar amounts', () => {
-  assert.equal(format(summary(data)), 'ContextShrink · usage saved 3% today');
-  assert.equal(format(summary(data, 5)), 'ContextShrink · usage saved 3% today · free week 5d left');
-  assert.equal(format(summary({ today: { requests: 0, pct: 0 } })), 'ContextShrink · usage saved 0% today');
-  assert.doesNotMatch(format(summary(data, 5)), /\$/);
+  assert.equal(format(summary(data)), 'ContextShrink · usage saved 3.0% today');
+  assert.equal(format(summary(data, { plan: 'trial', daysLeft: 5 })), 'ContextShrink · usage saved 3.0% today · free week 5d left');
+  assert.equal(format(summary(data, { plan: 'active' })), 'ContextShrink · usage saved 3.0% today · Subscribed');
+  assert.equal(format(summary({ today: { requests: 0, pct: 0 } })), 'ContextShrink · usage saved 0.0% today');
+  assert.equal(format(summary({ today: { requests: 40, pct: 42.7 } })), 'ContextShrink · usage saved 43% today');
+  assert.doesNotMatch(format(summary(data, { plan: 'trial', daysLeft: 5 })), /\$/);
   for (const patch of [{ today: undefined }, { today: { ...data.today, pct: NaN } }, { today: { ...data.today, requests: -1 } }]) {
     assert.throws(() => summary({ ...data, ...patch }));
   }
@@ -47,6 +49,24 @@ test('window lifecycle hides the console, passes no credentials, and removes its
   assert.equal(args[args.indexOf('-ExecutionPolicy')+1], 'RemoteSigned');
   assert.ok(!fs.existsSync(snapshot)); assert.ok(!fs.existsSync(path.dirname(snapshot)));
 });
+test('today comes from the local usage file (Codex buckets only, UTC day), with no network call', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-local-test-'));
+  try {
+    const now = new Date('2026-10-23T12:00:00Z');
+    const bucket = (hour, tool, requests, before, after) => ({ hour, tool, requests, tokens_before: before, tokens_after: after });
+    fs.writeFileSync(path.join(root, 'usage-pending.json'), JSON.stringify({ version: 1, buckets: [
+      bucket('2026-10-23T09:00:00Z', 'codex', 30, 1000, 957),
+      bucket('2026-10-23T10:00:00Z', 'codex', 10, 1000, 957),
+      bucket('2026-10-22T23:00:00Z', 'codex', 99, 9000, 0),
+      bucket('2026-10-23T11:00:00Z', 'claude', 99, 9000, 0),
+    ] }));
+    const snapshot = fromLocal(root, { plan: 'trial', daysLeft: 3 }, now);
+    assert.equal(format(snapshot), 'ContextShrink · usage saved 4.3% today · free week 3d left');
+    assert.equal(snapshot.requests, 40);
+    assert.equal(fromLocal(path.join(root, 'missing'), null, now), null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('unsupported platforms fail without opening a process or requesting totals', async () => {
   await assert.rejects(window.show(() => { throw new Error('should not run'); }, { out() {} }, { platform: 'linux' }), /Windows/);
 });

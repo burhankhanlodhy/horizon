@@ -8,35 +8,14 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const https = require('node:https');
+const local = require('./local-savings.cjs');
 const TTL = 30000;
+// The bar reads local files first; the summary API is asked only when they are missing.
 const UNAVAILABLE = 'ContextShrink · savings unavailable';
 const DISCONNECTED = 'ContextShrink · disconnected';
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
-}
-
-// The plan from license.json's payload. The engine checks the signature; this line only displays it.
-function planOf(file, now) {
-  try {
-    const token = readJson(file).token;
-    const payload = JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8'));
-    if (payload.plan === 'active') return '';
-    if (payload.plan !== 'trial') return '';
-    const left = Math.ceil((Number(payload.until) * 1000 - now) / 86400000);
-    return left > 0 ? `free week ${left}d left` : 'free week ended';
-  } catch {
-    return '';
-  }
-}
-
-function format(data, trial) {
-  const pct = data && data.today && Number.isFinite(data.today.pct)
-    ? Math.max(0, Math.min(100, Math.round(data.today.pct)))
-    : null;
-  if (pct === null) return UNAVAILABLE;
-  const line = `ContextShrink · usage saved ${pct}% today`;
-  return trial ? `${line} · ${trial}` : line;
 }
 
 function fetchSummary(url, key) {
@@ -63,6 +42,34 @@ function fetchSummary(url, key) {
   });
 }
 
+// The summary API, used only when the engine's local usage file is missing. Cached for
+// TTL, and per day, so a bar that refreshes often does not call the API each time.
+async function fallbackSummary(config, directory, now) {
+  try {
+    const device = readJson(config.device);
+    if (!/^cs_dev_[A-Za-z0-9_-]{16,200}$/.test(device.device_key || '')) return null;
+    const url = new URL(String(device.api_url || '').replace(/\/+$/, '') + '/code/usage/summary');
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === '127.0.0.1')) return null;
+    const identity = crypto.createHash('sha256').update(url.href + '\0' + device.device_key).digest('hex');
+    const cachePath = path.join(directory, 'summary-cache.json');
+    const day = new Date(now).toISOString().slice(0, 10);
+    let cache;
+    try { cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch {}
+    const age = now - cache?.fetchedAt;
+    if (cache?.identity === identity && age >= 0 && age < TTL && cache.day === day) return cache.data;
+    let data = null;
+    try { data = await fetchSummary(url, device.device_key); } catch {}
+    const temp = path.join(directory, `.summary-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      fs.writeFileSync(temp, JSON.stringify({ identity, fetchedAt: now, day, data: data && data.today ? data : null }), { mode: 0o600, flag: 'wx' });
+      fs.renameSync(temp, cachePath);
+    } catch {} finally { try { fs.rmSync(temp, { force: true }); } catch {} }
+    return data;
+  } catch { return null; }
+}
+
+// The status line text. Local files only, so it changes as soon as the engine's next
+// upload is written; no network call on this path unless the local usage file is missing.
 async function render(directory = __dirname) {
   try {
     const config = readJson(path.join(directory, 'ui-config.json'));
@@ -71,34 +78,16 @@ async function render(directory = __dirname) {
     const base = state.written?.ANTHROPIC_BASE_URL;
     // Stop displaying figures when the route no longer matches our installation.
     if (!base || settings.env?.ANTHROPIC_BASE_URL !== base) return DISCONNECTED;
-    const device = readJson(config.device);
-    if (!/^cs_dev_[A-Za-z0-9_-]{16,200}$/.test(device.device_key || '')) return UNAVAILABLE;
-    const url = new URL(String(device.api_url || '').replace(/\/+$/, '') + '/code/usage/summary');
-    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === '127.0.0.1')) return UNAVAILABLE;
-    const identity = crypto.createHash('sha256').update(url.href + '\0' + device.device_key).digest('hex');
-    const cachePath = path.join(directory, 'summary-cache.json');
     const now = Date.now();
-    const day = new Date(now).toISOString().slice(0, 10);
-    let cache;
-    try { cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch {}
-    const age = now - cache?.fetchedAt;
-    const trial = config.license ? planOf(config.license, now) : '';
-    if (cache?.identity === identity && age >= 0 && age < TTL && cache.day === day) {
-      return format(cache.data, trial);
-    }
-    let data = null;
-    try { data = await fetchSummary(url, device.device_key); } catch {}
-    const line = format(data, trial);
-    {
-      const temp = path.join(directory, `.summary-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
-      try {
-        fs.writeFileSync(temp, JSON.stringify({ identity, fetchedAt: now, day, data: data && data.today ? data : null }), { mode: 0o600, flag: 'wx' });
-        fs.renameSync(temp, cachePath);
-      } catch {} finally { try { fs.rmSync(temp, { force: true }); } catch {} }
-    }
-    return line;
+    const plan = config.license ? local.planOf(config.license, now) : null;
+    const home = path.dirname(config.device);
+    const today = local.todayUsage(home, config.tool === 'codex' ? 'codex' : 'claude', now);
+    if (today) return local.formatLine(today.pct, plan);
+    const data = await fallbackSummary(config, directory, now);
+    const pct = data && data.today && Number.isFinite(data.today.pct) ? data.today.pct : null;
+    return pct === null ? UNAVAILABLE : local.formatLine(pct, plan);
   } catch { return UNAVAILABLE; }
 }
 
 if (require.main === module) render().then(line => console.log(line), () => console.log(UNAVAILABLE));
-module.exports = { render, format, planOf };
+module.exports = { render, format: local.formatLine, planOf: local.planOf, todayUsage: local.todayUsage };
