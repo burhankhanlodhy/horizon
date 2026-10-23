@@ -24,7 +24,7 @@ from collections.abc import Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
-from horizon.code_engine.store import HOME_ENV, read_json, remove, write_private_json
+from horizon.code_engine.store import read_json, remove, write_private_json
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 18793
@@ -86,7 +86,6 @@ _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 _CREATE_NO_WINDOW = 0x08000000
 WMI_START_TIMEOUT_SECONDS = 60
 # Characters that cmd.exe or the quoting around the WMI command line cannot carry.
-_WMI_UNSAFE = set('"%^&|<>')
 _STILL_ACTIVE = 259
 _ERROR_ACCESS_DENIED = 5
 
@@ -258,10 +257,8 @@ def spawn_detached(
     runs only when WMI fails, and the log's first line says which start was used.
     ``wmi_start(command, cwd)`` and ``popen`` replace the real calls in tests.
     """
-    from horizon.bundled_client import cli_command
-
     home.mkdir(parents=True, exist_ok=True)
-    argv = [*cli_command(), "code-engine", "run", "--port", str(port)]
+    argv = [*background_command(), "code-engine", "run", "--port", str(port), "--home", str(home)]
     if sys.platform != "win32":
         _start_detached(argv, home, "launcher: detached", popen)
         return "detached"
@@ -275,24 +272,56 @@ def spawn_detached(
         return "detached"
 
 
+def background_command() -> list[str]:
+    """The argv prefix that runs the CLI in the background without a console window.
+
+    A console program started without a console gets a new console window on Windows.
+    ``pythonw.exe`` is the same interpreter built for the GUI subsystem, so it has none.
+    Order: the embedded client's ``python\\pythonw.exe`` beside ``horizon.exe`` (the
+    bundled layout), then the ``pythonw.exe`` beside this interpreter, then the CLI
+    command as it is.
+    """
+    from horizon.bundled_client import bundled_client_command, cli_command
+
+    if sys.platform != "win32" or getattr(sys, "frozen", False):
+        return cli_command()
+    client = bundled_client_command()
+    if client:
+        folder = Path(client[0]).parent
+        pythonw = folder / "python" / "pythonw.exe"
+        script = folder / "app" / "horizon_main.py"
+        if pythonw.is_file() and script.is_file():
+            return [str(pythonw), "-I", "-s", "-X", "utf8", str(script)]
+    candidate = Path(sys.executable).with_name("pythonw.exe")
+    if candidate.is_file():
+        return [str(candidate), "-m", "horizon.cli"]
+    return cli_command()
+
+
 def _start_with_wmi(argv: list[str], home: Path, create: Callable[[str, str], None]) -> None:
-    command = wmi_command_line(argv, home)
     _write_launch_env(home)
     _open_log(home, "launcher: WMI Win32_Process.Create").close()
-    create(command, str(home))
+    create(subprocess.list2cmdline(argv), str(home))
 
 
-def wmi_command_line(argv: list[str], home: Path) -> str:
-    """The command line WMI runs: cmd.exe sets the home for the engine and appends its output to the log."""
-    log = home / LOG_FILE
-    for text in (str(home), str(log), *argv):
-        if any(ch in text for ch in _WMI_UNSAFE):
-            raise ValueError("a path or argument has a character the WMI command line cannot carry")
-    comspec = os.environ.get("ComSpec") or os.path.join(
-        os.environ.get("SystemRoot") or "C:\\Windows", "System32", "cmd.exe"
-    )
-    inner = f'set "{HOME_ENV}={home}" && {subprocess.list2cmdline(argv)} >> "{log}" 2>&1'
-    return f'"{comspec}" /d /s /c "{inner}"'
+def attach_background_output(home: Path) -> None:
+    """Send this process's output to engine.log when it has no console (``pythonw.exe``).
+
+    A GUI-subsystem process has no standard handles, so ``sys.stdout`` and ``sys.stderr``
+    are None. Then both the Python streams and the file descriptors 1 and 2 (for native
+    code) go to the log. In a terminal, where the streams exist, nothing changes.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    home.mkdir(parents=True, exist_ok=True)
+    log = open(home / LOG_FILE, "a", encoding="utf-8", buffering=1, errors="replace")  # noqa: SIM115
+    for fd in (1, 2):
+        try:
+            os.dup2(log.fileno(), fd)
+        except OSError:
+            pass
+    sys.stdout = log
+    sys.stderr = log
 
 
 def launch_environment_allowed(name: str) -> bool:
@@ -356,7 +385,15 @@ def _wmi_create(command: str, cwd: str) -> None:
     env = {**os.environ, "CONTEXTSHRINK_ENGINE_COMMAND": command, "CONTEXTSHRINK_ENGINE_DIR": cwd}
     try:
         result = subprocess.run(
-            [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-EncodedCommand",
+                encoded,
+            ],
             env=env,
             capture_output=True,
             text=True,
@@ -393,7 +430,7 @@ def _start_detached(
             "close_fds": True,
         }
         if sys.platform == "win32":
-            flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
+            flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
             try:
                 # Breakaway keeps the engine alive when the hook's job object ends.
                 start(argv, creationflags=flags | _CREATE_BREAKAWAY_FROM_JOB, **kwargs)
@@ -465,11 +502,13 @@ def pid_alive(pid: int) -> bool:
 
 def _kill_pid(pid: int) -> None:
     if sys.platform == "win32":
+        # taskkill is a console program: without this flag a window would open for it.
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             check=False,
             timeout=15,
+            creationflags=_CREATE_NO_WINDOW,
         )
         return
     os.kill(pid, signal.SIGKILL)

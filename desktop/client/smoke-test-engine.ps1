@@ -289,6 +289,29 @@ sys.exit(1 if failed else 0)
         throw "The engine did not stop (exit $stopCode, still answering: $stillAnswering)"
     }
     Write-Output "ok    stopped"
+
+    # 6. The background start: the bundle's pythonw.exe (GUI subsystem, so no console window)
+    # runs the same CLI. It must answer on the port, and its process must have no window.
+    Write-Step "Windowless start with python\pythonw.exe"
+    $pythonw = Join-Path $engine "python\pythonw.exe"
+    $appScript = Join-Path $engine "app\horizon_main.py"
+    if (-not (Test-Path -LiteralPath $pythonw)) { throw "No python\pythonw.exe in $engine" }
+    $windowlessProc = Start-Process -FilePath $pythonw -PassThru -WindowStyle Hidden `
+        -ArgumentList @("-I", "-s", "-X", "utf8", $appScript, "code-engine", "run", "--port", "$Port")
+    $deadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $deadline -and -not (Invoke-Local -Method GET -Url "http://127.0.0.1:$Port/__cs/health" -TimeoutMs 1000)) {
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not (Invoke-Local -Method GET -Url "http://127.0.0.1:$Port/__cs/health" -TimeoutMs 1000)) {
+        throw "The windowless engine did not answer on 127.0.0.1:$Port"
+    }
+    $windowlessProc.Refresh()
+    if ($windowlessProc.MainWindowHandle -ne 0) { throw "The windowless engine has a window" }
+    Write-Output "ok    windowless engine answers, no window"
+    Start-Process -FilePath $pythonw -Wait -WindowStyle Hidden `
+        -ArgumentList @("-I", "-s", "-X", "utf8", $appScript, "code-engine", "stop", "--port", "$Port") | Out-Null
+    if (-not $windowlessProc.WaitForExit(60000)) { throw "The windowless engine did not stop" }
+    Write-Output "ok    windowless engine stopped"
     Write-Output ""
     Write-Output ("SMOKE TEST PASSED for engine {0}: cold start {1:N1} s, {2:N1} MB unpacked in {3:N0} files" -f $expectedVersion, $coldStart, ($unpackedBytes / 1MB), $allFiles.Count)
 }

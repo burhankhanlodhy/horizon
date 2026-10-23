@@ -24,7 +24,41 @@ const publisher = require('./code-publisher');
 const DEFAULT_MANIFEST = path.join(__dirname, 'engine-manifest.json');
 const ENGINE_EXE = 'horizon.exe';
 const SHORTCUT_NAME = 'ContextShrink Engine.lnk';
-const SHORTCUT_ARGS = 'code-engine run';
+const SHORTCUT_COMMAND = ['code-engine', 'run'];
+const HOOK_COMMAND = ['code-engine', 'ensure'];
+// The bundle's Python flags (the same as horizon.exe passes to its python.exe).
+const PYTHON_FLAGS = ['-I', '-s', '-X', 'utf8'];
+
+// The engine command with no console window. The bundle's python\pythonw.exe runs
+// app\horizon_main.py, which is the same CLI as horizon.exe. pythonw.exe is built for
+// the GUI subsystem, so it never has a console window; horizon.exe is a console program.
+// horizon.exe is used only when the bundle has no pythonw.exe (an older layout).
+// Returns { file, args }.
+function windowlessInvocation(exe, args) {
+  const folder = path.dirname(exe);
+  const pythonw = path.join(folder, 'python', 'pythonw.exe');
+  const script = path.join(folder, 'app', 'horizon_main.py');
+  if (fs.existsSync(pythonw) && fs.existsSync(script)) {
+    return { file: pythonw, args: [...PYTHON_FLAGS, script, ...args] };
+  }
+  return { file: exe, args: [...args] };
+}
+
+// One command-line argument: quoted when it contains whitespace.
+function quoteArg(value) {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
+// The SessionStart hook command: the windowless invocation as one command line.
+function hookCommandOf(exe) {
+  const { file, args } = windowlessInvocation(exe, HOOK_COMMAND);
+  return [`"${file}"`, ...args.map(quoteArg)].join(' ');
+}
+
+// The shortcut's arguments: the windowless invocation's arguments, quoted for a command line.
+function shortcutArgumentsOf(exe) {
+  return windowlessInvocation(exe, SHORTCUT_COMMAND).args.map(quoteArg).join(' ');
+}
 const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const HASH_SHAPE = /^[0-9a-f]{64}$/;
 const DOWNLOAD_IDLE_MS = 30000;
@@ -98,7 +132,7 @@ function runPowerShell(script, vars, timeoutMs = ENSURE_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     execFile(
       powerShellPath(),
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
       { env: { ...process.env, ...vars }, windowsHide: true, timeout: timeoutMs, maxBuffer: 1 << 20 },
       (error, stdout) => {
         if (error) reject(error);
@@ -153,15 +187,17 @@ function realAdapter({ powerShell = runPowerShell } = {}) {
           '$link.TargetPath = $env:CONTEXTSHRINK_TARGET',
           '$link.Arguments = $env:CONTEXTSHRINK_ARGS',
           '$link.WorkingDirectory = $env:CONTEXTSHRINK_WORKDIR',
-          '$link.WindowStyle = 0',
+          // 7 = minimized. The target is windowless (pythonw.exe), so nothing shows at logon.
+          '$link.WindowStyle = 7',
           '$link.Save()',
         ].join('\n'),
         { CONTEXTSHRINK_LNK: file, CONTEXTSHRINK_TARGET: target, CONTEXTSHRINK_ARGS: args, CONTEXTSHRINK_WORKDIR: workdir }
       );
     },
     runEngine(exe, args) {
+      const invocation = windowlessInvocation(exe, args);
       return new Promise((resolve, reject) => {
-        execFile(exe, args, { windowsHide: true, timeout: ENSURE_TIMEOUT_MS }, (error) =>
+        execFile(invocation.file, invocation.args, { windowsHide: true, timeout: ENSURE_TIMEOUT_MS }, (error) =>
           error ? reject(error) : resolve()
         );
       });
@@ -396,7 +432,9 @@ async function stopEngine(env, adapter) {
 async function installStartup(env, exe, adapter) {
   const file = startupPathOf(env);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  await adapter.writeShortcut(file, { target: exe, args: SHORTCUT_ARGS, workdir: path.dirname(exe) });
+  // The target is the windowless invocation, so logon shows nothing.
+  const { file: target } = windowlessInvocation(exe, SHORTCUT_COMMAND);
+  await adapter.writeShortcut(file, { target, args: shortcutArgumentsOf(exe), workdir: path.dirname(exe) });
 }
 
 function removeStartup(env) {
@@ -409,6 +447,8 @@ function removeEngine(env) {
 
 module.exports = {
   ENGINE_EXE,
+  windowlessInvocation,
+  hookCommandOf,
   UNZIP_TIMEOUT_MS,
   loadManifest,
   engineRootOf,

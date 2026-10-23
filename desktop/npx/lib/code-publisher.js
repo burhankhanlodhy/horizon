@@ -47,7 +47,7 @@ function readSignature(file) {
   return new Promise((resolve, reject) => {
     execFile(
       powerShellPath(),
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
       {
         env: { ...process.env, CONTEXTSHRINK_CHECK_PATH: file },
         windowsHide: true,

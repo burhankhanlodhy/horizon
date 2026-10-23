@@ -111,6 +111,7 @@ def test_spawn_relaunches_through_the_bundled_client(home, monkeypatch) -> None:
         raise OSError("WMI is not part of this test")
 
     monkeypatch.setattr(bundled_client, "cli_command", lambda: ["C:/ContextShrink/horizon.exe"])
+    monkeypatch.setattr(runtime, "background_command", lambda: ["C:/ContextShrink/horizon.exe"])
     monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
     assert runtime.spawn_detached(home, 18793, wmi_start=no_wmi) == "detached"
     assert captured["argv"] == [
@@ -119,6 +120,8 @@ def test_spawn_relaunches_through_the_bundled_client(home, monkeypatch) -> None:
         "run",
         "--port",
         "18793",
+        "--home",
+        str(home),
     ]
     assert captured["kwargs"]["stdin"] == runtime.subprocess.DEVNULL
     assert captured["kwargs"]["cwd"] == str(home)
@@ -135,6 +138,7 @@ def test_spawn_on_windows_is_detached_without_a_console(home, monkeypatch) -> No
         raise OSError("WMI is not part of this test")
 
     monkeypatch.setattr(runtime, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(runtime, "background_command", lambda: ["horizon.exe"])
     monkeypatch.setattr(bundled_client, "cli_command", lambda: ["horizon.exe"])
     monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
     runtime.spawn_detached(home, 18793, wmi_start=no_wmi)

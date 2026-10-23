@@ -6,7 +6,8 @@
 //   env.ANTHROPIC_BASE_URL        http://127.0.0.1:18793 (the local engine)
 //   env.ANTHROPIC_CUSTOM_HEADERS  removed when present (0.2.x wrote the account key here)
 //   env.ENABLE_TOOL_SEARCH        "true"   (only when the user has not set it)
-//   hooks.SessionStart            "<engine>\horizon.exe" code-engine ensure
+//   hooks.SessionStart            "<engine>\python\pythonw.exe" -I -s -X utf8 "<engine>\app\horizon_main.py" code-engine ensure
+//                                 (horizon.exe code-engine ensure only when the bundle has no pythonw.exe)
 // savings.js also manages the status line entry outside the env block.
 //
 // Before writing, connect records the previous value of each key it touches, and the
@@ -306,7 +307,8 @@ async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
   await engine.startEngine(env, exe, adapter, { out: (line) => ctx.out(line), freshInstall });
   await engine.installStartup(env, exe, adapter);
 
-  const entry = { hooks: [{ type: 'command', command: `"${exe}" code-engine ensure` }] };
+  // The hook runs the windowless invocation, so Claude Code's session start never shows a window.
+  const entry = { hooks: [{ type: 'command', command: engine.hookCommandOf(exe) }] };
   const { written, previous } = planWrite({ block, state, plan, engineUrl: paths.engineUrl });
   const hook = planHook(settings.payload, state, entry);
   const nextBlock = block || {};

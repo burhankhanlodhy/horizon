@@ -108,10 +108,10 @@ if (Test-Path $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force 
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $py = Join-Path $stage "python"
 Expand-Archive -LiteralPath $zip -DestinationPath $py
-foreach ($signed in "python.exe", "python312.dll", "python3.dll") {
+foreach ($signed in "python.exe", "pythonw.exe", "python312.dll", "python3.dll") {
     Assert-PythonSigned (Join-Path $py $signed)
 }
-Write-Output "Signatures valid: python.exe, python312.dll, python3.dll (Python Software Foundation)"
+Write-Output "Signatures valid: python.exe, pythonw.exe, python312.dll, python3.dll (Python Software Foundation)"
 
 # The stdlib zip, the folder of python.exe, and the app folder; site-packages
 # comes from `import site` plus site.addsitedir in horizon_main.py (for .pth files).

@@ -16,7 +16,7 @@ import click
 
 from horizon.cli.main import main
 from horizon.code_engine import runtime
-from horizon.code_engine.store import home_dir
+from horizon.code_engine.store import HOME_ENV, home_dir
 from horizon.proxy import engine_hooks
 
 # The engine runs the max savings profile, but never changes the model the user
@@ -55,11 +55,22 @@ def code_engine() -> None:
 
 @code_engine.command("run")
 @_PORT
-def run_engine(port: int) -> None:
+@click.option(
+    "--home",
+    "home_arg",
+    default=None,
+    hidden=True,
+    help="The engine's home directory. The background launcher passes it, since it sets no environment.",
+)
+def run_engine(port: int, home_arg: str | None) -> None:
     """Serve the engine in the foreground. A second instance exits at once."""
     from horizon.code_engine.engine import Engine
 
+    if home_arg:
+        os.environ[HOME_ENV] = home_arg
     home = home_dir()
+    # Without a console (pythonw.exe) the output goes to engine.log.
+    runtime.attach_background_output(home)
     # The starter saved its environment for us (WMI does not pass one on). Apply it first.
     runtime.take_launch_environment(home, os.environ)
     lock = runtime.InstanceLock(home / runtime.LOCK_FILE)

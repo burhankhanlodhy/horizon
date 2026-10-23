@@ -25,11 +25,24 @@ def home(tmp_path, monkeypatch):
     return path
 
 
+PYTHONW_COMMAND = [
+    "C:/ContextShrink/python/pythonw.exe",
+    "-I",
+    "-s",
+    "-X",
+    "utf8",
+    "C:/ContextShrink/app/horizon_main.py",
+]
+
+
 @pytest.fixture
 def as_windows(monkeypatch):
     """Make the runtime take its Windows branches on any host."""
-    monkeypatch.setattr(runtime, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(
+        runtime, "sys", SimpleNamespace(platform="win32", executable=sys.executable)
+    )
     monkeypatch.setattr(bundled_client, "cli_command", lambda: ["C:/ContextShrink/horizon.exe"])
+    monkeypatch.setattr(runtime, "background_command", lambda: list(PYTHONW_COMMAND))
 
 
 def _no_popen(*args, **kwargs):
@@ -55,9 +68,10 @@ def test_windows_starts_the_engine_through_wmi_and_not_popen(home, as_windows, m
     assert result == "wmi"
     command, cwd = created[0]
     assert cwd == str(home)
-    assert f'set "{HOME_ENV}={home}"' in command
-    assert "code-engine run --port 18793" in command
-    assert f'>> "{home / runtime.LOG_FILE}" 2>&1' in command
+    # The command is the windowless interpreter itself: no cmd.exe wrapper.
+    assert command.startswith("C:/ContextShrink/python/pythonw.exe -I -s -X utf8 ")
+    assert "cmd" not in command.lower()
+    assert f"code-engine run --port 18793 --home {home}" in command
     assert _log_first_line(home) == "launcher: WMI Win32_Process.Create"
     saved = json.loads((home / runtime.LAUNCH_ENV_FILE).read_text(encoding="utf-8"))
     assert saved["env"]["HTTPS_PROXY"] == "http://proxy.test:8080"
@@ -80,7 +94,8 @@ def test_a_wmi_failure_falls_back_to_the_detached_start_and_says_so(
     assert runtime.spawn_detached(home, 18793, wmi_start=refused) == "detached"
 
     argv, kwargs = started[0]
-    assert argv[-4:] == ["code-engine", "run", "--port", "18793"]
+    assert argv[-6:] == ["code-engine", "run", "--port", "18793", "--home", str(home)]
+    assert argv[: len(PYTHONW_COMMAND)] == PYTHONW_COMMAND
     assert kwargs["creationflags"] & runtime._DETACHED_PROCESS
     assert kwargs["creationflags"] & runtime._CREATE_NEW_PROCESS_GROUP
     assert kwargs["creationflags"] & runtime._CREATE_BREAKAWAY_FROM_JOB
@@ -110,31 +125,71 @@ def test_the_detached_start_retries_without_breakaway_when_the_job_refuses_it(
     assert not flags_seen[1] & runtime._CREATE_BREAKAWAY_FROM_JOB
 
 
-def test_a_home_path_cmd_cannot_carry_falls_back(home, as_windows, monkeypatch) -> None:
-    odd_home = home.parent / "a&b"
-    odd_home.mkdir()
-    monkeypatch.setenv(HOME_ENV, str(odd_home))
-    started = []
-
-    class _Popen:
-        def __init__(self, argv, **kwargs):
-            started.append(argv)
-
-    monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
-    assert runtime.spawn_detached(odd_home, 18793, wmi_start=lambda c, d: None) == "detached"
-    assert started, "the engine was not started at all"
-    assert "WMI start failed: ValueError" in _log_first_line(odd_home)
-
-
-def test_wmi_command_line_sets_the_home_and_appends_output_to_the_log(home) -> None:
-    command = runtime.wmi_command_line(
-        ["C:/Program Files/Python/python.exe", "-m", "horizon.cli"], home
+def test_the_embedded_client_runs_its_own_pythonw(tmp_path, monkeypatch) -> None:
+    folder = tmp_path / "engine"
+    (folder / "python").mkdir(parents=True)
+    (folder / "app").mkdir()
+    (folder / "horizon.exe").write_bytes(b"stub")
+    (folder / "python" / "pythonw.exe").write_bytes(b"pythonw")
+    (folder / "app" / "horizon_main.py").write_text("", encoding="utf-8")
+    monkeypatch.setenv(bundled_client.CLIENT_EXE_ENV, str(folder / "horizon.exe"))
+    monkeypatch.setattr(
+        runtime, "sys", SimpleNamespace(platform="win32", executable=sys.executable)
     )
-    assert command.startswith('"')
-    assert "/d /s /c" in command
-    assert f'set "{HOME_ENV}={home}" && ' in command
-    assert '"C:/Program Files/Python/python.exe" -m horizon.cli' in command
-    assert f'>> "{home / runtime.LOG_FILE}" 2>&1' in command
+
+    assert runtime.background_command() == [
+        str(folder / "python" / "pythonw.exe"),
+        "-I",
+        "-s",
+        "-X",
+        "utf8",
+        str(folder / "app" / "horizon_main.py"),
+    ]
+
+
+def test_the_venv_uses_the_pythonw_beside_its_interpreter(tmp_path, monkeypatch) -> None:
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    (scripts / "python.exe").write_bytes(b"python")
+    (scripts / "pythonw.exe").write_bytes(b"pythonw")
+    monkeypatch.delenv(bundled_client.CLIENT_EXE_ENV, raising=False)
+    monkeypatch.setattr(
+        runtime, "sys", SimpleNamespace(platform="win32", executable=str(scripts / "python.exe"))
+    )
+
+    assert runtime.background_command() == [str(scripts / "pythonw.exe"), "-m", "horizon.cli"]
+
+
+def test_without_a_pythonw_the_cli_command_is_used(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv(bundled_client.CLIENT_EXE_ENV, raising=False)
+    monkeypatch.setattr(
+        runtime, "sys", SimpleNamespace(platform="win32", executable=str(tmp_path / "python.exe"))
+    )
+    monkeypatch.setattr(bundled_client, "cli_command", lambda: ["the-cli"])
+    assert runtime.background_command() == ["the-cli"]
+
+
+def test_the_background_output_goes_to_the_log_when_there_is_no_console(home, monkeypatch) -> None:
+    dup_calls = []
+    monkeypatch.setattr(runtime.os, "dup2", lambda src, dst: dup_calls.append(dst))
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    runtime.attach_background_output(home)
+    print("engine output line", file=sys.stdout)
+    sys.stdout.flush()
+
+    assert dup_calls == [1, 2]
+    assert "engine output line" in (home / runtime.LOG_FILE).read_text(encoding="utf-8")
+    sys.stdout.close()
+
+
+def test_a_terminal_keeps_its_own_output(home, monkeypatch) -> None:
+    dup_calls = []
+    monkeypatch.setattr(runtime.os, "dup2", lambda src, dst: dup_calls.append(dst))
+    runtime.attach_background_output(home)
+    assert dup_calls == []
+    assert not (home / runtime.LOG_FILE).exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the POSIX start; Windows starts through WMI")

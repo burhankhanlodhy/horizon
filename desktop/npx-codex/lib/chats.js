@@ -67,7 +67,7 @@ function assertClosed() {
   try {
     if (process.platform === 'win32') {
       const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      names = execFileSync(ps, ['-NoProfile', '-NonInteractive', '-Command', 'Get-Process -ErrorAction Stop | Select-Object -ExpandProperty ProcessName'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+      names = execFileSync(ps, ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', 'Get-Process -ErrorAction Stop | Select-Object -ExpandProperty ProcessName'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
     } else names = execFileSync('ps', ['-A', '-o', 'comm='], { encoding: 'utf8', timeout: 10000 });
   } catch { throw new ConfigError('Could not check whether Codex is closed. No chats were changed.'); }
   if (names.split(/\r?\n/).some(n => /^(?:codex|chatgpt)(?:\.exe| helper.*)?$/i.test(path.basename(n.trim())))) {
