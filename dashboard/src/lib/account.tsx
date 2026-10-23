@@ -46,7 +46,7 @@ export const PLANS: {
     id: "team",
     name: "Team",
     description:
-      "Coming soon: combined analytics across your team's seats.",
+      "Shared Team savings estimates, purchased seats, and member contribution tracking.",
     features: [
       "All Pro features",
       "Team subscription",

@@ -1,5 +1,4 @@
-//! ContextShrink control-plane API (the same endpoints the web dashboard uses).
-
+//! ContextShrink control-plane API (the same endpoints web dashboard uses).
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -11,17 +10,14 @@ pub fn app_url() -> String {
         .to_string()
 }
 
-/// Control-plane API: its own hostname (the Pi 5 Cloudflare Tunnel).
-/// `CONTEXTSHRINK_API_URL` overrides it for testing.
+/// Control-plane API. `CONTEXTSHRINK_API_URL` overrides it for testing.
 fn api_url(path: &str) -> String {
     let base = std::env::var("CONTEXTSHRINK_API_URL")
         .unwrap_or_else(|_| "https://api.contextshrink.com".into());
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
-/// Hosted proxy the local forwarder relays to: its own hostname (the Pi 5
-/// Cloudflare Tunnel), separate from the dashboard origin.
-/// `CONTEXTSHRINK_PROXY_URL` overrides it for testing.
+/// Hosted proxy local forwarder relays to a separate origin.
 pub fn proxy_url() -> String {
     std::env::var("CONTEXTSHRINK_PROXY_URL")
         .unwrap_or_else(|_| "https://proxy.contextshrink.com".into())
@@ -31,16 +27,14 @@ pub fn proxy_url() -> String {
 
 #[derive(Debug)]
 pub enum ApiError {
-    /// Session missing, expired or revoked.
     Unauthorized,
     Message(String),
 }
-
 impl ApiError {
     pub fn text(&self) -> String {
         match self {
-            ApiError::Unauthorized => "Your session has expired. Please sign in again.".into(),
-            ApiError::Message(m) => m.clone(),
+            ApiError::Unauthorized => "Your session expired. Please sign in again.".into(),
+            ApiError::Message(message) => message.clone(),
         }
     }
 }
@@ -54,6 +48,12 @@ pub struct User {
     pub plan: Option<String>,
     #[serde(default)]
     pub subscription_status: Option<String>,
+    #[serde(default)]
+    pub team_id: Option<String>,
+    #[serde(default)]
+    pub team_role: Option<String>,
+    #[serde(default)]
+    pub personal_plan: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,7 +65,6 @@ pub struct DeviceKey {
 pub struct Api {
     http: reqwest::Client,
 }
-
 impl Api {
     pub fn new() -> Self {
         let http = reqwest::Client::builder()
@@ -74,6 +73,13 @@ impl Api {
             .build()
             .expect("HTTP client");
         Api { http }
+    }
+
+    fn scoped(req: reqwest::RequestBuilder, team_id: Option<&str>) -> reqwest::RequestBuilder {
+        match team_id.filter(|id| !id.trim().is_empty()) {
+            Some(id) => req.header("X-ContextShrink-Team", id.trim()),
+            None => req,
+        }
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<Value, ApiError> {
@@ -96,7 +102,7 @@ impl Api {
         Ok(body)
     }
 
-    /// Returns the session token and the user.
+    /// Login is always personal/unscoped. Workspace context is applied after authentication.
     pub async fn login(&self, email: &str, password: &str) -> Result<(String, User), ApiError> {
         let body = self
             .send(
@@ -105,7 +111,7 @@ impl Api {
                     .json(&json!({ "email": email, "password": password })),
             )
             .await
-            .map_err(|e| match e {
+            .map_err(|error| match error {
                 ApiError::Unauthorized => ApiError::Message("Incorrect email or password.".into()),
                 other => other,
             })?;
@@ -115,54 +121,88 @@ impl Api {
         Ok((token, user))
     }
 
-    pub async fn me(&self, token: &str) -> Result<User, ApiError> {
-        let body = self
-            .send(self.http.get(api_url("/auth/me")).bearer_auth(token))
-            .await?;
-        serde_json::from_value(body).map_err(|_| ApiError::Message("Unexpected account response".into()))
+    pub async fn me(&self, token: &str, team_id: Option<&str>) -> Result<User, ApiError> {
+        let req = Self::scoped(
+            self.http.get(api_url("/auth/me")).bearer_auth(token),
+            team_id,
+        );
+        let body = self.send(req).await?;
+        serde_json::from_value(body)
+            .map_err(|_| ApiError::Message("Unexpected account response".into()))
     }
 
-    /// Plan, savings this cycle, Free cap and any unpaid fee.
-    pub async fn billing_estimate(&self, token: &str) -> Result<Value, ApiError> {
-        self.send(self.http.get(api_url("/billing/estimate")).bearer_auth(token))
-            .await
+    /// Plan, savings cycle, Free cap and any unpaid fee.
+    pub async fn billing_estimate(
+        &self,
+        token: &str,
+        team_id: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        self.send(Self::scoped(
+            self.http
+                .get(api_url("/billing/estimate"))
+                .bearer_auth(token),
+            team_id,
+        ))
+        .await
     }
 
-    /// Creates a proxy key for this device, named after the computer.
-    pub async fn create_device_key(&self, token: &str, name: &str) -> Result<DeviceKey, ApiError> {
-        let body = self
-            .send(
-                self.http
-                    .post(api_url("/keys"))
-                    .bearer_auth(token)
-                    .json(&json!({ "name": name, "scopes": ["proxy:messages", "proxy:responses"] })),
-            )
-            .await?;
-        serde_json::from_value(body).map_err(|_| ApiError::Message("Unexpected key response".into()))
+    /// Lists this user's keys in the selected workspace.
+    pub async fn list_keys(&self, token: &str, team_id: Option<&str>) -> Result<Value, ApiError> {
+        self.send(Self::scoped(
+            self.http.get(api_url("/keys")).bearer_auth(token),
+            team_id,
+        ))
+        .await
     }
 
-    /// True while the key exists on the account and has not been revoked
-    /// (e.g. from the dashboard's API Keys page).
-    pub async fn key_is_active(&self, token: &str, key_id: &str) -> Result<bool, ApiError> {
-        let body = self
-            .send(self.http.get(api_url("/keys")).bearer_auth(token))
-            .await?;
+    /// Creates a proxy key for this device in the selected workspace.
+    pub async fn create_device_key(
+        &self,
+        token: &str,
+        name: &str,
+        team_id: Option<&str>,
+    ) -> Result<DeviceKey, ApiError> {
+        let req = Self::scoped(
+            self.http
+                .post(api_url("/keys"))
+                .bearer_auth(token)
+                .json(&json!({ "name": name, "scopes": ["proxy:messages", "proxy:responses"] })),
+            team_id,
+        );
+        let body = self.send(req).await?;
+        serde_json::from_value(body)
+            .map_err(|_| ApiError::Message("Unexpected key response".into()))
+    }
+
+    pub async fn key_is_active(
+        &self,
+        token: &str,
+        key_id: &str,
+        team_id: Option<&str>,
+    ) -> Result<bool, ApiError> {
+        let body = self.list_keys(token, team_id).await?;
         Ok(body.as_array().is_some_and(|keys| {
             keys.iter()
-                .any(|k| k["id"].as_str() == Some(key_id) && k["revoked_at"].is_null())
+                .any(|key| key["id"].as_str() == Some(key_id) && key["revoked_at"].is_null())
         }))
     }
 
-    pub async fn revoke_key(&self, token: &str, key_id: &str) -> Result<(), ApiError> {
-        self.send(
+    pub async fn revoke_key(
+        &self,
+        token: &str,
+        key_id: &str,
+        team_id: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let req = Self::scoped(
             self.http
                 .delete(api_url(&format!("/keys/{key_id}")))
                 .bearer_auth(token),
-        )
-        .await
-        .map(|_| ())
+            team_id,
+        );
+        self.send(req).await.map(|_| ())
     }
 
+    /// Logout has no workspace context so it cannot be blocked by stale team access.
     pub async fn logout(&self, token: &str) {
         let _ = self
             .http

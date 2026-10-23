@@ -184,6 +184,190 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_usage_events_user_ts
     ON metrics.usage_events (user_id, ts DESC);
 
+-- ======================================================== team workspaces
+-- Existing personal subscriptions, keys and usage rows remain personal.
+CREATE TABLE IF NOT EXISTS core.teams (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
+    created_by UUID NOT NULL REFERENCES core.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS core.team_memberships (
+    id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id   UUID NOT NULL REFERENCES core.teams(id),
+    user_id   UUID NOT NULL REFERENCES core.users(id),
+    role      TEXT NOT NULL CHECK (role IN ('owner','admin','member')),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    left_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_team_memberships_active_user
+    ON core.team_memberships(user_id) WHERE left_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_team_memberships_team_active
+    ON core.team_memberships(team_id) WHERE left_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_team_memberships_active_user
+    ON core.team_memberships(user_id) WHERE left_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_team_memberships_active_role
+    ON core.team_memberships(team_id, role) WHERE left_at IS NULL AND role='owner';
+
+CREATE OR REPLACE FUNCTION core.prevent_team_membership_history_rewrite()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.team_id IS DISTINCT FROM OLD.team_id
+       OR NEW.user_id IS DISTINCT FROM OLD.user_id
+       OR NEW.joined_at IS DISTINCT FROM OLD.joined_at THEN
+        RAISE EXCEPTION 'team membership identity and joined_at are immutable';
+    END IF;
+    IF OLD.left_at IS NOT NULL AND NEW.left_at IS DISTINCT FROM OLD.left_at THEN
+        RAISE EXCEPTION 'closed team memberships cannot be reopened';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS team_memberships_history_guard ON core.team_memberships;
+CREATE TRIGGER team_memberships_history_guard
+    BEFORE UPDATE ON core.team_memberships
+    FOR EACH ROW EXECUTE FUNCTION core.prevent_team_membership_history_rewrite();
+
+CREATE TABLE IF NOT EXISTS core.team_invitations (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id    UUID NOT NULL REFERENCES core.teams(id),
+    email      TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member')),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending','accepted','revoked','expired')),
+    invited_by UUID NOT NULL REFERENCES core.team_memberships(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    accepted_at TIMESTAMPTZ,
+    revoked_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_active
+    ON core.team_invitations(team_id, expires_at) WHERE status='pending';
+
+CREATE TABLE IF NOT EXISTS core.team_subscriptions (
+    team_id                UUID PRIMARY KEY REFERENCES core.teams(id) ON DELETE CASCADE,
+    seat_count             INTEGER NOT NULL DEFAULT 3 CHECK (seat_count >= 3),
+    status                 TEXT NOT NULL DEFAULT 'pending',
+    stripe_customer_id     TEXT UNIQUE,
+    stripe_subscription_id TEXT UNIQUE,
+    stripe_checkout_session_id TEXT,
+    stripe_checkout_idempotency_key TEXT,
+    checkout_seat_count    INTEGER CHECK (checkout_seat_count IS NULL OR checkout_seat_count >= 3),
+    current_period_start   TIMESTAMPTZ,
+    current_period_end     TIMESTAMPTZ,
+    cancel_at_period_end   BOOLEAN NOT NULL DEFAULT false,
+    pending_seat_count     INTEGER CHECK (pending_seat_count IS NULL OR pending_seat_count >= 3),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Additive migration for installations that already have Team billing enabled.
+ALTER TABLE core.team_subscriptions ADD COLUMN IF NOT EXISTS stripe_checkout_session_id TEXT;
+ALTER TABLE core.team_subscriptions ADD COLUMN IF NOT EXISTS stripe_checkout_idempotency_key TEXT;
+ALTER TABLE core.team_subscriptions ADD COLUMN IF NOT EXISTS checkout_seat_count INTEGER
+    CHECK (checkout_seat_count IS NULL OR checkout_seat_count >= 3);
+
+ALTER TABLE core.api_keys ADD COLUMN IF NOT EXISTS team_id UUID REFERENCES core.teams(id);
+ALTER TABLE core.api_keys ADD COLUMN IF NOT EXISTS membership_id UUID REFERENCES core.team_memberships(id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_team_membership
+    ON core.api_keys(team_id, membership_id) WHERE team_id IS NOT NULL;
+
+ALTER TABLE metrics.proxy_events ADD COLUMN IF NOT EXISTS team_id UUID REFERENCES core.teams(id);
+ALTER TABLE metrics.proxy_events ADD COLUMN IF NOT EXISTS membership_id UUID REFERENCES core.team_memberships(id);
+CREATE INDEX IF NOT EXISTS idx_proxy_events_team_time
+    ON metrics.proxy_events(team_id, occurred_at DESC) WHERE team_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_proxy_events_membership_time
+    ON metrics.proxy_events(membership_id, occurred_at DESC) WHERE membership_id IS NOT NULL;
+
+-- Keep key attribution bound to its original membership for delayed events.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_team_memberships_id_team
+    ON core.team_memberships(id, team_id, user_id);
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='api_keys_team_membership_pair') THEN
+        ALTER TABLE core.api_keys ADD CONSTRAINT api_keys_team_membership_pair
+            FOREIGN KEY (membership_id, team_id, user_id)
+            REFERENCES core.team_memberships(id, team_id, user_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='api_keys_team_pair_check') THEN
+        ALTER TABLE core.api_keys ADD CONSTRAINT api_keys_team_pair_check
+            CHECK ((team_id IS NULL) = (membership_id IS NULL));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='proxy_events_team_membership_pair') THEN
+        ALTER TABLE metrics.proxy_events ADD CONSTRAINT proxy_events_team_membership_pair
+            FOREIGN KEY (membership_id, team_id, user_id)
+            REFERENCES core.team_memberships(id, team_id, user_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='proxy_events_team_pair_check') THEN
+        ALTER TABLE metrics.proxy_events ADD CONSTRAINT proxy_events_team_pair_check
+            CHECK ((team_id IS NULL) = (membership_id IS NULL));
+    END IF;
+END $$;
+CREATE OR REPLACE FUNCTION core.prevent_api_key_attribution_rewrite()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.team_id IS DISTINCT FROM OLD.team_id
+       OR NEW.membership_id IS DISTINCT FROM OLD.membership_id THEN
+        RAISE EXCEPTION 'API key team attribution is immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS api_keys_attribution_guard ON core.api_keys;
+CREATE TRIGGER api_keys_attribution_guard
+    BEFORE UPDATE ON core.api_keys
+    FOR EACH ROW EXECUTE FUNCTION core.prevent_api_key_attribution_rewrite();
+
+-- Immutable team billing snapshots; Stripe work consumes these in a later phase.
+CREATE TABLE IF NOT EXISTS billing.team_cycles (
+    team_id                UUID NOT NULL REFERENCES core.teams(id),
+    period_start           TIMESTAMPTZ NOT NULL,
+    period_end             TIMESTAMPTZ NOT NULL,
+    savings_usd            NUMERIC(14,4) NOT NULL DEFAULT 0,
+    service_savings_usd    NUMERIC(14,4) NOT NULL DEFAULT 0,
+    fee_cents              INTEGER NOT NULL DEFAULT 0 CHECK (fee_cents >= 0),
+    fee_adjustment_cents   INTEGER NOT NULL DEFAULT 0,
+    late_savings_usd       NUMERIC(14,4) NOT NULL DEFAULT 0,
+    stripe_invoice_id      TEXT,
+    invoice_url            TEXT,
+    payment_status         TEXT NOT NULL DEFAULT 'pending',
+    payment_failed_at      TIMESTAMPTZ,
+    reconciliation_state   TEXT NOT NULL DEFAULT 'frozen',
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(team_id, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS billing.team_cycle_members (
+    team_id       UUID NOT NULL REFERENCES core.teams(id),
+    period_start  TIMESTAMPTZ NOT NULL,
+    membership_id UUID NOT NULL REFERENCES core.team_memberships(id),
+    user_id       UUID REFERENCES core.users(id),
+    savings_usd   NUMERIC(14,4) NOT NULL DEFAULT 0,
+    PRIMARY KEY(team_id, period_start, membership_id),
+    FOREIGN KEY(team_id, period_start)
+        REFERENCES billing.team_cycles(team_id, period_start) ON DELETE CASCADE
+);
+
+-- Late fee adjustments, recorded before Stripe is called. A 'pending' row is
+-- resolved against its recorded invoice before anything is charged again.
+CREATE TABLE IF NOT EXISTS billing.team_fee_adjustments (
+    adjustment_key     TEXT PRIMARY KEY,
+    team_id            UUID NOT NULL REFERENCES core.teams(id),
+    period_start       TIMESTAMPTZ NOT NULL,
+    cents              INTEGER NOT NULL,
+    stripe_invoice_id  TEXT,
+    status             TEXT NOT NULL CHECK (status IN ('pending', 'attached')),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (team_id, period_start)
+        REFERENCES billing.team_cycles(team_id, period_start) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_team_fee_adjustments_pending
+    ON billing.team_fee_adjustments (team_id, period_start) WHERE status = 'pending';
+
 -- Daily rollups: what the dashboard actually reads.
 CREATE TABLE IF NOT EXISTS metrics.usage_daily (
     user_id      UUID   NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
@@ -256,6 +440,53 @@ CREATE TABLE IF NOT EXISTS core.auth_tokens (
     used_at     TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON core.auth_tokens (user_id, purpose);
+
+-- Team SSO is additive and disabled by default. Apply before SSO code is enabled.
+CREATE TABLE IF NOT EXISTS core.team_sso_configs (
+    team_id UUID PRIMARY KEY REFERENCES core.teams(id) ON DELETE CASCADE,
+    revision UUID NOT NULL,
+    issuer TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    secret_ciphertext TEXT NOT NULL,
+    authorization_endpoint TEXT NOT NULL,
+    token_endpoint TEXT NOT NULL,
+    jwks_uri TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT false,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS core.team_sso_identities (
+    team_id UUID NOT NULL REFERENCES core.team_sso_configs(team_id) ON DELETE CASCADE,
+    revision UUID NOT NULL,
+    subject TEXT NOT NULL,
+    user_id UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+    membership_id UUID NOT NULL REFERENCES core.team_memberships(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(team_id,user_id),
+    UNIQUE(team_id,revision,subject),
+    FOREIGN KEY(membership_id,team_id,user_id) REFERENCES core.team_memberships(id,team_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS core.team_sso_flows (
+    state_hash TEXT PRIMARY KEY,
+    team_id UUID NOT NULL REFERENCES core.team_sso_configs(team_id) ON DELETE CASCADE,
+    revision UUID NOT NULL,
+    verifier_hash TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    pkce_ciphertext TEXT NOT NULL,
+    link_user_id UUID REFERENCES core.users(id) ON DELETE CASCADE,
+    membership_id UUID REFERENCES core.team_memberships(id),
+    session_id UUID REFERENCES core.sessions(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    callback_used BOOLEAN NOT NULL DEFAULT false,
+    exchange_hash TEXT UNIQUE,
+    claims JSONB,
+    CHECK ((link_user_id IS NULL) = (membership_id IS NULL)),
+    CHECK ((link_user_id IS NULL) = (session_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_team_sso_flows_expiry ON core.team_sso_flows(expires_at);
+CREATE INDEX IF NOT EXISTS idx_team_sso_flows_team ON core.team_sso_flows(team_id);
+ALTER TABLE core.sessions ADD COLUMN IF NOT EXISTS sso_team_id UUID REFERENCES core.teams(id);
+ALTER TABLE core.sessions ADD COLUMN IF NOT EXISTS sso_revision UUID;
+ALTER TABLE core.sessions ADD COLUMN IF NOT EXISTS sso_membership_id UUID REFERENCES core.team_memberships(id);
 
 -- ================================================== ContextShrink Code
 -- Flat-fee plan for Claude Code and Codex users (code_plan.py). Only hashes of

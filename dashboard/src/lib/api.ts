@@ -1,4 +1,5 @@
 /** Control-plane API client. Point VITE_API_URL at the api container. */
+import { getSelectedTeamId } from "./workspace";
 
 export const API_URL: string =
   (import.meta.env.VITE_API_URL as string | undefined) ??
@@ -45,6 +46,15 @@ export async function apiFetch<T>(
   };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  // Auth, team discovery, and invitation acceptance are deliberately unscoped.
+  // Team routes carry an explicit team ID and authorize it server-side.
+  const isUnscoped =
+    (path.startsWith("/auth/") && path !== "/auth/me") ||
+    path === "/teams" ||
+    path.startsWith("/teams/") ||
+    path.startsWith("/team-invitations/");
+  const teamId = isUnscoped ? null : getSelectedTeamId();
+  if (teamId) headers["X-ContextShrink-Team"] = teamId;
 
   let res: Response;
   try {

@@ -49,6 +49,11 @@ services:
       CODE_API_URL: ${CODE_API_URL:-https://api.contextshrink.com}
       STRIPE_CODE_PRICE_LOOKUP_KEY: ${STRIPE_CODE_PRICE_LOOKUP_KEY:-contextshrink_code_monthly}
       APP_URL: ${APP_URL:-https://app.contextshrink.com}
+      CONTEXTSHRINK_TEAMS_ENABLED: ${CONTEXTSHRINK_TEAMS_ENABLED:-false}
+      CONTEXTSHRINK_TEAM_SSO_ENABLED: ${CONTEXTSHRINK_TEAM_SSO_ENABLED:-false}
+      SSO_ALLOWED_HOSTS: ${SSO_ALLOWED_HOSTS:-}
+      SSO_API_URL: ${SSO_API_URL:-https://api.contextshrink.com}
+      SSO_ENCRYPTION_KEY: ${SSO_ENCRYPTION_KEY:-}
       # Accounts (comma-separated emails) that can read Contact form messages.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # Outgoing email (password reset, email confirmation) over SMTP.

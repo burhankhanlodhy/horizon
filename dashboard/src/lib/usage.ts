@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, apiFetch } from "./api";
+import { useSelectedTeamId } from "./workspace";
 
 interface LedgerTotals {
   requests: number;
@@ -84,6 +85,7 @@ export function useBillingEstimate() {
   const [estimate, setEstimate] = useState<BillingEstimate | null>(null);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const teamId = useSelectedTeamId();
   useEffect(() => {
     const controller = new AbortController();
     let pending = false;
@@ -115,7 +117,7 @@ export function useBillingEstimate() {
       controller.abort();
       clearInterval(timer);
     };
-  }, [navigate]);
+  }, [navigate, teamId]);
   return { estimate, error, loading: !estimate && !error };
 }
 const colors = ["#c14d1b", "#5f7452", "#8b7f6f", "#4a4137"];

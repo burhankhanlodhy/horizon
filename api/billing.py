@@ -61,7 +61,7 @@ def savings_fee(savings: Decimal) -> Decimal:
 async def ledger_savings(user_id, start: datetime, end: datetime, connection=None) -> Decimal:
     value = await (connection if connection is not None else db._conn()).fetchval(
         f"SELECT {FEE_ELIGIBLE_SAVINGS_USD} "
-        "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
+        "FROM metrics.proxy_events WHERE user_id=$1 AND team_id IS NULL AND occurred_at >= $2 AND occurred_at < $3",
         user_id,
         start,
         end,
@@ -418,6 +418,9 @@ async def enforce_unpaid_fees() -> int:
             logger.warning("Cancelled subscription %s: savings fee unpaid past grace", sub_id)
         except Exception:
             logger.exception("Could not cancel overdue subscription %s; will retry", sub_id)
+    import team_billing
+
+    cancelled += await team_billing.enforce_unpaid_fees()
     return cancelled
 
 
@@ -471,6 +474,13 @@ async def handle_event(event) -> None:
         return
     obj = event.data.object
     kind = event.type
+    # Team customers and subscriptions are isolated from personal Pro billing.
+    # Resolve by stored Stripe customer first, with Team metadata as a guarded
+    # fallback, before any personal customer or fee handlers can run.
+    import team_billing
+
+    if await team_billing.handle_event(event):
+        return
     if kind == "checkout.session.completed":
         if obj.mode == "subscription" and obj.subscription:
             await sync_subscription(_expandable_id(obj.subscription))
@@ -528,6 +538,10 @@ class CheckoutIn(BaseModel):
 
 
 def install(app, current_user):
+    def reject_team_context(user):
+        if user.get("team_id"):
+            raise HTTPException(409, "Use Team billing while the Team workspace is selected.")
+
     @app.exception_handler(stripe.StripeError)
     async def stripe_error(request, exc):
         # Never echo provider details; Stripe retries webhooks on 5xx.
@@ -536,6 +550,7 @@ def install(app, current_user):
 
     @app.post("/billing/checkout")
     async def checkout(body: CheckoutIn, user=Depends(current_user)):
+        reject_team_context(user)
         row = await _billing_row(user["user_id"])
         if row and row["stripe_subscription_id"]:
             raise HTTPException(409, "You already have a subscription. Use Manage billing to change it.")
@@ -561,6 +576,7 @@ def install(app, current_user):
 
     @app.post("/billing/renew")
     async def renew(user=Depends(current_user)):
+        reject_team_context(user)
         row = await _billing_row(user["user_id"])
         if not row or not row["stripe_subscription_id"]:
             raise HTTPException(409, "No subscription to renew. Upgrade through checkout.")
@@ -569,6 +585,7 @@ def install(app, current_user):
 
     @app.post("/billing/portal")
     async def portal(user=Depends(current_user)):
+        reject_team_context(user)
         row = await _billing_row(user["user_id"])
         if not row or not row["stripe_customer_id"]:
             raise HTTPException(404, "No billing account yet")
@@ -580,6 +597,8 @@ def install(app, current_user):
 
     @app.get("/billing/invoices")
     async def invoices(user=Depends(current_user)):
+        if user.get("sso_team_id"):
+            raise HTTPException(403, "Use Team billing with an SSO session")
         row = await _billing_row(user["user_id"])
         if not row or not row["stripe_customer_id"] or _client is None:
             return []

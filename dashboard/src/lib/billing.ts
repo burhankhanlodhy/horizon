@@ -48,11 +48,12 @@ export async function openPortal(): Promise<void> {
   window.location.assign(url);
 }
 
-export function useBilling() {
+export function useBilling(enabled = true) {
   const [info, setInfo] = useState<SubscriptionInfo | null>(null);
   const [invoices, setInvoices] = useState<Invoice[] | null>(null);
   const [error, setError] = useState("");
   const reload = useCallback(async () => {
+    if (!enabled) return;
     try {
       const [sub, inv] = await Promise.all([
         apiFetch<SubscriptionInfo>("/subscription"),
@@ -64,7 +65,7 @@ export function useBilling() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load billing");
     }
-  }, []);
+  }, [enabled]);
   useEffect(() => {
     void reload();
   }, [reload]);

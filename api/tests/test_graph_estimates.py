@@ -1,9 +1,9 @@
 """Graph diagnostics remain in the ledger without becoming dollar credit."""
 
-import sys
 import asyncio
 import json
 import sqlite3
+import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -90,16 +90,16 @@ def test_legacy_graph_rows_cannot_change_fee_or_analytics_savings(dollars):
     # JSON operators/FILTER support the same portable SQL used by PostgreSQL.
     connection = sqlite3.connect(":memory:")
     connection.execute("ATTACH DATABASE ':memory:' AS metrics")
-    connection.execute("CREATE TABLE metrics.proxy_events (user_id TEXT, occurred_at TEXT, data TEXT)")
+    connection.execute("CREATE TABLE metrics.proxy_events (team_id TEXT, user_id TEXT, occurred_at TEXT, data TEXT)")
     start, end = datetime(2026, 10, 1), datetime(2026, 11, 1)
     for kind, savings in [(None, 10), ("request", 15), ("keepalive", -1), ("graph_estimate", dollars)]:
         data = {"savings_usd": savings}
         if kind:
             data["kind"] = kind
-        connection.execute("INSERT INTO metrics.proxy_events VALUES (?,?,?)", ("account", "2026-10-21", json.dumps(data)))
+        connection.execute("INSERT INTO metrics.proxy_events(user_id,occurred_at,data) VALUES (?,?,?)", ("account", "2026-10-21", json.dumps(data)))
     # Other accounts and periods must not affect the fee either.
-    connection.execute("INSERT INTO metrics.proxy_events VALUES (?,?,?)", ("other", "2026-10-21", '{"savings_usd":900}'))
-    connection.execute("INSERT INTO metrics.proxy_events VALUES (?,?,?)", ("account", "2026-11-02", '{"savings_usd":900}'))
+    connection.execute("INSERT INTO metrics.proxy_events(user_id,occurred_at,data) VALUES (?,?,?)", ("other", "2026-10-21", '{"savings_usd":900}'))
+    connection.execute("INSERT INTO metrics.proxy_events(user_id,occurred_at,data) VALUES (?,?,?)", ("account", "2026-11-02", '{"savings_usd":900}'))
 
     class LedgerConnection:
         async def fetchval(self, sql, *args):

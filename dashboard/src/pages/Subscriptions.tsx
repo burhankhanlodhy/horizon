@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowUpRight, Check, Sparkles } from "lucide-react";
 import {
@@ -21,14 +21,124 @@ import {
 } from "../lib/billing";
 import { useBillingEstimate } from "../lib/usage";
 import { cn, fmtUsd } from "../lib/utils";
+import { apiFetch } from "../lib/api";
+import { useSelectedTeamId } from "../lib/workspace";
+
+type TeamBillingEstimate = { team_id: string; seat_count: number | null; seat_price_usd: number | null; seats_usd: number | null; savings_usd: number | null; savings_fee_usd: number | null; total_usd: number | null; period_start: string; period_end: string; members?: { membership_id: string | null; user_id: string | null; name: string; role: string | null; savings_usd: number; removed: boolean }[] };
+type SeatPreview = { current_seat_count: number; seat_count: number; prorated_amount_usd: number; next_invoice_amount_usd: number; effective_at: string | null; currency: "USD" };
+type TeamBillingData = { team: { id: string; name: string; role: string; status: string; seat_count: number; pending_seat_count?: number | null; member_count: number; reserved_count: number }; members: { membership_id: string; email: string; name?: string | null; role: string }[]; invitations: unknown[] };
+
+function TeamBillingPanel({ teamId }: { teamId: string }) {
+  const [teamCheckoutParams, setTeamCheckoutParams] = useSearchParams();
+  const [data, setData] = useState<TeamBillingData | null>(null);
+  const [estimate, setEstimate] = useState<TeamBillingEstimate | null>(null);
+  const [seatCount, setSeatCount] = useState(3);
+  const [seatPreview, setSeatPreview] = useState<SeatPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const owner = data?.team.role === "owner";
+  const canViewTeamBilling = data?.team.role === "owner" || data?.team.role === "admin";
+  async function load() {
+    setError("");
+    try {
+      const [detail, billing] = await Promise.all([
+        apiFetch<TeamBillingData>(`/teams/${encodeURIComponent(teamId)}`),
+        apiFetch<TeamBillingEstimate>(`/teams/${encodeURIComponent(teamId)}/billing/estimate`),
+      ]);
+      setData(detail); setEstimate(billing); setSeatCount(Math.max(3, detail.team.seat_count));
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load Team billing"); }
+  }
+  useEffect(() => { void load(); }, [teamId]);
+  useEffect(() => {
+    const result = teamCheckoutParams.get("team_checkout");
+    if (!result) return;
+    setTeamCheckoutParams({}, { replace: true });
+    if (result === "cancelled") { setNotice("Team checkout was cancelled. No Team subscription was activated."); return; }
+    if (result === "success") { setNotice("Checkout completed. Team access activates after Stripe confirms payment."); void load(); }
+  }, [teamCheckoutParams]);
+  useEffect(() => {
+    if (!data || seatCount === data.team.seat_count) { setSeatPreview(null); setPreviewLoading(false); return; }
+    let active = true;
+    setPreviewLoading(true);
+    void apiFetch<SeatPreview>(`/teams/${encodeURIComponent(teamId)}/billing/seats/preview?seat_count=${seatCount}`)
+      .then((preview) => { if (active) setSeatPreview(preview); })
+      .catch((e) => { if (active) { setSeatPreview(null); setError(e instanceof Error ? e.message : "Unable to preview seat cost"); } })
+      .finally(() => { if (active) setPreviewLoading(false); });
+    return () => { active = false; };
+  }, [teamId, data?.team.seat_count, seatCount]);
+  async function checkout() {
+    setBusy(true); setError("");
+    try { const result = await apiFetch<{ checkout_url: string }>(`/teams/${encodeURIComponent(teamId)}/billing/checkout`, { method: "POST", body: { seat_count: data?.team.seat_count ?? 3 } }); window.location.assign(result.checkout_url); }
+    catch (e) { setError(e instanceof Error ? e.message : "Unable to start Team checkout"); setBusy(false); }
+  }
+  async function portal() {
+    setBusy(true); setError("");
+    try { const result = await apiFetch<{ portal_url: string }>(`/teams/${encodeURIComponent(teamId)}/billing/portal`, { method: "POST" }); window.location.assign(result.portal_url); }
+    catch (e) { setError(e instanceof Error ? e.message : "Unable to open Team billing"); setBusy(false); }
+  }
+  async function updateSeats() {
+    if (!data || !estimate || !seatPreview || seatCount === data.team.seat_count || busy) return;
+    const minSeats = Math.max(3, data.team.member_count + data.team.reserved_count);
+    if (seatCount < minSeats) { setError(`At least ${minSeats} seats are required for current members and reservations.`); return; }
+    const prompt = seatPreview.effective_at
+      ? `Schedule Team seats to decrease from ${data.team.seat_count} to ${seatCount} at renewal? Next invoice estimate: ${fmtUsd(seatPreview.next_invoice_amount_usd)}.`
+      : `Increase Team seats from ${data.team.seat_count} to ${seatCount}? Estimated current-cycle proration: ${fmtUsd(seatPreview.prorated_amount_usd)}. Next invoice estimate: ${fmtUsd(seatPreview.next_invoice_amount_usd)}.`;
+    if (!window.confirm(prompt)) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const result = await apiFetch<{ seat_count: number; pending_seat_count: number | null; effective_at: string | null; prorated_amount_usd: number | null; next_invoice_amount_usd: number }>(`/teams/${encodeURIComponent(teamId)}/billing/seats`, { method: "PATCH", body: { seat_count: seatCount } });
+      setNotice(result.effective_at ? `Seat change scheduled for ${new Date(result.effective_at).toLocaleDateString()}. Next invoice estimate: ${fmtUsd(result.next_invoice_amount_usd)}.` : `Seats updated. Current-cycle prorated amount: ${result.prorated_amount_usd === null ? "calculated by Stripe" : fmtUsd(result.prorated_amount_usd)}; next invoice estimate: ${fmtUsd(result.next_invoice_amount_usd)}.`);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to update seats"); }
+    finally { setBusy(false); }
+  }
+async function cancelScheduledSeatReduction() {
+if (!data || data.team.pending_seat_count == null || busy) return;
+const renewal = estimate?.period_end ? new Date(estimate.period_end).toLocaleDateString() : "the next renewal";
+if (!window.confirm(`Cancel the scheduled reduction to ${data.team.pending_seat_count} seats? The current ${data.team.seat_count} seats will remain at ${renewal}.`)) return;
+setBusy(true); setError(""); setNotice("");
+try {
+await apiFetch(`/teams/${encodeURIComponent(teamId)}/billing/seats`, { method: "PATCH", body: { seat_count: data.team.seat_count } });
+setNotice(`Scheduled seat reduction canceled. ${data.team.seat_count} seats will remain at the ${renewal} renewal.`);
+await load();
+} catch (e) { setError(e instanceof Error ? e.message : "Unable to cancel scheduled seat reduction"); }
+finally { setBusy(false); }
+}
+  return <div className="flex flex-col gap-6">
+    <Card hairline className="p-6"><SectionHeader eyebrow="Team subscription" title={data?.team.name ?? "Team billing"} action={<Badge tone={data?.team.status === "active" ? "green" : "slate"}>{data?.team.status ?? "Loading"}</Badge>} />
+{estimate && canViewTeamBilling && <>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[["Purchased seats", `${estimate.seat_count ?? 0} × ${fmtUsd(estimate.seat_price_usd ?? 5)}`], ["Monthly seats", fmtUsd(estimate.seats_usd ?? 0)], ["Cycle savings", fmtUsd(estimate.savings_usd ?? 0)], ["One Team savings fee", fmtUsd(estimate.savings_fee_usd ?? 0)], ["Estimated total", fmtUsd(estimate.total_usd ?? 0)]].map(([label, value]) => <div key={label} className="rounded-lg border border-ink/10 bg-ink/5 p-4"><div className="text-xs text-ink-3">{label}</div><div className="mt-1 font-display text-xl font-bold text-ink">{value}</div></div>)}
+        </div>
+        <p className="mt-3 text-xs text-ink-3">Seat charges recur monthly. The savings fee is calculated once from eligible Team savings for {new Date(estimate.period_start).toLocaleDateString()}–{new Date(estimate.period_end).toLocaleDateString()}; estimates exclude applicable tax or adjustments. Initial checkout charges seats upfront; savings fees follow the completed usage cycle.</p>
+      </>}
+      {estimate && !canViewTeamBilling && <div className="mt-5 rounded-lg border border-ink/10 bg-ink/5 p-4"><div className="text-xs text-ink-3">Your eligible Team savings this cycle</div><div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.savings_usd ?? 0)}</div><p className="mt-2 text-xs text-ink-3">Your contribution is included in one Team savings fee. Billing totals and seat costs are managed by the Team owner.</p></div>}
+      {estimate && canViewTeamBilling && <p className="mt-3 text-xs text-ink-3">The 5% savings fee is waived when combined eligible savings are $20 or less; above $20 it applies once to the full Team total. Initial checkout charges seats upfront; the estimate reflects the current cycle and excludes applicable tax or adjustments.</p>}
+      {!estimate && <p className="mt-4 text-sm text-ink-3">Team estimate unavailable.</p>}
+      {error && <p role="alert" className="mt-3 text-sm text-ember">{error}</p>}{notice && <p role="status" className="mt-3 text-sm text-sage">{notice}</p>}
+      {owner && data?.team.pending_seat_count != null && <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-ink/10 bg-ink/5 p-4"><p className="text-sm text-ink-2">Seat reduction to {data.team.pending_seat_count} seats is scheduled for renewal{estimate?.period_end ? ` on ${new Date(estimate.period_end).toLocaleDateString()}` : ""}. Until then, {data.team.seat_count} seats remain active.</p><GhostButton disabled={busy} onClick={() => void cancelScheduledSeatReduction()}>Cancel scheduled reduction</GhostButton></div>}
+      {owner && data && <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-ink/10 pt-5"><label className="text-xs text-ink-3">Purchased seats<input type="number" min={Math.max(3,data.team.member_count+data.team.reserved_count)} value={seatCount} onChange={(event)=>setSeatCount(Math.max(3,Number(event.target.value)||3))} className="mt-1 block w-28 rounded-lg border border-ink/15 bg-card px-3 py-2 text-sm text-ink" /></label><GradientButton disabled={busy || previewLoading || seatCount===data.team.seat_count || !seatPreview} onClick={()=>void updateSeats()}>{busy?"Updating…":previewLoading?"Calculating…":"Review seat change"}</GradientButton><span className="text-xs text-ink-3">Each added seat adds {fmtUsd(estimate?.seat_price_usd ?? 5)} per month. Reductions take effect at renewal.</span>{seatPreview && <p className="w-full text-xs text-ink-3">{seatPreview.effective_at ? `Scheduled for ${new Date(seatPreview.effective_at).toLocaleDateString()}; next invoice estimate ${fmtUsd(seatPreview.next_invoice_amount_usd)}.` : `Estimated current-cycle proration ${fmtUsd(seatPreview.prorated_amount_usd)}; next invoice estimate ${fmtUsd(seatPreview.next_invoice_amount_usd)}.`}</p>}</div>}
+      {owner && <div className="mt-5 flex flex-wrap gap-3">{data?.team.status === "active" ? <GhostButton disabled={busy} onClick={()=>void portal()}>Payment methods and invoices <ArrowUpRight size={14}/></GhostButton> : <GradientButton disabled={busy} onClick={()=>void checkout()}>{busy?"Opening Stripe…":"Complete Team checkout"} <ArrowUpRight size={14}/></GradientButton>}</div>}
+    </Card>
+    {data && <Card className="p-6"><SectionHeader eyebrow="Savings attribution" title="Current cycle contributions" /><div className="mt-4 divide-y divide-ink/5">{(estimate?.members ?? []).map((member,index)=><div key={member.membership_id ?? `service-${index}`} className="flex justify-between py-3 text-sm"><span className="text-ink">{member.name}{member.removed ? " · former member" : ""}</span><span className="font-medium text-ink">{fmtUsd(member.savings_usd)}</span></div>)}</div><p className="mt-2 text-xs text-ink-3">{canViewTeamBilling ? "The 5% fee is charged once on combined eligible Team savings after the $20 cycle waiver." : "This is your contribution to the Team cycle; consolidated billing is managed by the owner."}</p></Card>}
+  </div>;
+}
 
 export default function Subscriptions() {
   const { plan, changePlan, reloadAccount, user } = useAccount();
+  const navigate = useNavigate();
+  const [teamEnabled, setTeamEnabled] = useState(false);
+const teamId = useSelectedTeamId();
+  useEffect(() => { void apiFetch("/teams").then(() => setTeamEnabled(true)).catch(() => setTeamEnabled(false)); }, []);
   const { estimate, error: estimateError, loading: estimateLoading } =
     useBillingEstimate();
-  const { info, invoices, reload: reloadBilling } = useBilling();
+  const { info, invoices, reload: reloadBilling } = useBilling(!teamId);
   const [params, setParams] = useSearchParams();
   const current = PLANS.find((p) => p.id === plan)!;
+  const estimatePlanName =
+    PLANS.find((p) => p.id === estimate?.plan)?.name ?? current.name;
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Plan>(plan);
   const [saving, setSaving] = useState(false);
@@ -117,7 +227,8 @@ export default function Subscriptions() {
     setError("");
     try {
       if (selected === "team") {
-        setError("Team is coming soon.");
+        if (teamEnabled) { setOpen(false); navigate("/team"); return; }
+        setError("Team workspaces are not enabled yet.");
         return;
       }
       if (selected === "free" && cancelsOn) {
@@ -145,6 +256,7 @@ export default function Subscriptions() {
       setSaving(false);
     }
   }
+  if (teamId) return <TeamBillingPanel teamId={teamId} />;
   return (
     <div className="flex flex-col gap-6">
       {/* plan banner */}
@@ -215,34 +327,38 @@ export default function Subscriptions() {
         />
         {estimate ? (
           <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className={cn(
+              "grid grid-cols-1 gap-4 sm:grid-cols-2",
+              estimate.plan === "pro" && "md:grid-cols-3",
+              estimate.plan === "team" && "xl:grid-cols-4",
+            )}>
               <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
                 <div className="text-xs text-ink-3">Est. savings this cycle</div>
                 <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimated_savings_usd)}</div>
               </div>
               <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
-                <div className="text-xs text-ink-3">Current plan estimate · {current.name}</div>
+                <div className="text-xs text-ink-3">Current plan estimate · {estimatePlanName}</div>
                 <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimated_total_usd)}</div>
               </div>
-              <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
-                <div className="text-xs text-ink-3">Savings fee · Pro / Team</div>
-                <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimates.pro.savings_fee)}</div>
-              </div>
-              <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
-                <div className="text-xs text-ink-3">Team seats · {estimate.seat_count} × $5</div>
-                <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimates.team.seat_fee)}</div>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-1 gap-2 text-sm text-ink-2 sm:grid-cols-3">
-              {PLANS.map((p) => (
-                <div key={p.id} className="flex items-center justify-between rounded-md border border-ink/10 px-3 py-2">
-                  <span>Potential {p.name} bill</span>
-                  <strong className="font-semibold text-ink">{fmtUsd(estimate.estimates[p.id].total)}</strong>
+              {estimate.plan !== "free" && (
+                <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
+                  <div className="text-xs text-ink-3">Savings fee · {estimatePlanName}</div>
+                  <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimates[estimate.plan].savings_fee)}</div>
                 </div>
-              ))}
+              )}
+              {estimate.plan === "team" && (
+                <div className="rounded-lg border border-ink/10 bg-ink/5 p-4">
+                  <div className="text-xs text-ink-3">Team seats · {estimate.seat_count} × $5</div>
+                  <div className="mt-1 font-display text-2xl font-bold text-ink">{fmtUsd(estimate.estimates.team.seat_fee)}</div>
+                </div>
+              )}
             </div>
             <p className="mt-3 text-xs text-ink-3">
-              The 5% savings fee is waived when cycle savings are $20 or less. Above $20, it is 5% of the full estimated savings. Team also includes $5 per account seat each month. Estimates cover {new Date(estimate.period_start).toLocaleDateString()}–{new Date(estimate.period_end).toLocaleDateString()} and are billed at cycle end.
+              {estimate.plan === "free"
+                ? "Free has no subscription or savings fees. "
+                : `The ${estimate.savings_fee_rate * 100}% savings fee is waived when cycle savings are ${fmtUsd(estimate.savings_fee_threshold_usd)} or less. Above ${fmtUsd(estimate.savings_fee_threshold_usd)}, it is ${estimate.savings_fee_rate * 100}% of the full estimated savings. `}
+              {estimate.plan === "team" && "Team also includes $5 per account seat each month. "}
+              Estimates cover {new Date(estimate.period_start).toLocaleDateString()}–{new Date(estimate.period_end).toLocaleDateString()}{estimate.plan !== "free" && " and are billed at cycle end"}.
             </p>
           </>
         ) : (
@@ -279,7 +395,7 @@ export default function Subscriptions() {
                 <div className="text-sm font-semibold text-ink">
                   Horizon {s.name}
                 </div>
-                <div className="text-xs text-ink-3">{s.description}</div>
+                <div className="text-xs text-ink-3">{s.id === "team" && teamEnabled ? "Three or more seats, one shared savings estimate and a Team billing workspace." : s.description}</div>
               </div>
               <div className="my-5 flex justify-center">
                 <ProgressRing
@@ -302,7 +418,7 @@ export default function Subscriptions() {
                   {s.id === "free" ? "Usage overview" : "Advanced Analytics"}
                 </span>
                 <button
-                  onClick={() => manage(s.id)}
+                  onClick={() => s.id === "team" && teamEnabled ? navigate("/team") : manage(s.id)}
                   className="font-medium text-ember transition hover:text-ember-2"
                 >
                   Manage →
@@ -440,10 +556,10 @@ export default function Subscriptions() {
             <option
               key={p.id}
               value={p.id}
-              disabled={p.id === "team" || (p.id === "pro" && upgradeBlocked)}
+              disabled={(p.id === "team" && !teamEnabled) || (p.id === "pro" && upgradeBlocked)}
             >
               {p.id === "team"
-                ? `${p.name} (coming soon)`
+                ? teamEnabled ? `${p.name} · create or manage a Team` : `${p.name} (coming soon)`
                 : p.id === "pro" && upgradeBlocked
                   ? `${p.name} (pay outstanding fee first)`
                   : p.name}

@@ -407,8 +407,13 @@
           location.replace("/login?next=%2Fdashboard");
         }
         async function request(path, signal) {
+          const headers = { Authorization: "Bearer " + token };
+          try {
+            const teamId = localStorage.getItem("cs_selected_team");
+            if (teamId) headers["X-ContextShrink-Team"] = teamId;
+          } catch (_) {}
           const r = await fetch(base + path, {
-            headers: { Authorization: "Bearer " + token },
+            headers,
             cache: "no-store",
             signal,
           });
@@ -630,7 +635,10 @@
           }
         })();
         window.addEventListener("storage", (e) => {
-          if (e.key === "cs_session_token") {
+          if (e.key === "cs_selected_team") {
+            if (pending) pending.abort();
+            location.reload();
+          } else if (e.key === "cs_session_token") {
             if (pending) pending.abort();
             $("content").classList.add("hidden");
             login();
