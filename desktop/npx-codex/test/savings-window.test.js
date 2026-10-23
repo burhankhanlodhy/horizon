@@ -7,12 +7,15 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { summary, format } = require('../lib/savings-summary');
 const window = require('../lib/savings-window');
-const data = { scope: 'key', period: 'today_utc', requests: 15, tokens_before: 10000, tokens_saved: 300, savings_usd: 0.04 };
-test('shared savings presentation reports net costs, zero totals, and the correct scope', () => {
-  assert.match(format(summary(data)), /trimmed 3% · net saved \$0.04 · 15 req · this key today \(UTC\)/);
-  assert.match(format(summary({ ...data, savings_usd: -0.01 })), /net cost \$0.01/);
-  assert.match(format(summary({ ...data, tokens_before: 0, tokens_saved: 0 })), /trimmed 0%/);
-  for (const patch of [{ scope: 'account' }, { period: 'month' }, { requests: -1 }, { tokens_saved: 10001 }, { savings_usd: Infinity }]) assert.throws(() => summary({ ...data, ...patch }));
+const data = { today: { requests: 15, tokens_before: 10000, tokens_after: 9700, tokens_saved: 300, pct: 3 } };
+test('the usage line shows the percent and the trial days, with no dollar amounts', () => {
+  assert.equal(format(summary(data)), 'ContextShrink · usage saved 3% today');
+  assert.equal(format(summary(data, 5)), 'ContextShrink · usage saved 3% today · trial 5d left');
+  assert.equal(format(summary({ today: { requests: 0, pct: 0 } })), 'ContextShrink · usage saved 0% today');
+  assert.doesNotMatch(format(summary(data, 5)), /\$/);
+  for (const patch of [{ today: undefined }, { today: { ...data.today, pct: NaN } }, { today: { ...data.today, requests: -1 } }]) {
+    assert.throws(() => summary({ ...data, ...patch }));
+  }
 });
 test('window snapshots contain numeric totals only and clear stale values on error', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-window-test-')), file = path.join(root, 'savings.json');
@@ -22,7 +25,7 @@ test('window snapshots contain numeric totals only and clear stale values on err
     assert.equal(JSON.parse(text).requests, 15);
     await window.refresh(async () => { throw new Error('error with fake-secret-key'); }, file);
     const unavailable = fs.readFileSync(file, 'utf8'); assert.equal(JSON.parse(unavailable).available, false);
-    assert.ok(!unavailable.includes('secret')); assert.ok(!unavailable.includes('netUsd'));
+    assert.ok(!unavailable.includes('secret')); assert.ok(!unavailable.includes('trialDays'));
     await window.refresh(async () => ({ ...summary(data), pct: 500 }), file);
     assert.equal(JSON.parse(fs.readFileSync(file)).available, false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -48,14 +51,3 @@ test('unsupported platforms fail without opening a process or requesting totals'
   await assert.rejects(window.show(() => { throw new Error('should not run'); }, { out() {} }, { platform: 'linux' }), /Windows/);
 });
 
-test('savings amounts below a cent keep their real size', () => {
-  const { usd, format } = require('../lib/savings-summary.js');
-  assert.equal(usd(0), '$0.00');
-  assert.equal(usd(1.844), '$1.84');
-  assert.equal(usd(0.0099), '$0.01');
-  assert.equal(usd(0.0015), '$0.0015');
-  assert.equal(usd(0.001), '$0.001');
-  assert.equal(usd(-0.0029), '$0.0029');
-  assert.equal(usd(0.00004), '<$0.0001');
-  assert.match(format({ pct: 3, netUsd: 0.0015, requests: 11 }), /net saved \$0\.0015 · 11 req/);
-});

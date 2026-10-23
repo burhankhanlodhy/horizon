@@ -1,6 +1,6 @@
 {
   "name": "contextshrink-codex",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Connect local Codex CLI and desktop coding sessions to ContextShrink using your ChatGPT sign-in.",
   "license": "Apache-2.0",
   "author": "ContextShrink",
@@ -13,9 +13,13 @@
     "lib/api.js",
     "lib/chats.js",
     "lib/cli.js",
+    "lib/code-device.js",
+    "lib/code-engine.js",
+    "lib/code-env.js",
+    "lib/code-login.js",
     "lib/config.js",
+    "lib/engine-manifest.json",
     "lib/files.js",
-    "lib/prompt.js",
     "lib/savings-summary.js",
     "lib/savings-window.js",
     "lib/savings-window.ps1",
@@ -29,7 +33,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "smol-toml": "1.9.1"

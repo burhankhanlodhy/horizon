@@ -1,7 +1,7 @@
 {
   "name": "contextshrink-claude",
-  "version": "0.2.2",
-  "description": "Connect Claude Code to the ContextShrink proxy: compression and a warm prompt cache, with nothing running in the background.",
+  "version": "0.3.0",
+  "description": "ContextShrink Code for Claude Code: trims what Claude Code resends on every turn, compressed on your own computer.",
   "keywords": [
     "claude",
     "claude-code",
@@ -26,6 +26,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   }
 }

@@ -1,23 +1,26 @@
 'use strict';
 const { ApiError } = require('./api');
-function summary(data, now = new Date()) {
-  if (data?.scope !== 'key' || data.period !== 'today_utc' ||
-      !['requests', 'tokens_before', 'tokens_saved'].every(k => Number.isSafeInteger(data[k]) && data[k] >= 0) ||
-      data.tokens_saved > data.tokens_before || !Number.isFinite(data.savings_usd)) throw new ApiError('Savings are currently unavailable.');
-  return { version: 1, available: true,
-    pct: data.tokens_before > 0 ? Math.round(data.tokens_saved / data.tokens_before * 100) : 0,
-    netUsd: data.savings_usd, requests: data.requests, updatedAt: now.toISOString() };
+
+// Today's usage from GET /code/usage/summary, plus the trial days left (null when
+// there is no trial). Dollar amounts are not shown: the plan is a flat fee.
+function summary(data, trialDays = null, now = new Date()) {
+  const today = data && data.today;
+  if (!today || !Number.isFinite(today.pct) || !Number.isSafeInteger(today.requests) || today.requests < 0) {
+    throw new ApiError('Usage is currently unavailable.');
+  }
+  return {
+    version: 1,
+    available: true,
+    pct: Math.max(0, Math.min(100, Math.round(today.pct))),
+    requests: today.requests,
+    trialDays: Number.isSafeInteger(trialDays) && trialDays >= 0 ? trialDays : null,
+    updatedAt: now.toISOString(),
+  };
 }
-// Dollars readable at any size (same rule as the desktop status line): cents
-// from $0.01 up, up to four decimals below a cent ("$0.0015"), "<$0.0001" below.
-function usd(amount) {
-  const value = Math.abs(Number(amount) || 0);
-  if (value === 0) return '$0.00';
-  if (value >= 0.005) return '$' + value.toFixed(2);
-  if (value >= 0.00005) return '$' + value.toFixed(4).replace(/0+$/, '');
-  return '<$0.0001';
-}
+
 function format(data) {
-  return `ContextShrink · trimmed ${data.pct}% · net ${data.netUsd < 0 ? 'cost' : 'saved'} ${usd(data.netUsd)} · ${data.requests} req · this key today (UTC)`;
+  const trial = data.trialDays === null ? '' : ` · trial ${data.trialDays}d left`;
+  return `ContextShrink · usage saved ${data.pct}% today${trial}`;
 }
-module.exports = { summary, format, usd };
+
+module.exports = { summary, format };
