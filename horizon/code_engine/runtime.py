@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import logging.handlers
 import os
 import signal
 import subprocess
@@ -52,6 +54,11 @@ LAUNCH_ENV_NAMES = frozenset(
         "CONTEXTSHRINK_HOME",
         "CONTEXTSHRINK_API_URL",
         "CONTEXTSHRINK_MACHINE_ID",
+        # Test-only cycle intervals; the engine ignores them inside the shipped client.
+        "CONTEXTSHRINK_TEST_PLAN_REFRESH_SECONDS",
+        "CONTEXTSHRINK_TEST_USAGE_FLUSH_SECONDS",
+        "CONTEXTSHRINK_TEST_CYCLE_TICK_SECONDS",
+        "CONTEXTSHRINK_TEST_USAGE_DEBOUNCE_SECONDS",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
@@ -319,6 +326,40 @@ def attach_background_output(home: Path) -> None:
             pass
     sys.stdout = log
     sys.stderr = log
+
+
+_ENGINE_LOG_HANDLER = "engine-log"
+
+
+def attach_engine_log(home: Path) -> None:
+    """Write the engine's own records (``horizon.code_engine``, INFO and up) to engine.log.
+
+    Under pythonw the root logger has no console, so these lines used to reach only the
+    proxy's runtime log, and only after the proxy had started. This handler is attached
+    first thing in ``code-engine run``, so the cycle's first refresh is logged too.
+    Idempotent. The file rotates at 1 MB and keeps two old copies.
+    """
+    engine_logger = logging.getLogger("horizon.code_engine")
+    target = home / LOG_FILE
+    for stale in [h for h in engine_logger.handlers if h.get_name() == _ENGINE_LOG_HANDLER]:
+        if getattr(stale, "baseFilename", None) == str(target.resolve(strict=False)):
+            return
+        # Another home was attached earlier in this process: replace it.
+        engine_logger.removeHandler(stale)
+        stale.close()
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            target, maxBytes=1_000_000, backupCount=2, encoding="utf-8"
+        )
+    except OSError:
+        return  # logging is best effort: the engine still runs without it
+    handler.set_name(_ENGINE_LOG_HANDLER)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    engine_logger.addHandler(handler)
+    if engine_logger.getEffectiveLevel() > logging.INFO:
+        engine_logger.setLevel(logging.INFO)
 
 
 def launch_environment_allowed(name: str) -> bool:

@@ -40,7 +40,8 @@ test('connect signs in, installs the engine, and points Claude Code at it, keepi
     assert.match(res.stdout, /Start a new Claude Code session/);
 
     const settings = readSettings(sb);
-    assert.deepStrictEqual(Object.keys(settings), ['model', 'permissions', 'env', 'hooks', 'statusLine']);
+    assert.deepStrictEqual(Object.keys(settings),
+      ['model', 'permissions', 'env', 'hooks', 'statusLine', 'extraKnownMarketplaces', 'enabledPlugins']);
     assert.deepStrictEqual(settings.permissions, { allow: ['Bash(npm test)'] });
     assert.strictEqual(settings.model, 'opus');
     assert.deepStrictEqual(settings.env, {

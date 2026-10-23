@@ -58,8 +58,11 @@ function Update-Savings {
         $requests = [double]$data.requests
         if ($percent -lt 0 -or $percent -gt 100 -or $requests -lt 0) { throw 'Invalid' }
         # Usage only, no dollar amounts: the plan is a flat fee.
-        $stats.Text = 'Usage saved ' + $percent.ToString('0', $invariant) + '% today'
-        if ($null -ne $data.trialDays) { $stats.Text += $dot + 'free week ' + ([int]$data.trialDays).ToString($invariant) + 'd left' }
+        # One decimal under 10 percent, whole numbers from 10 up (the same text as the status line).
+        $percentText = if ($percent -lt 10) { $percent.ToString('0.0', $invariant) } else { [Math]::Round($percent).ToString('0', $invariant) }
+        $stats.Text = 'Usage saved ' + $percentText + '% today'
+        if ($data.plan -eq 'active') { $stats.Text += $dot + 'Subscribed' }
+        elseif ($null -ne $data.trialDays) { $stats.Text += $dot + 'free week ' + ([int]$data.trialDays).ToString($invariant) + 'd left' }
         $scope.Text = $requests.ToString('0', $invariant) + ' requests' + $dot + 'This computer today (UTC)'
         $updated.Text = 'ContextShrink Code' + $dot + 'Updated ' + $stamp.ToLocalTime().ToString('HH:mm:ss')
         $stats.ForeColor = [System.Drawing.ColorTranslator]::FromHtml('#72DFBD')

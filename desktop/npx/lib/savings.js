@@ -15,21 +15,26 @@ function valueAt(payload, group, name) {
   return name === null ? payload[group] : payload[group]?.[name];
 }
 
-function npxOwnsCodeTab(env) {
+// True only when the desktop app manages the Code tab (a codetab.json owned by someone
+// else, or one that cannot be read). The npx plugin then stays out of its way. An absent
+// codetab.json is not a desktop app: Claude Code reads settings.json whether or not the
+// Code tab has been patched yet, so the line is registered as it was in 0.2.x.
+function desktopOwnsCodeTab(env) {
   const file = codetab.codeTabPaths(env).config;
   if (!fs.existsSync(file)) return false;
   try {
     const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return config.owner === 'npx' && config.enabled === true;
-  } catch { return false; }
+    return !files.isPlainObject(config) || config.owner !== 'npx';
+  } catch { return true; }
 }
 
 function installRuntime(paths) {
   const dir = directoryOf(paths);
   const runtime = path.join(dir, 'savings-runtime.cjs');
   files.writePrivateText(runtime, fs.readFileSync(path.join(__dirname, 'savings-runtime.cjs'), 'utf8'));
+  files.writePrivateText(path.join(dir, 'local-savings.cjs'), fs.readFileSync(path.join(__dirname, 'local-savings.cjs'), 'utf8'));
   files.writePrivateJson(path.join(dir, 'ui-config.json'), {
-    state: paths.state, settings: paths.settings, device: paths.device, license: paths.license,
+    state: paths.state, settings: paths.settings, device: paths.device, license: paths.license, tool: 'claude',
   });
   const plugin = path.join(dir, 'plugin');
   files.writePrivateJson(path.join(plugin, '.claude-plugin', 'plugin.json'), {
@@ -68,7 +73,7 @@ function ensure(ctx, paths, { codeTab = true } = {}) {
   const previous = Array.isArray(state.ui) ? state.ui : [];
   const records = [];
   const marketplace = settings.payload.extraKnownMarketplaces;
-  const skipPlugin = !codeTab || !npxOwnsCodeTab(ctx.env) ||
+  const skipPlugin = !codeTab || desktopOwnsCodeTab(ctx.env) ||
     (marketplace !== undefined && !files.isPlainObject(marketplace)) ||
     (marketplace?.[NAME] !== undefined && !same(marketplace[NAME], values.extraKnownMarketplaces));
   for (const [group, name] of fields) {
@@ -119,7 +124,7 @@ function cleanup(paths, payload) {
   // only fixed, known files within this installation, never recursively.
   const text = JSON.stringify(payload).replace(/\\\\/g, '/');
   if (text.includes(dir.replace(/\\/g, '/'))) return;
-  for (const relative of ['summary-cache.json', 'ui-config.json', 'savings-runtime.cjs',
+  for (const relative of ['summary-cache.json', 'ui-config.json', 'savings-runtime.cjs', 'local-savings.cjs',
     'plugin/hooks/register.js', 'plugin/hooks/hooks.json',
     'plugin/.claude-plugin/plugin.json', 'plugin/.claude-plugin/marketplace.json']) {
     files.removeFile(path.join(dir, relative));

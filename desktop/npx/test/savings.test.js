@@ -207,7 +207,7 @@ test('a new device key invalidates the cache', () => fixture(async ({ sb, dir })
     device.device_key = 'cs_dev_NEWKEYabcdefghijklmnopqrstuv';
     fs.writeFileSync(sb.deviceFile, JSON.stringify(device));
     reply.data = { today: { requests: 0, tokens_before: 0, tokens_saved: 0, pct: 0 } };
-    assert.equal(await render(dir, sb), 'ContextShrink · usage saved 0% today · free week 7d left');
+    assert.equal(await render(dir, sb), 'ContextShrink · usage saved 0.0% today · free week 7d left');
     assert.equal(hits.length, 2);
     assert.notEqual(hits[0].authorization, hits[1].authorization);
   });
@@ -241,13 +241,14 @@ test('HTTP errors are cached, and a hanging service does not hang the status lin
 test('the status line text carries no dollar amounts, and free-week days come from the plan note', () => {
   const now = Date.parse('2026-10-20T00:00:00Z');
   const payload = (plan, until) => Buffer.from(JSON.stringify({ plan, until: until / 1000 })).toString('base64url') + '.c2ln';
-  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today · free week 5d left');
-  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now - 1000)), now)), 'ContextShrink · usage saved 22% today · free week ended');
-  assert.equal(format(SUMMARY, planOf(writeTemp(payload('active', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today');
-  assert.equal(format(SUMMARY, ''), 'ContextShrink · usage saved 22% today');
-  assert.equal(format({ today: { pct: 150 } }, ''), 'ContextShrink · usage saved 100% today');
-  assert.equal(format({ today: {} }, ''), UNAVAILABLE);
-  assert.equal(format(null, ''), UNAVAILABLE);
+  assert.equal(format(SUMMARY.today.pct, planOf(writeTemp(payload('trial', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today · free week 5d left');
+  assert.equal(format(SUMMARY.today.pct, planOf(writeTemp(payload('trial', now - 1000)), now)), 'ContextShrink · usage saved 22% today · free week ended');
+  assert.equal(format(SUMMARY.today.pct, planOf(writeTemp(payload('active', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today · Subscribed');
+  assert.equal(format(SUMMARY.today.pct, null), 'ContextShrink · usage saved 22% today');
+  assert.equal(format(150, null), 'ContextShrink · usage saved 100% today');
+  assert.equal(format(4.26, null), 'ContextShrink · usage saved 4.3% today');
+  assert.equal(format(9.96, null), 'ContextShrink · usage saved 10% today');
+  assert.equal(format(0, null), 'ContextShrink · usage saved 0.0% today');
   assert.doesNotMatch(format(SUMMARY, 'free week 5d left'), /\$/);
 });
 
@@ -281,3 +282,95 @@ test('the Code-tab hook renders the above-prompt band, keeps other content, and 
   await timer();
   assert.equal(runs, 3); assert.equal(invalidations, 2);
 }));
+
+
+// A sandbox with no Code tab config at all: Claude Desktop's Code tab is not patched yet.
+async function bareFixture(fn) {
+  return withSandbox(async ({ api, engine, sb }) => {
+    sb.dataDir = path.join(sb.localAppData, 'ContextShrink');
+    await fn({ api, engine, sb, dir: path.join(sb.home, '.contextshrink', 'npx-ui') });
+  });
+}
+
+function todayHour(offsetDays = 0) {
+  const day = new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+  return `${day}T00:00:00Z`;
+}
+
+function writeUsage(sb, buckets) {
+  fs.writeFileSync(path.join(sb.home, '.contextshrink', 'usage-pending.json'),
+    JSON.stringify({ version: 1, buckets }));
+}
+
+function planToken(plan, until) {
+  return Buffer.from(JSON.stringify({ plan, until: until / 1000 })).toString('base64url') + '.c2ln';
+}
+
+test('a fresh connect registers the Code-tab plugin even before the Code tab is patched', () => bareFixture(async ({ sb }) => {
+  await connect(sb);
+  const settings = readJson(sb.settings);
+  assert.deepEqual(settings.extraKnownMarketplaces[MARKET], {
+    source: { source: 'directory', path: path.join(sb.home, '.contextshrink', 'npx-ui', 'plugin') },
+  });
+  assert.equal(settings.enabledPlugins[PLUGIN], true);
+  assert.ok(fs.existsSync(path.join(sb.home, '.contextshrink', 'npx-ui', 'plugin', '.claude-plugin', 'marketplace.json')));
+  const off = await runCli(sb, ['uninstall']);
+  assert.equal(off.code, 0, off.output);
+  assert.ok(!fs.existsSync(sb.settings));
+}));
+
+test('an upgrade from a 0.3.2 connection (bar only) gains the plugin entries', () => bareFixture(async ({ sb, dir }) => {
+  await connect(sb);
+  const settings = readJson(sb.settings);
+  delete settings.extraKnownMarketplaces;
+  delete settings.enabledPlugins;
+  fs.writeFileSync(sb.settings, JSON.stringify(settings));
+  const state = readJson(sb.state);
+  state.ui = state.ui.filter(entry => entry.group === 'statusLine');
+  fs.writeFileSync(sb.state, JSON.stringify(state));
+
+  const res = await runCli(sb, ['connect']);
+  assert.equal(res.code, 0, res.output);
+  const upgraded = readJson(sb.settings);
+  assert.ok(upgraded.statusLine);
+  assert.equal(upgraded.enabledPlugins[PLUGIN], true);
+  assert.equal(upgraded.extraKnownMarketplaces[MARKET].source.path, path.join(dir, 'plugin'));
+  const off = await runCli(sb, ['uninstall']);
+  assert.equal(off.code, 0, off.output);
+  assert.ok(!fs.existsSync(sb.settings));
+}));
+
+test('the status line reads today from the local usage file, with no network call', () => fixture(async ({ sb, dir }) => {
+  await connect(sb);
+  writeUsage(sb, [
+    { hour: todayHour(), tool: 'claude', requests: 40, tokens_before: 1000, tokens_after: 957 },
+    { hour: todayHour(-1), tool: 'claude', requests: 9, tokens_before: 9000, tokens_after: 0 },
+    { hour: todayHour(), tool: 'codex', requests: 9, tokens_before: 9000, tokens_after: 0 },
+  ]);
+  await summaryServer(sb, async ({ hits }) => {
+    assert.match(await render(dir, sb), /^ContextShrink · usage saved 4\.3% today · free week \d+d left$/);
+    assert.equal(hits.length, 0);
+  });
+}));
+
+test('a subscription shows Subscribed, and whole percentages from 10 up', () => fixture(async ({ sb, dir }) => {
+  await connect(sb);
+  fs.writeFileSync(path.join(sb.home, '.contextshrink', 'license.json'),
+    JSON.stringify({ version: 1, token: planToken('active', Date.now() + 86400000), fetched_at: new Date().toISOString() }));
+  writeUsage(sb, [{ hour: todayHour(), tool: 'claude', requests: 5, tokens_before: 1000, tokens_after: 573 }]);
+  assert.equal(await render(dir, sb), 'ContextShrink · usage saved 43% today · Subscribed');
+}));
+
+test('without a local usage file the bar falls back to the summary API once', () => fixture(async ({ sb, dir }) => {
+  await connect(sb);
+  await summaryServer(sb, async ({ hits }) => {
+    assert.equal(await render(dir, sb), 'ContextShrink · usage saved 22% today · free week 7d left');
+    assert.equal(hits.length, 1);
+  });
+}));
+
+test('the status-bar helper is byte-identical in both packages', () => {
+  const other = path.join(__dirname, '..', '..', 'npx-codex', 'lib', 'local-savings.cjs');
+  if (!fs.existsSync(other)) return;
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'lib', 'local-savings.cjs')).equals(fs.readFileSync(other)));
+});

@@ -9,6 +9,7 @@ an expiry comparison.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from typing import Any
 import httpx
 
 from horizon._version import __version__ as ENGINE_VERSION
+from horizon.bundled_client import is_bundled_client
 from horizon.code_engine import runtime
 from horizon.code_engine.device import Device, MachineIdError, load_device, local_device_hash
 from horizon.code_engine.store import home_dir
@@ -33,9 +35,14 @@ except ImportError:  # cryptography is missing: serve pass-through, never fail t
 
 #: How often the cached plan note is refreshed. The note's own ``exp`` is at most 72 hours away.
 PLAN_REFRESH_SECONDS = 3600
-#: How often buckets are uploaded to /code/usage.
+#: Buckets are uploaded this long after the first unsent change. A busy engine uploads at
+#: most once per interval; an idle engine uploads nothing.
+USAGE_DEBOUNCE_SECONDS = 30
+#: Safety net: pending buckets are attempted at least this often, whatever else happened.
 USAGE_FLUSH_SECONDS = 15 * 60
 _CYCLE_TICK_SECONDS = 1.0
+#: How often the watchdog checks that the cycle thread is still running.
+WATCHDOG_SECONDS = 5.0
 
 
 class Engine:
@@ -65,7 +72,11 @@ class Engine:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_refresh = 0.0
-        self._last_flush = 0.0
+        self._debounce = _test_seconds("CONTEXTSHRINK_TEST_USAGE_DEBOUNCE_SECONDS", USAGE_DEBOUNCE_SECONDS)
+        self._watchdog: threading.Thread | None = None
+        self._refresh_every = _test_seconds("CONTEXTSHRINK_TEST_PLAN_REFRESH_SECONDS", PLAN_REFRESH_SECONDS)
+        self._flush_every = _test_seconds("CONTEXTSHRINK_TEST_USAGE_FLUSH_SECONDS", USAGE_FLUSH_SECONDS)
+        self._tick = _test_seconds("CONTEXTSHRINK_TEST_CYCLE_TICK_SECONDS", _CYCLE_TICK_SECONDS)
 
     # ── License gate ───────────────────────────────────────────────────
 
@@ -183,19 +194,40 @@ class Engine:
     # ── Background cycle ───────────────────────────────────────────────
 
     def start(self) -> None:
-        """Start the refresh/flush loop on a daemon thread."""
+        """Start the refresh/flush loop and its watchdog on daemon threads."""
         if self._thread is not None:
             return
+        self._start_cycle()
+        self._watchdog = threading.Thread(target=self._watch, name="code-engine-watchdog", daemon=True)
+        self._watchdog.start()
+
+    def _start_cycle(self) -> None:
         self._thread = threading.Thread(target=self._run, name="code-engine-cycle", daemon=True)
         self._thread.start()
+
+    def supervise(self) -> bool:
+        """Restart the cycle thread if it has ended while the engine is running. True when restarted."""
+        if self._stop.is_set() or self._thread is None or self._thread.is_alive():
+            return False
+        logger.warning("engine cycle thread ended unexpectedly; restarting it")
+        self._start_cycle()
+        return True
+
+    def _watch(self) -> None:
+        while not self._stop.wait(WATCHDOG_SECONDS):
+            try:
+                self.supervise()
+            except Exception:  # noqa: BLE001 - the watchdog itself must keep running
+                logger.warning("engine watchdog check failed; retrying", exc_info=True)
 
     def stop(self) -> None:
         """Stop the loop and upload what is pending. Safe to call twice."""
         self._stop.set()
-        thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=5.0)
+        for thread in (self._thread, self._watchdog):
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=5.0)
         self._thread = None
+        self._watchdog = None
         if self.device is not None:
             try:
                 self.flush_usage()
@@ -203,22 +235,42 @@ class Engine:
                 logger.warning("usage upload at shutdown failed")
 
     def _run(self) -> None:
-        # The first refresh and flush happen as soon as the loop starts.
-        while not self._stop.wait(_CYCLE_TICK_SECONDS):
-            if runtime.consume_stop_request(self.home):
-                logger.info("stop requested")
-                self._on_stop_request()
-                return
-            now = self._clock()
+        # The first refresh happens as soon as the loop starts.
+        while not self._stop.wait(self._tick):
             try:
-                if now - self._last_refresh >= PLAN_REFRESH_SECONDS:
-                    self._last_refresh = now
-                    logger.info("plan refresh: %s", self.refresh())
-                if now - self._last_flush >= USAGE_FLUSH_SECONDS:
-                    self._last_flush = now
-                    self.flush_usage()
-            except Exception:  # noqa: BLE001 - one failed cycle must not end the loop
-                logger.warning("engine cycle failed; retrying next tick")
+                if runtime.consume_stop_request(self.home):
+                    logger.info("stop requested")
+                    self._stop.set()  # the watchdog must not restart a loop that was asked to end
+                    self._on_stop_request()
+                    return
+            except Exception:  # noqa: BLE001 - a bad stop file must not end the loop
+                logger.warning("engine stop check failed; retrying next tick", exc_info=True)
+            self._cycle_once()
+
+    def _cycle_once(self) -> None:
+        now = self._clock()
+        if now - self._last_refresh >= self._refresh_every:
+            self._last_refresh = now
+            try:
+                logger.info("plan refresh: %s", self.refresh())
+            except Exception:  # noqa: BLE001 - one failed refresh must not stop uploads
+                logger.warning("plan refresh failed; retrying next interval", exc_info=True)
+        if self.usage.flush_due(now, debounce=self._debounce, safety=self._flush_every):
+            try:
+                self.flush_usage()
+            except Exception:  # noqa: BLE001 - one failed upload must not end the loop
+                logger.warning("usage upload failed; retrying", exc_info=True)
+
+
+def _test_seconds(name: str, default: float) -> float:
+    """A test-only interval override. Ignored inside the shipped client."""
+    raw = os.environ.get(name, "").strip()
+    if not raw or is_bundled_client():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 def _interrupt_main() -> None:

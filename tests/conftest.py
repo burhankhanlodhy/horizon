@@ -52,6 +52,36 @@ def _scrub_developer_horizon_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HORIZON_SETTINGS_PATH", str(tmp_path / "horizon-settings.json"))
 
 
+_ENGINE_TEST_FILES = (
+    "test_code_engine_",
+    "test_bundled_client",
+    "test_account_auth_mode_events",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_engine_homes(request, monkeypatch, tmp_path):
+    """Engine tests never touch the developer's real ContextShrink or profile folders.
+
+    Every profile and home variable points into this test's temp dir, so a test that
+    forgets to sandbox itself cannot reach the real ContextShrink home, the local app
+    data ContextShrink folder, or the real device key.
+    """
+    if not request.node.path.name.startswith(_ENGINE_TEST_FILES):
+        return
+    profile = tmp_path / "isolated-profile"
+    profile.mkdir(exist_ok=True)
+    monkeypatch.setenv("CONTEXTSHRINK_HOME", str(tmp_path / "isolated-contextshrink"))
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(profile))
+    for name in ("APPDATA", "LOCALAPPDATA"):
+        monkeypatch.setenv(name, str(profile / "AppData" / name.title()))
+    monkeypatch.setenv("TEMP", str(profile))
+    monkeypatch.setenv("TMP", str(profile))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile / ".claude"))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: profile))
+
+
 # The scrub above deletes every HORIZON_* var — which includes HORIZON_BEACON,
 # and the beacon defaults to ON. So scrubbing for hermeticity is precisely what
 # switches it on, and with HORIZON_TELEMETRY_ENDPOINT scrubbed too it falls back

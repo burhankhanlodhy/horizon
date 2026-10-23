@@ -59,6 +59,10 @@ class UsageMeter:
         self._lock = threading.Lock()
         self._totals: dict[tuple[str, str], _Totals] = {}
         self._unacked: set[tuple[str, str]] = set()
+        # When the oldest unconfirmed change happened; None when nothing is unconfirmed.
+        self._dirty_since: float | None = None
+        # Starts at boot, so a restored pending bucket waits for the safety interval too.
+        self._last_flush_at: float = clock()
         self._load()
 
     def record(self, tool: str, tokens_before: int, tokens_after: int) -> None:
@@ -69,8 +73,11 @@ class UsageMeter:
         stop, so an engine that is killed or restarted in between would otherwise
         lose every request it served since its last upload.
         """
-        key = (hour_of(self._clock()), tool)
+        now = self._clock()
+        key = (hour_of(now), tool)
         with self._lock:
+            if not self._unacked:
+                self._dirty_since = now
             totals = self._totals.setdefault(key, _Totals())
             totals.requests += 1
             totals.tokens_before += max(0, int(tokens_before))
@@ -84,6 +91,22 @@ class UsageMeter:
         with self._lock:
             return len(self._unacked)
 
+    def flush_due(self, now: float, *, debounce: float, safety: float) -> bool:
+        """Whether an upload should run now.
+
+        Nothing unconfirmed means nothing to send, so an idle engine never uploads.
+        Otherwise an upload is due ``debounce`` seconds after the first unconfirmed
+        change (and never sooner than ``debounce`` after the previous attempt, since a
+        flush resets the change time). ``safety`` is the longest a pending bucket may
+        wait since the last attempt, whatever else happened.
+        """
+        with self._lock:
+            if not self._unacked:
+                return False
+            if self._dirty_since is not None and now - self._dirty_since >= debounce:
+                return True
+            return now - self._last_flush_at >= safety
+
     def flush(self, send: Sender) -> bool:
         """Upload unconfirmed buckets and persist the rest. Returns True when all were accepted.
 
@@ -91,6 +114,7 @@ class UsageMeter:
         A bucket is confirmed only if it did not change while its batch was in flight.
         """
         with self._lock:
+            self._last_flush_at = self._clock()
             self._prune_locked()
             keys = sorted(self._unacked)
             sent_values = {key: self._totals[key].values() for key in keys}
@@ -108,6 +132,9 @@ class UsageMeter:
                         self._unacked.discard(key)
         with self._lock:
             self._prune_locked()
+            # Anything still unconfirmed (a refused batch, or a change made in flight) is
+            # due again after one debounce interval, measured from this attempt.
+            self._dirty_since = self._clock() if self._unacked else None
             self._persist(self._snapshot_locked())
         return accepted
 
@@ -159,6 +186,8 @@ class UsageMeter:
             # Whether the server saw it is unknown after a restart; re-sending is safe.
             self._unacked.add(key)
         self._prune_locked()
+        if self._unacked:
+            self._dirty_since = self._clock()
 
     @staticmethod
     def _parse_row(row: Any) -> tuple[tuple[str, str] | None, _Totals | None]:

@@ -68,7 +68,23 @@ function checkAuthMode(paths) {
 }
 // The device record used for calls to the API: its own address, else the configured one.
 function apiBaseOf(dev, paths) { return (dev && dev.api_url) || paths.apiUrl; }
-function trialDaysOf(note) { return note && note.plan === 'trial' ? device.daysLeft(note.until) : null; }
+// The plan the status line shows: a subscription, a free week with its days left, or none.
+function planInfoOf(note) {
+  if (!note) return null;
+  if (note.plan === 'active') return { plan: 'active' };
+  return { plan: 'trial', daysLeft: device.daysLeft(note.until) };
+}
+// Local files first: the engine's usage file and the plan note, with no network call. The
+// summary API is asked only when the usage file is missing; that needs a connected device.
+async function currentSavings(env, paths, missing) {
+  const planInfo = planInfoOf(device.readPlanNote(env));
+  const local = savings.fromLocal(path.dirname(device.devicePathsOf(env).device), planInfo);
+  if (local) return local;
+  const dev = device.readDevice(env);
+  if (!dev) throw missing;
+  const data = await login.fetchUsageSummary(apiBaseOf(dev, paths), dev.device_key, { timeoutMs: 2000 });
+  return savings.summary(data, planInfo);
+}
 
 // The per-computer record of versions before 0.3.0. Removed once this version has run.
 function retireLegacyAccount(ctx, paths) {
@@ -154,10 +170,7 @@ async function inspect(ctx, paths, command) {
   const state = stateAt(paths);
   if (command === 'savings') {
     if (!state) { ctx.out('Not connected by this Codex connector.'); return 0; }
-    const dev = device.readDevice(ctx.env);
-    if (!dev) throw new CsError('Connect ContextShrink before checking savings.');
-    const data = await login.fetchUsageSummary(apiBaseOf(dev, paths), dev.device_key);
-    ctx.out(savings.format(savings.summary(data, trialDaysOf(device.readPlanNote(ctx.env)))));
+    ctx.out(savings.format(await currentSavings(ctx.env, paths, new CsError('Connect ContextShrink before checking savings.'))));
     return 0;
   }
   if (!state) {
@@ -178,10 +191,7 @@ async function liveSavings(env, paths) {
   const state = stateAt(paths);
   if (!state) throw new toml.ConfigError('Not connected by this Codex connector.');
   toml.restore(read(paths.config), state);
-  const dev = device.readDevice(env);
-  if (!dev) throw new toml.ConfigError('Connect ContextShrink before opening the savings window.');
-  const data = await login.fetchUsageSummary(apiBaseOf(dev, paths), dev.device_key, { timeoutMs: 2000 });
-  return savings.summary(data, trialDaysOf(device.readPlanNote(env)));
+  return currentSavings(env, paths, new toml.ConfigError('Connect ContextShrink before opening the savings window.'));
 }
 function runChats(ctx, paths, options) {
   if (options.action === 'list') {

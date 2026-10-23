@@ -226,3 +226,87 @@ def test_every_record_is_on_disk_before_record_returns(tmp_path) -> None:
             "tokens_after": 170,
         }
     ]
+
+
+# ── Upload schedule: debounced, idle-silent, safety net (fake clock) ─────────
+
+DEBOUNCE = 30.0
+SAFETY = 900.0
+
+
+def test_upload_waits_for_the_debounce_after_the_first_change(tmp_path) -> None:
+    clock = _Clock()
+    meter = UsageMeter(tmp_path, clock=clock)
+    clock.now += 100  # boot, then the first change
+    meter.record("claude", 10, 5)
+    assert not meter.flush_due(clock.now + DEBOUNCE - 1, debounce=DEBOUNCE, safety=SAFETY)
+    assert meter.flush_due(clock.now + DEBOUNCE, debounce=DEBOUNCE, safety=SAFETY)
+
+
+def test_idle_engine_never_uploads(tmp_path) -> None:
+    clock = _Clock()
+    meter = UsageMeter(tmp_path, clock=clock)
+    meter.record("claude", 10, 5)
+    server = _Server()
+    clock.now += DEBOUNCE
+    assert meter.flush_due(clock.now, debounce=DEBOUNCE, safety=SAFETY)
+    assert meter.flush(server)
+    # Nothing has changed since the upload: no upload is due, however long the engine idles.
+    for step in range(1, 200):
+        assert not meter.flush_due(clock.now + step * 60, debounce=DEBOUNCE, safety=SAFETY)
+    clock.now += 10 * 3600
+    assert not meter.flush_due(clock.now, debounce=DEBOUNCE, safety=SAFETY)
+    assert len(server.calls) == 1
+
+
+def test_busy_engine_uploads_at_most_once_per_debounce(tmp_path) -> None:
+    clock = _Clock()
+    meter = UsageMeter(tmp_path, clock=clock)
+    server = _Server()
+    uploads = []
+    # A request every 5 seconds for ten minutes.
+    for second in range(0, 600, 5):
+        clock.now = T0 + second
+        meter.record("claude", 10, 5)
+        if meter.flush_due(clock.now, debounce=DEBOUNCE, safety=SAFETY):
+            assert meter.flush(server)
+            uploads.append(second)
+    clock.now = T0 + 600 + DEBOUNCE
+    if meter.flush_due(clock.now, debounce=DEBOUNCE, safety=SAFETY):
+        assert meter.flush(server)
+        uploads.append(600 + DEBOUNCE)
+    gaps = [b - a for a, b in zip(uploads, uploads[1:])]
+    assert uploads and min(gaps) >= DEBOUNCE
+    assert uploads[0] == 30  # the first change at t=0 is uploaded 30 seconds later
+    assert len(uploads) <= 600 // DEBOUNCE + 1
+    # Every upload carries the running total for the hour, not a delta.
+    assert server.rows[("2026-10-22T14:00:00Z", "claude")]["requests"] == 120
+
+
+def test_refused_upload_is_retried_one_interval_later(tmp_path) -> None:
+    clock = _Clock()
+    meter = UsageMeter(tmp_path, clock=clock)
+    server = _Server()
+    server.reject = True
+    meter.record("claude", 10, 5)
+    clock.now += DEBOUNCE
+    assert meter.flush_due(clock.now, debounce=DEBOUNCE, safety=SAFETY)
+    assert not meter.flush(server)
+    assert not meter.flush_due(clock.now + DEBOUNCE - 1, debounce=DEBOUNCE, safety=SAFETY)
+    assert meter.flush_due(clock.now + DEBOUNCE, debounce=DEBOUNCE, safety=SAFETY)
+    server.reject = False
+    assert meter.flush(server)
+    assert meter.pending_count() == 0
+
+
+def test_safety_flush_runs_fifteen_minutes_after_the_last_attempt(tmp_path) -> None:
+    clock = _Clock()
+    first = UsageMeter(tmp_path, clock=clock)
+    first.record("codex", 50, 20)
+    # A restart with the debounce disabled: only the safety interval can trigger the upload.
+    clock.now += 60
+    restarted = UsageMeter(tmp_path, clock=clock)
+    assert restarted.pending_count() == 1
+    huge = 10**9
+    assert not restarted.flush_due(clock.now + SAFETY - 1, debounce=huge, safety=SAFETY)
+    assert restarted.flush_due(clock.now + SAFETY, debounce=huge, safety=SAFETY)
