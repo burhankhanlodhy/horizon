@@ -8,9 +8,9 @@ const { EventEmitter } = require('node:events');
 const { summary, format } = require('../lib/savings-summary');
 const window = require('../lib/savings-window');
 const data = { today: { requests: 15, tokens_before: 10000, tokens_after: 9700, tokens_saved: 300, pct: 3 } };
-test('the usage line shows the percent and the trial days, with no dollar amounts', () => {
+test('the usage line shows the percent and the free-week days, with no dollar amounts', () => {
   assert.equal(format(summary(data)), 'ContextShrink · usage saved 3% today');
-  assert.equal(format(summary(data, 5)), 'ContextShrink · usage saved 3% today · trial 5d left');
+  assert.equal(format(summary(data, 5)), 'ContextShrink · usage saved 3% today · free week 5d left');
   assert.equal(format(summary({ today: { requests: 0, pct: 0 } })), 'ContextShrink · usage saved 0% today');
   assert.doesNotMatch(format(summary(data, 5)), /\$/);
   for (const patch of [{ today: undefined }, { today: { ...data.today, pct: NaN } }, { today: { ...data.today, requests: -1 } }]) {

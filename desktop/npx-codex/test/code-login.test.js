@@ -141,7 +141,7 @@ test('the plan note answers 401 for an unknown device key, and never throws on i
     assert.equal(note.status, 401);
   }));
 
-test('the plan note answers 402 when the trial has ended', () =>
+test('the plan note answers 402 when the free week is used', () =>
   withApi(async ({ api, ctx }) => {
     const { promise } = signIn(api, ctx);
     const result = await promise;

@@ -2,4 +2,7 @@
 # Independent of the desktop app version (tauri.conf.json). Bump it whenever the engine changes:
 # horizon/code_engine, the proxy it serves, or desktop/client/engine-requirements.txt.
 # Read by desktop/client/build-engine-embed.ps1 (the first line that is not a comment).
-0.8.0
+# 0.8.1: usage counts are written as each request is recorded (a killed or restarted
+# engine no longer loses them), Codex ChatGPT-sign-in calls on /backend-api/codex/responses
+# are counted, and every usage upload is logged (counts and status only).
+0.8.1

@@ -36,7 +36,7 @@ async function show(readSnapshot, io, { platform = process.platform, spawnProces
     const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     // Process-scoped policy permits this locally installed script. It does not
     // change the saved user/system policy or override enterprise Group Policy.
-    child = spawnProcess(powershell, ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'RemoteSigned', '-File', path.join(__dirname, 'savings-window.ps1'),
+    child = spawnProcess(powershell, ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-STA', '-ExecutionPolicy', 'RemoteSigned', '-File', path.join(__dirname, 'savings-window.ps1'),
       '-SnapshotPath', snapshot, '-OwnerPid', String(process.pid)], { windowsHide: true, stdio: 'ignore', shell: false });
     io.out('Live savings window opened. Refreshes every 30 seconds; close the window or press Ctrl+C to stop.');
     process.once('SIGINT', stop); process.once('SIGTERM', stop);

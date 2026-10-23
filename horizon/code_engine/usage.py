@@ -62,7 +62,13 @@ class UsageMeter:
         self._load()
 
     def record(self, tool: str, tokens_before: int, tokens_after: int) -> None:
-        """Count one served request."""
+        """Count one served request.
+
+        The count is written to ``usage-pending.json`` before this returns, not
+        only at the next flush. A flush runs every 15 minutes and at a clean
+        stop, so an engine that is killed or restarted in between would otherwise
+        lose every request it served since its last upload.
+        """
         key = (hour_of(self._clock()), tool)
         with self._lock:
             totals = self._totals.setdefault(key, _Totals())
@@ -70,6 +76,8 @@ class UsageMeter:
             totals.tokens_before += max(0, int(tokens_before))
             totals.tokens_after += max(0, int(tokens_after))
             self._unacked.add(key)
+            # Under the lock, so a slower writer cannot leave an older snapshot on disk.
+            self._persist(self._snapshot_locked())
 
     def pending_count(self) -> int:
         """Buckets not yet confirmed by the server."""
@@ -100,11 +108,11 @@ class UsageMeter:
                         self._unacked.discard(key)
         with self._lock:
             self._prune_locked()
-            snapshot = [
-                self._body(key, totals.values()) for key, totals in sorted(self._totals.items())
-            ]
-        self._persist(snapshot)
+            self._persist(self._snapshot_locked())
         return accepted
+
+    def _snapshot_locked(self) -> list[dict[str, Any]]:
+        return [self._body(key, totals.values()) for key, totals in sorted(self._totals.items())]
 
     @staticmethod
     def _body(key: tuple[str, str], values: tuple[int, int, int]) -> dict[str, Any]:

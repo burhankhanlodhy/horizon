@@ -46,6 +46,11 @@ CLIENT_UA_MAP: tuple[tuple[str, str], ...] = (
 
 
 CODEX_RESPONSES_PATH = "/v1/responses"
+# Codex signed in with ChatGPT sends its Responses calls to the backend's Codex route.
+# Without this path the stamp below never applies, so those calls are not labelled
+# codex and the ContextShrink Code usage meter does not count them.
+CODEX_BACKEND_RESPONSES_PATH = "/backend-api/codex/responses"
+_CODEX_RESPONSES_PATHS = (CODEX_RESPONSES_PATH, CODEX_BACKEND_RESPONSES_PATH)
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,7 @@ def classify_client_signals(signals: AuthSignals, *, default: str | None = None)
 
 def is_codex_responses_path(path: str) -> bool:
     """Return True for the OpenAI Responses endpoint and its subpaths."""
-    return path == CODEX_RESPONSES_PATH or path.startswith(CODEX_RESPONSES_PATH + "/")
+    return any(path == base or path.startswith(base + "/") for base in _CODEX_RESPONSES_PATHS)
 
 
 def should_stamp_codex_client_signals(path: str, signals: AuthSignals) -> bool:

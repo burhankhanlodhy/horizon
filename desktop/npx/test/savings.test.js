@@ -163,7 +163,7 @@ test('the renderer polls only the usage summary, caches the numbers, and never s
   await connect(sb);
   await summaryServer(sb, async ({ hits }) => {
     const line = await render(dir, sb);
-    assert.equal(line, 'ContextShrink · usage saved 22% today · trial 7d left');
+    assert.equal(line, 'ContextShrink · usage saved 22% today · free week 7d left');
     assert.equal(await render(dir, sb), line);
     assert.equal(hits.length, 1);
     assert.equal(hits[0].url, '/code/usage/summary');
@@ -207,7 +207,7 @@ test('a new device key invalidates the cache', () => fixture(async ({ sb, dir })
     device.device_key = 'cs_dev_NEWKEYabcdefghijklmnopqrstuv';
     fs.writeFileSync(sb.deviceFile, JSON.stringify(device));
     reply.data = { today: { requests: 0, tokens_before: 0, tokens_saved: 0, pct: 0 } };
-    assert.equal(await render(dir, sb), 'ContextShrink · usage saved 0% today · trial 7d left');
+    assert.equal(await render(dir, sb), 'ContextShrink · usage saved 0% today · free week 7d left');
     assert.equal(hits.length, 2);
     assert.notEqual(hits[0].authorization, hits[1].authorization);
   });
@@ -238,17 +238,17 @@ test('HTTP errors are cached, and a hanging service does not hang the status lin
   });
 }));
 
-test('the status line text carries no dollar amounts, and trial days come from the plan note', () => {
+test('the status line text carries no dollar amounts, and free-week days come from the plan note', () => {
   const now = Date.parse('2026-10-20T00:00:00Z');
   const payload = (plan, until) => Buffer.from(JSON.stringify({ plan, until: until / 1000 })).toString('base64url') + '.c2ln';
-  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today · trial 5d left');
-  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now - 1000)), now)), 'ContextShrink · usage saved 22% today · trial ended');
+  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today · free week 5d left');
+  assert.equal(format(SUMMARY, planOf(writeTemp(payload('trial', now - 1000)), now)), 'ContextShrink · usage saved 22% today · free week ended');
   assert.equal(format(SUMMARY, planOf(writeTemp(payload('active', now + 5 * 86400000)), now)), 'ContextShrink · usage saved 22% today');
   assert.equal(format(SUMMARY, ''), 'ContextShrink · usage saved 22% today');
   assert.equal(format({ today: { pct: 150 } }, ''), 'ContextShrink · usage saved 100% today');
   assert.equal(format({ today: {} }, ''), UNAVAILABLE);
   assert.equal(format(null, ''), UNAVAILABLE);
-  assert.doesNotMatch(format(SUMMARY, 'trial 5d left'), /\$/);
+  assert.doesNotMatch(format(SUMMARY, 'free week 5d left'), /\$/);
 });
 
 function writeTemp(token) {

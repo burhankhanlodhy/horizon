@@ -107,15 +107,21 @@ def test_spawn_relaunches_through_the_bundled_client(home, monkeypatch) -> None:
             captured["argv"] = argv
             captured["kwargs"] = kwargs
 
+    def no_wmi(command, cwd):
+        raise OSError("WMI is not part of this test")
+
     monkeypatch.setattr(bundled_client, "cli_command", lambda: ["C:/ContextShrink/horizon.exe"])
+    monkeypatch.setattr(runtime, "background_command", lambda: ["C:/ContextShrink/horizon.exe"])
     monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
-    runtime.spawn_detached(home, 18793)
+    assert runtime.spawn_detached(home, 18793, wmi_start=no_wmi) == "detached"
     assert captured["argv"] == [
         "C:/ContextShrink/horizon.exe",
         "code-engine",
         "run",
         "--port",
         "18793",
+        "--home",
+        str(home),
     ]
     assert captured["kwargs"]["stdin"] == runtime.subprocess.DEVNULL
     assert captured["kwargs"]["cwd"] == str(home)
@@ -128,10 +134,14 @@ def test_spawn_on_windows_is_detached_without_a_console(home, monkeypatch) -> No
         def __init__(self, argv, **kwargs):
             captured.setdefault("flags", []).append(kwargs.get("creationflags", 0))
 
+    def no_wmi(command, cwd):
+        raise OSError("WMI is not part of this test")
+
     monkeypatch.setattr(runtime, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(runtime, "background_command", lambda: ["horizon.exe"])
     monkeypatch.setattr(bundled_client, "cli_command", lambda: ["horizon.exe"])
     monkeypatch.setattr(runtime.subprocess, "Popen", _Popen)
-    runtime.spawn_detached(home, 18793)
+    runtime.spawn_detached(home, 18793, wmi_start=no_wmi)
     flags = captured["flags"][0]
     assert flags & runtime._DETACHED_PROCESS
     assert flags & runtime._CREATE_NEW_PROCESS_GROUP

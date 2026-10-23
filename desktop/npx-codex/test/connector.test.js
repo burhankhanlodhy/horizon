@@ -61,7 +61,7 @@ test('connect points a ChatGPT-auth Responses provider at the engine, with no ac
   assertNoDeviceKey(f.api, [res.stdout, res.stderr]);
   const status = await f.run(['status']); assert.equal(status.code, 0, status.output);
   assert.match(status.stdout, /Configured for 127\.0\.0\.1/); assert.match(status.stdout, /Device: .*\(tools: codex\)/);
-  assert.match(status.stdout, /Free trial: 7 days left/); assert.match(status.stdout, /Usage saved today: 22%/);
+  assert.match(status.stdout, /Free week: 7 days left \(renews monthly\)\./); assert.match(status.stdout, /Usage saved today: 22%/);
   assertNoDeviceKey(f.api, [status.stdout, status.stderr]);
   const off = await f.run(['uninstall']); assert.equal(off.code, 0, off.output);
   assert.equal(fs.readFileSync(f.config, 'utf8'), original); assert.ok(!fs.existsSync(f.state));
@@ -132,10 +132,10 @@ test('a sign-in the server no longer accepts (401) starts sign-in again', () => 
   assert.equal(readDevice(f).device_key, f.api.issued[0]);
 }));
 
-test('a trial that has ended still points Codex at the engine, and says Codex works without compression', () => fixture(async f => {
+test('a used free week still points Codex at the engine, and says Codex works without compression', () => fixture(async f => {
   f.api.state.plan = 'ended';
   const r = await f.run(); assert.equal(r.code, 0, r.output);
-  assert.match(r.stdout, /Your trial has ended\. Subscribe for \$5\/month at https:\/\/code\.contextshrink\.com\/account\. Until then, Codex works normally without compression\./);
+  assert.match(r.stdout, /This month's free week is used\. Compression resumes on Nov 1, 2026, or subscribe for \$5\/month at https:\/\/code\.contextshrink\.com\/account\. Codex works normally meanwhile\./);
   assert.match(fs.readFileSync(f.config, 'utf8'), /127\.0\.0\.1:\d+\/v1/);
 }));
 
@@ -176,10 +176,10 @@ test('the last tool releases the device; disconnect and logout are aliases of un
   }
 }));
 
-test('savings shows usage saved and the trial days, with no dollar amounts and no key', () => fixture(async f => {
+test('savings shows usage saved and the free-week days, with no dollar amounts and no key', () => fixture(async f => {
   assert.equal((await f.run()).code, 0);
   const r = await f.run(['savings']); assert.equal(r.code, 0, r.output);
-  assert.equal(r.stdout.trim(), 'ContextShrink · usage saved 22% today · trial 7d left');
+  assert.equal(r.stdout.trim(), 'ContextShrink · usage saved 22% today · free week 7d left');
   assertNoDeviceKey(f.api, [r.stdout, r.stderr]);
 }));
 
@@ -201,7 +201,7 @@ test('an engine with no plan (health ok:false) still connects Codex, prints the 
   f.engine.state.ok = false;
   const r = await code.runBin(BIN, f.sb, ['connect']);
   assert.equal(r.code, 0, r.output);
-  assert.ok(r.stdout.includes('Your trial has ended. Subscribe for $5/month'), r.stdout);
+  assert.ok(r.stdout.includes("This month's free week is used. Compression resumes on Nov 1, 2026"), r.stdout);
   assert.ok(fs.existsSync(f.state), 'connect did not record its state');
   const status = await f.run(['status']);
   assert.equal(status.code, 0, status.output);

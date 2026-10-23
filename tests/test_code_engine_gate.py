@@ -345,3 +345,19 @@ def test_health_is_one_plain_http_response_with_a_content_length(home, signer) -
     assert headers["content-length"] == str(len(body))
     assert headers["content-type"].startswith("application/json")
     assert json.loads(body)["ok"] is True
+
+
+def test_stop_uploads_the_pending_usage_before_the_engine_ends(home, signer) -> None:
+    """The final upload at shutdown keeps the counts since the last flush. The exit path relies on it."""
+    _write_device(home)
+    write_license(home, _note(signer), fetched_at=time.time())
+    api = _ApiServer(signer)
+    engine = _engine(home, api)
+    engine.load_cached_note()
+    engine.record_usage("claude", 1000, 800)
+
+    engine.stop()
+
+    uploads = [r for r in api.requests if r.url.path == "/code/usage"]
+    assert uploads, "no usage upload at shutdown"
+    assert engine.usage.pending_count() == 0

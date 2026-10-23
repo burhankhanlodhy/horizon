@@ -153,6 +153,7 @@ class Engine:
             return False
 
         def send(buckets: list[dict[str, Any]]) -> bool:
+            # Counts only: bucket numbers and HTTP status, never the bodies.
             try:
                 response = self._client.post(
                     f"{device.api_url}/code/usage",
@@ -160,9 +161,22 @@ class Engine:
                     headers={"Authorization": f"Bearer {device.device_key}"},
                     timeout=5.0,
                 )
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "usage upload failed (%s); %d buckets stay pending",
+                    type(exc).__name__,
+                    len(buckets),
+                )
                 return False
-            return 200 <= response.status_code < 300
+            logger.info("usage upload: %d buckets -> %d", len(buckets), response.status_code)
+            if not 200 <= response.status_code < 300:
+                logger.warning(
+                    "usage upload refused (status %d); %d buckets stay pending",
+                    response.status_code,
+                    len(buckets),
+                )
+                return False
+            return True
 
         return self.usage.flush(send)
 

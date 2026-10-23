@@ -36,7 +36,7 @@ test('connect signs in, installs the engine, and points Claude Code at it, keepi
     const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
     assert.match(res.stdout, /Connected\. Claude Code now sends its requests through the ContextShrink engine/);
-    assert.match(res.stdout, /Free trial: 7 days left/);
+    assert.match(res.stdout, /Free week: 7 days left \(renews monthly\)\./);
     assert.match(res.stdout, /Start a new Claude Code session/);
 
     const settings = readSettings(sb);
@@ -281,15 +281,15 @@ test('a device.json the server no longer accepts sends the computer through sign
     assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
   }));
 
-test('a trial that has ended still connects the engine, and says Claude works without compression', () =>
+test('a used free week still connects the engine, and says Claude works without compression', () =>
   withSandbox(async ({ api, sb, engine }) => {
     api.state.plan = 'ended';
     const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
     assert.ok(
       res.stdout.includes(
-        'Your trial has ended. Subscribe for $5/month at https://code.contextshrink.com/account. ' +
-          'Until then, Claude works normally without compression.'
+        "This month's free week is used. Compression resumes on Nov 1, 2026, or subscribe for $5/month at " +
+          'https://code.contextshrink.com/account. Claude works normally meanwhile.'
       ),
       res.stdout
     );
@@ -303,7 +303,7 @@ test('an engine with no plan (health ok:false) still connects, prints the plan-r
     engine.state.ok = false;
     const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 0, res.output);
-    assert.ok(res.stdout.includes('Your trial has ended. Subscribe for $5/month'), res.stdout);
+    assert.ok(res.stdout.includes("This month's free week is used. Compression resumes on Nov 1, 2026"), res.stdout);
     assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
     const status = await runCli(sb, ['status']);
     assert.strictEqual(status.code, 0, status.output);
@@ -420,7 +420,7 @@ test('status shows the engine, the device, the plan and usage, and never the key
     assert.match(status.stdout, /Connected through the ContextShrink engine at 127\.0\.0\.1:\d+\./);
     assert.match(status.stdout, /Tool search: on/);
     assert.match(status.stdout, /Device: .* \(tools: claude\)/);
-    assert.match(status.stdout, /Free trial: 7 days left/);
+    assert.match(status.stdout, /Free week: 7 days left \(renews monthly\)\./);
     assert.match(status.stdout, /Usage saved today: 22%/);
     assert.match(status.stdout, /Engine: running\./);
     assertNoDeviceKeyText(api, [status.stdout, status.stderr]);

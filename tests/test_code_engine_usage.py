@@ -196,3 +196,33 @@ def test_finished_confirmed_hours_are_not_kept_in_memory(tmp_path) -> None:
 def test_unreadable_pending_file_is_ignored(tmp_path, bad) -> None:
     (tmp_path / USAGE_FILE).write_bytes(bad if isinstance(bad, bytes) else bad.encode())
     assert UsageMeter(tmp_path, clock=_Clock()).pending_count() == 0
+
+
+def test_recorded_requests_survive_a_restart_before_any_flush(tmp_path) -> None:
+    """An engine killed or restarted between flushes must still upload what it served."""
+    clock = _Clock()
+    first = UsageMeter(tmp_path, clock=clock)
+    first.record("claude", 1000, 600)
+    # No flush: the process ends here (a kill, a crash, a reboot).
+    restarted = UsageMeter(tmp_path, clock=clock)
+    assert restarted.pending_count() == 1
+    server = _Server()
+    assert restarted.flush(server)
+    row = server.rows[("2026-10-22T14:00:00Z", "claude")]
+    assert (row["requests"], row["tokens_before"], row["tokens_after"]) == (1, 1000, 600)
+
+
+def test_every_record_is_on_disk_before_record_returns(tmp_path) -> None:
+    meter = UsageMeter(tmp_path, clock=_Clock())
+    meter.record("codex", 300, 120)
+    meter.record("codex", 100, 50)
+    saved = json.loads((tmp_path / USAGE_FILE).read_text(encoding="utf-8"))
+    assert saved["buckets"] == [
+        {
+            "hour": "2026-10-22T14:00:00Z",
+            "tool": "codex",
+            "requests": 2,
+            "tokens_before": 400,
+            "tokens_after": 170,
+        }
+    ]

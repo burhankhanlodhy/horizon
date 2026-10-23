@@ -24,7 +24,7 @@ function planOf(file, now) {
     if (payload.plan === 'active') return '';
     if (payload.plan !== 'trial') return '';
     const left = Math.ceil((Number(payload.until) * 1000 - now) / 86400000);
-    return left > 0 ? `trial ${left}d left` : 'trial ended';
+    return left > 0 ? `free week ${left}d left` : 'free week ended';
   } catch {
     return '';
   }
