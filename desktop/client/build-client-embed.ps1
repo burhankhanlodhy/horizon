@@ -21,7 +21,19 @@
   (HEU_AEGISCS985): the long-running process is the PSF-signed python.exe, and the
   only native code is the small launcher. build-client.ps1 (PyInstaller) stays
   available for a rollback through build-installer.ps1 -PyInstaller.
+
+  -Engine builds the ContextShrink Code engine instead, into desktop\client\dist\engine\
+  with the same layout (horizon.exe, python\, app\). It installs engine-requirements.txt
+  (the proxy's full dependency closure, which the desktop client lacks), is versioned
+  by engine-version.txt rather than the app version, keeps its .py sources (ML packages
+  read files at run time) and does not bake in the LiteLLM price rows (litellm is
+  installed). The desktop client build is unchanged without the switch.
+  Smoke-test the result with desktop\client\smoke-test-engine.ps1 before packaging it.
 #>
+param(
+    # Build the ContextShrink Code engine (dist\engine) instead of the desktop client (dist\horizon).
+    [switch]$Engine
+)
 $ErrorActionPreference = "Stop"
 # Windows PowerShell 5.1 defaults to TLS 1.0/1.1; python.org needs TLS 1.2.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -39,11 +51,23 @@ if (-not (Test-Path $venvPython)) { throw "Repo .venv not found at $venvPython" 
 $clientDir = $PSScriptRoot
 $cacheDir = Join-Path $clientDir ".cache"
 $stageRoot = Join-Path $clientDir "build\embed-stage"
-$stage = Join-Path $stageRoot "horizon"
-$dist = Join-Path $clientDir "dist\horizon"
+# The output folder's name: dist\horizon (the desktop client) or dist\engine.
+$kind = if ($Engine) { "engine" } else { "horizon" }
+$stage = Join-Path $stageRoot $kind
+$dist = Join-Path $clientDir ("dist\" + $kind)
 $tools = Join-Path $root "desktop\claude-code-tools"
 $buildInfo = Join-Path $clientDir "build_info.py"
 $pricing = Join-Path $clientDir "build_pricing.py"
+
+# The engine's own version (engine-version.txt, its first line that is not a comment).
+$engineVersion = $null
+if ($Engine) {
+    $engineLines = @(Get-Content -LiteralPath (Join-Path $clientDir "engine-version.txt") |
+        Where-Object { $_.Trim() -and $_ -notmatch '^\s*#' })
+    $engineVersion = if ($engineLines.Count) { $engineLines[0].Trim() } else { "" }
+    if ($engineVersion -notmatch '^\d+\.\d+\.\d+$') { throw "No usable version in engine-version.txt: '$engineVersion'" }
+    Write-Output "Building the ContextShrink Code engine $engineVersion"
+}
 
 function Get-Sha256([string]$path) {
     (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -99,7 +123,7 @@ $sitePackages = Join-Path $app "site-packages"
 New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
 
 # 3. The pinned dependencies, binary wheels for this Python only.
-$requirements = Join-Path $clientDir "embed-requirements.txt"
+$requirements = Join-Path $clientDir $(if ($Engine) { "engine-requirements.txt" } else { "embed-requirements.txt" })
 & $venvPython -m pip install --target $sitePackages --requirement $requirements `
     --only-binary=:all: --platform win_amd64 --python-version 3.12 --implementation cp `
     --no-deps --no-compile --disable-pip-version-check
@@ -124,17 +148,32 @@ Get-ChildItem -LiteralPath $sitePackages -Recurse -File -Filter "*.pyi" | Remove
 # repo for this copy and removed afterwards, as build-client.ps1 does.
 Push-Location $root
 try {
-    $version = & $venvPython $buildInfo write
-    if ($LASTEXITCODE -ne 0) { throw "Writing the build version failed" }
-    $priceRows = & $venvPython $pricing write
-    if ($LASTEXITCODE -ne 0) { throw "Writing the bundled price rows failed" }
-    Write-Output "Baked version $version and $priceRows LiteLLM price rows"
+    if ($Engine) {
+        # The engine reports its own version (horizon --version, /__cs/health). It has
+        # litellm installed, so it needs no bundled price rows.
+        $version = & $venvPython $buildInfo write $engineVersion
+        if ($LASTEXITCODE -ne 0) { throw "Writing the build version failed" }
+        Write-Output "Baked engine version $version"
+    } else {
+        $version = & $venvPython $buildInfo write
+        if ($LASTEXITCODE -ne 0) { throw "Writing the build version failed" }
+        $priceRows = & $venvPython $pricing write
+        if ($LASTEXITCODE -ne 0) { throw "Writing the bundled price rows failed" }
+        Write-Output "Baked version $version and $priceRows LiteLLM price rows"
+    }
 
     $source = Join-Path $root "horizon"
     $target = Join-Path $app "horizon"
+    # The desktop client leaves out the Rust extension horizon._core (its proxy is not
+    # shipped). The engine serves the proxy, which imports horizon._core at startup, so it keeps it.
+    # An array, not an if-expression: a one-element array returned from if is unrolled to a
+    # string, and robocopy then copies nothing.
+    $excluded = @("*.pyc")
+    if (-not $Engine) { $excluded = @("_core*.pyd") + $excluded }
     robocopy $source $target /E /NFL /NDL /NJH /NJS /NP `
-        /XD __pycache__ tests /XF "_core*.pyd" "*.pyc" | Out-Null
+        /XD __pycache__ tests /XF @excluded | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Copying the horizon package failed (robocopy exit $LASTEXITCODE)" }
+    if (-not (Test-Path -LiteralPath (Join-Path $target "cli\main.py"))) { throw "The horizon package was not copied (no cli\main.py in $target)" }
 }
 finally {
     & $venvPython $pricing remove
@@ -148,6 +187,14 @@ Copy-Item -LiteralPath (Join-Path $clientDir "horizon_main.py") -Destination (Jo
 if ($LASTEXITCODE -ne 0) { throw "cargo build of the launcher failed" }
 Copy-Item -LiteralPath (Join-Path $tools "target\release\horizon.exe") -Destination (Join-Path $stage "horizon.exe")
 
+if ($Engine) {
+    # 6. (engine) Sources only, no bytecode. ML packages read source and data files at
+    # run time, so every .py stays. Precompiled bytecode would add about 60 MB to the
+    # zip (116 MB without it, measured) and push some paths past the 150-character
+    # limit of smoke-test-engine.ps1; Python compiles each module once, on the first
+    # start, into __pycache__ in the engine folder (the user's own, writable).
+    Write-Output "Shipping the engine's .py sources (no precompiled bytecode)"
+} else {
 # 6. Byte-compile with the embedded interpreter and ship the bytecode only, as
 # PyInstaller did: -b writes each .pyc next to its source (the layout Python
 # imports without a source file), then the sources and __pycache__ folders go.
@@ -160,6 +207,7 @@ $sources = Get-ChildItem -LiteralPath $app -Recurse -File -Filter "*.py" |
 $sources | Remove-Item -Force
 Get-ChildItem -LiteralPath $app -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 Write-Output ("Shipping bytecode only: removed {0:N0} source files" -f @($sources).Count)
+}
 
 # 7. Move the finished layout into dist.
 if (Test-Path $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
@@ -187,8 +235,10 @@ try {
         if ("$reported".Trim() -notmatch (" " + [regex]::Escape("$version".Trim()) + "$")) {
             throw "Embedded client reports '$reported', expected version $version"
         }
-        Write-Output "Client: $reported"
-        foreach ($cmd in @("vault", "forward", "codetab", "lean")) {
+        Write-Output "$(if ($Engine) { 'Engine' } else { 'Client' }): $reported"
+        # The engine has no keyring (vault, forward) in its dependencies, so it checks its own group only.
+        $commands = if ($Engine) { @("code-engine") } else { @("vault", "forward", "codetab", "lean") }
+        foreach ($cmd in $commands) {
             & $horizon $cmd --help | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "horizon.exe $cmd --help failed (exit $LASTEXITCODE)" }
             Write-Output "ok    horizon $cmd --help"
