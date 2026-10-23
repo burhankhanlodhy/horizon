@@ -236,16 +236,23 @@ test('an empty settings file is treated as an empty object', () =>
     assert.deepStrictEqual(readSettings(sb), {});
   }));
 
-test('a device limit exits with code 3 and names the two devices, with no settings changed', () =>
+test('a device limit names the two devices once and keeps waiting; expiring there exits with code 3, with no settings changed', () =>
   withSandbox(async ({ api, sb }) => {
     api.state.deviceLimit = [{ name: 'Office PC' }, { name: 'Home laptop' }];
+    api.state.expireAfterLimitPolls = 2;
     const res = await runCli(sb, ['connect']);
     assert.strictEqual(res.code, 3, res.output);
     assert.strictEqual(
+      res.stdout.split('This account already has 2 devices connected').length - 1,
+      1,
+      'the device limit is printed once'
+    );
+    assert.match(res.stdout, /This account already has 2 devices connected: Office PC, Home laptop\./);
+    assert.match(res.stdout, /Or disconnect one in the browser window and approve again; this command is still waiting\./);
+    assert.strictEqual(
       res.stderr,
-      'This account already has 2 devices connected: Office PC, Home laptop.\n' +
-        'Disconnect one first: run "npx contextshrink-claude uninstall" on that device, ' +
-        'or remove it at https://code.contextshrink.com/account. Then run this command again.\n'
+      'The sign-in code expired while this account was still at its device limit. ' +
+        'Disconnect a device, then run this command again. Nothing was changed.\n'
     );
     assert.ok(!fs.existsSync(sb.settings));
     assert.ok(!fs.existsSync(sb.deviceFile));

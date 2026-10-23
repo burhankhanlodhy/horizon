@@ -13,7 +13,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { runCli, readJson } = require('./support');
 const code = require('./code-support');
-const { signatureProblem } = require('../lib/codetab');
+const { signatureProblem, configFor } = require('../lib/codetab');
 
 const STUB = path.join(__dirname, 'fixtures', 'fake-codetab-helper.js');
 const SHIPPED_MANIFEST = path.join(__dirname, '..', 'lib', 'codetab-manifest.json');
@@ -169,8 +169,10 @@ test('connect sets up the Code tab: patches Claude Desktop and writes codetab.js
 
     const env = readJson(sb.settings).env;
     assert.strictEqual(env.ANTHROPIC_BASE_URL, engine.url);
-    // The forwarder format: owner npx, no launch mode, no account key.
+    // The forwarder format: v 1 and enabled (the launcher routes only then), owner npx,
+    // no launch mode, no account key.
     assert.deepStrictEqual(readJson(paths.config), {
+      v: 1,
       owner: 'npx',
       enabled: true,
       base_url: engine.url,
@@ -426,4 +428,20 @@ test('signatureProblem accepts only the ContextShrink publisher, from the expect
   assert.ok(signatureProblem({ Status: 'Valid', Subject: 'CN=Muhammad Burhan Khan Lodhi Extra, O=x', Issuer: issuer }));
   assert.ok(signatureProblem({ Status: 'Valid', Subject: subject, Issuer: 'CN=Some Other CA' }));
   assert.ok(signatureProblem(null));
+});
+
+test('the forwarder config the launcher reads has v 1 and enabled, and health_port is the engine port', () => {
+  // The launcher routes only when v is 1 and enabled is true, and checks
+  // http://127.0.0.1:<health_port>/__cs/health. This is the exact object it reads.
+  assert.deepStrictEqual(
+    configFor({ base: 'http://127.0.0.1:18793', env: { ENABLE_TOOL_SEARCH: 'true' } }),
+    {
+      v: 1,
+      owner: 'npx',
+      enabled: true,
+      base_url: 'http://127.0.0.1:18793',
+      health_port: 18793,
+      env: { ENABLE_TOOL_SEARCH: 'true' },
+    }
+  );
 });

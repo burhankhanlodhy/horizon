@@ -313,6 +313,9 @@ CREATE TABLE IF NOT EXISTS core.code_cli_requests (
     consumed_at      TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_code_cli_requests_expiry ON core.code_cli_requests (expires_at);
+-- Set when an approval was refused by the device limit: the terminal's poll then
+-- reports device_limit (with this account's devices) until a later approval wins.
+ALTER TABLE core.code_cli_requests ADD COLUMN IF NOT EXISTS limit_user_id UUID REFERENCES core.users (id) ON DELETE CASCADE;
 
 -- Hourly usage counts per device (counts only: no prompts, models or paths).
 -- An upload replaces a bucket's values, so re-sending a bucket is harmless.

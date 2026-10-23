@@ -15,13 +15,22 @@ const EXPIRED = 'The sign-in code expired before this computer was approved. Run
 /** A sign-in that did not finish. Nothing was changed. */
 class LoginError extends CsError {}
 
-/** The account already has its devices. The message names them; the exit code is 3. */
+/**
+ * The account was at its device limit and the sign-in expired while this command
+ * waited. The exit code is 3. The message is the expiry text, not the device list
+ * (that was printed once when the limit was first reported).
+ */
 class DeviceLimitError extends CsError {
-  constructor(devices, commandName, siteUrl) {
-    super(limitMessage(devices, commandName, siteUrl), 3);
+  constructor(message, devices) {
+    super(message, 3);
     this.devices = devices;
   }
 }
+
+const WAITING_AT_LIMIT = 'Or disconnect one in the browser window and approve again; this command is still waiting.';
+const EXPIRED_AT_LIMIT =
+  'The sign-in code expired while this account was still at its device limit. ' +
+  'Disconnect a device, then run this command again. Nothing was changed.';
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +49,11 @@ function limitMessage(devices, commandName, siteUrl) {
     `Disconnect one first: run "npx ${commandName} uninstall" on that device, ` +
     `or remove it at ${siteUrl}/account. Then run this command again.`
   );
+}
+
+// The sign-in ended. It was waiting at the device limit if the last answer said so: exit 3.
+function expiredError(limitDevices) {
+  return limitDevices ? new DeviceLimitError(EXPIRED_AT_LIMIT, limitDevices) : new LoginError(EXPIRED);
 }
 
 function seconds(value, fallback, max) {
@@ -84,6 +98,9 @@ async function runBrowserLogin(ctx, { apiUrl, tool, deviceHash, deviceName, comm
   }
   ctx.out('Waiting for approval...');
 
+  let limitShown = false;
+  // The devices of the last device_limit answer, or null while the request is not refused.
+  let limitDevices = null;
   for (;;) {
     const poll = await request(apiUrl, '/code/cli/poll', {
       method: 'POST',
@@ -103,12 +120,23 @@ async function runBrowserLogin(ctx, { apiUrl, tool, deviceHash, deviceName, comm
       };
     }
     if (body.status === 'device_limit') {
-      throw new DeviceLimitError(Array.isArray(body.devices) ? body.devices : [], commandName, siteUrl);
+      // Keep waiting: the user can disconnect a device in the browser and approve again.
+      limitDevices = Array.isArray(body.devices) ? body.devices : [];
+      if (!limitShown) {
+        ctx.out(limitMessage(limitDevices, commandName, siteUrl));
+        ctx.out(WAITING_AT_LIMIT);
+        limitShown = true;
+      }
+    } else if (body.status === 'pending') {
+      limitDevices = null;
+    } else if (body.status === 'denied') {
+      throw new LoginError('The sign-in was not approved. Nothing was changed.');
+    } else if (body.status === 'expired') {
+      throw expiredError(limitDevices);
+    } else {
+      throw new LoginError('ContextShrink sent an unexpected sign-in response. Nothing was changed.');
     }
-    if (body.status === 'denied') throw new LoginError('The sign-in was not approved. Nothing was changed.');
-    if (body.status === 'expired') throw new LoginError(EXPIRED);
-    if (body.status !== 'pending') throw new LoginError('ContextShrink sent an unexpected sign-in response. Nothing was changed.');
-    if (Date.now() >= deadline) throw new LoginError(EXPIRED);
+    if (Date.now() >= deadline) throw expiredError(limitDevices);
     await sleep(interval * 1000);
   }
 }

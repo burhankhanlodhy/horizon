@@ -18,6 +18,16 @@ from horizon.code_engine import runtime
 from horizon.code_engine.store import home_dir
 from horizon.proxy import engine_hooks
 
+# The engine runs the max savings profile, but never changes the model the user
+# picked: HORIZON_MODEL_MODERNIZE would serve a superseded model id on its successor.
+# These are forced, so a value the user set in the environment does not win.
+ENGINE_SAVINGS_ENV = {"HORIZON_SAVINGS": "max", "HORIZON_MODEL_MODERNIZE": "0"}
+
+
+def force_engine_environment(environ) -> None:
+    environ.update(ENGINE_SAVINGS_ENV)
+
+
 _PORT = click.option(
     "--port",
     default=runtime.DEFAULT_PORT,
@@ -55,8 +65,8 @@ def run_engine(port: int) -> None:
         return
     engine = None
     try:
-        # The engine always runs the max savings profile. Set it before the proxy reads any flag.
-        os.environ["HORIZON_SAVINGS"] = "max"
+        # Set before the proxy reads any flag.
+        force_engine_environment(os.environ)
         # A stop left over from an earlier run must not stop this one.
         runtime.consume_stop_request(home)
         engine = Engine(home)

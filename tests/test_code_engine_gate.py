@@ -292,3 +292,56 @@ def test_privacy_only_counts_and_entitlement_reach_the_api(home, signer) -> None
     usage = json.loads(next(r for r in api_requests if r.url.path == "/code/usage").content)
     assert set(usage) == {"buckets"}
     assert set(usage["buckets"][0]) == {"hour", "tool", "requests", "tokens_before", "tokens_after"}
+
+
+def test_health_is_one_plain_http_response_with_a_content_length(home, signer) -> None:
+    """The Code-tab launcher reads one HTTP/1.1 response: no chunked body, a length it can trust."""
+    import socket
+    import threading
+
+    import uvicorn
+
+    _write_device(home)
+    write_license(home, _note(signer), fetched_at=time.time())
+    engine = _engine(home, _ApiServer(signer))
+    engine.load_cached_note()
+    app = _app(engine, _Upstream())
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 10
+        while not server.started and time.time() < deadline:
+            time.sleep(0.02)
+        assert server.started
+
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(
+                b"GET /__cs/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+            )
+            raw = b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                raw += chunk
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    assert lines[0] == "HTTP/1.1 200 OK"
+    headers = {
+        k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])
+    }
+    assert "transfer-encoding" not in headers
+    assert headers["content-length"] == str(len(body))
+    assert headers["content-type"].startswith("application/json")
+    assert json.loads(body)["ok"] is True

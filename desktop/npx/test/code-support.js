@@ -41,6 +41,7 @@ function engineManifestFor(apiUrl) {
  *   plan: 'trial' | 'active' | 'ended' (ended answers 402)
  *   pollsBeforeApproval: how many polls answer "pending" first
  *   deviceLimit: when an array, poll answers status "device_limit" with these devices
+ *   expireAfterLimitPolls: with deviceLimit, answer "expired" after this many limit answers
  *   entitlementStatus: a status to answer instead of the plan note (e.g. 503)
  *   pollStatus: a status ('expired', 'denied') to answer every poll with
  *   verifyUrl: a sign-in link to send instead of the normal one
@@ -107,6 +108,9 @@ function startCodeApi() {
       request.polls += 1;
       if (api.state.pollStatus) return [200, { status: api.state.pollStatus }];
       if (Array.isArray(api.state.deviceLimit)) {
+        request.limitPolls = (request.limitPolls || 0) + 1;
+        const after = api.state.expireAfterLimitPolls;
+        if (after && request.limitPolls > after) return [200, { status: 'expired' }];
         return [200, { status: 'device_limit', devices: api.state.deviceLimit }];
       }
       if (request.polls <= api.state.pollsBeforeApproval) return [200, { status: 'pending' }];

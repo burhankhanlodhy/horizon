@@ -76,6 +76,34 @@ test('an engine whose signature is not Valid is refused before it is put in plac
     assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)), 'an unsigned engine was put in place');
   }));
 
+test('a Valid signature from another publisher is refused: the engine is pinned to the ContextShrink publisher', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const issuer = 'CN=Microsoft ID Verified CS EOC CA 01, O=Microsoft Corporation, C=US';
+    for (const Subject of ['CN=Someone Else, O=Someone Else, C=US', 'CN=Muhammad Burhan Khan Lodhi Extra, O=x']) {
+      const other = { ...adapter, signatureStatus: async () => ({ Status: 'Valid', Subject, Issuer: issuer }) };
+      await assert.rejects(
+        engine.installEngine(ctx, sb.env, manifest, other),
+        /failed the publisher check \(the signer is not the expected publisher\)\. Nothing was installed\./
+      );
+    }
+    const wrongAuthority = {
+      ...adapter,
+      signatureStatus: async () => ({
+        Status: 'Valid',
+        Subject: 'CN=Muhammad Burhan Khan Lodhi, O=Muhammad Burhan Khan Lodhi, L=Somewhere, C=GB',
+        Issuer: 'CN=Some Other CA',
+      }),
+    };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, wrongAuthority), /not from the expected authority/);
+    assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)), 'an engine from another publisher was put in place');
+  }));
+
+test('the engine from the ContextShrink publisher installs (the fake adapter signs it as that publisher)', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    assert.ok(fs.existsSync(exe));
+  }));
+
 test('a failed download says so, with its HTTP status', () =>
   withEngine(async ({ sb, ctx, adapter, manifest }) => {
     const missing = { ...manifest, url: manifest.url + '-missing' };

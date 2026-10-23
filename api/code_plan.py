@@ -24,7 +24,7 @@ import db
 import security
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import Depends, Header, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger("contextshrink.code")
@@ -335,7 +335,8 @@ def _is_code_subscription(sub) -> bool:
     )
 
 
-def _invoice_is_code(invoice) -> bool:
+def invoice_is_code(invoice) -> bool:
+    """True when the invoice belongs to a ContextShrink Code subscription."""
     details = getattr(getattr(invoice, "parent", None), "subscription_details", None)
     return details is not None and _metadata(details).get("product") == PRODUCT
 
@@ -398,7 +399,7 @@ async def handle_stripe_event(event) -> bool:
         sub_id = billing._invoice_subscription_id(obj)
         if sub_id is None:
             return False
-        if not (_invoice_is_code(obj) or await _is_code_subscription_id(sub_id)):
+        if not (invoice_is_code(obj) or await _is_code_subscription_id(sub_id)):
             return False
         # Code invoices are never savings-fee invoices: only the plan state follows them.
         if kind != "invoice.created":
@@ -553,9 +554,21 @@ def install(app, current_user):
                 )
             else:
                 if len(devices) >= DEVICE_LIMIT:
-                    raise HTTPException(
-                        409,
-                        {"code": "device_limit", "devices": [_device_out(d) for d in devices]},
+                    # Returned, not raised: the marker must commit, so the terminal's
+                    # poll can show the same devices while this request stays open.
+                    await conn.execute(
+                        "UPDATE core.code_cli_requests SET limit_user_id=$2 WHERE id=$1",
+                        req["id"],
+                        user["user_id"],
+                    )
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "detail": {
+                                "code": "device_limit",
+                                "devices": [_device_out(d) for d in devices],
+                            }
+                        },
                     )
                 device_id = await conn.fetchval(
                     "INSERT INTO core.code_devices (user_id, name, platform, device_hash, tools, "
@@ -582,8 +595,8 @@ def install(app, current_user):
         now = _now()
         async with db._conn().acquire() as conn, conn.transaction():
             req = await conn.fetchrow(
-                "SELECT id, poll_secret_hash, approved_user_id, device_id, expires_at, consumed_at "
-                "FROM core.code_cli_requests WHERE id=$1 FOR UPDATE",
+                "SELECT id, poll_secret_hash, approved_user_id, device_id, expires_at, consumed_at, "
+                "limit_user_id FROM core.code_cli_requests WHERE id=$1 FOR UPDATE",
                 body.request_id,
             )
             if req is None or not hmac.compare_digest(
@@ -593,7 +606,17 @@ def install(app, current_user):
             if req["consumed_at"] is not None:
                 return {"status": "expired"}  # The key was already delivered once.
             if req["approved_user_id"] is None:
-                return {"status": "expired" if req["expires_at"] <= now else "pending"}
+                if req["expires_at"] <= now:
+                    return {"status": "expired"}
+                if req["limit_user_id"] is not None:
+                    # The browser was refused by the device limit: show the terminal the
+                    # account's devices. A later successful approval turns this to "approved".
+                    devices = await _active_devices(conn, req["limit_user_id"])
+                    return {
+                        "status": "device_limit",
+                        "devices": [_device_out(d) for d in devices],
+                    }
+                return {"status": "pending"}
             # The key exists only in this response: only its hash is stored.
             key = "cs_dev_" + secrets.token_urlsafe(32)
             device_id = await conn.fetchval(

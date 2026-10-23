@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from horizon import bundled_client
+from horizon.bundled_client import CLIENT_EXE_ENV
 from horizon.code_engine import device as device_mod
 from horizon.code_engine.device import (
     MACHINE_ID_ENV,
@@ -33,6 +35,34 @@ def test_device_hash_normalizes_case_and_whitespace() -> None:
 
 
 def test_machine_id_env_override_wins(monkeypatch) -> None:
+    monkeypatch.delenv(CLIENT_EXE_ENV, raising=False)
+    monkeypatch.setenv(MACHINE_ID_ENV, TEST_VECTOR_MACHINE_ID)
+    assert machine_id() == TEST_VECTOR_MACHINE_ID
+
+
+def test_machine_id_override_is_ignored_in_the_embedded_build(monkeypatch, tmp_path) -> None:
+    launcher = tmp_path / "horizon.exe"
+    launcher.write_bytes(b"")
+    monkeypatch.setenv(CLIENT_EXE_ENV, str(launcher))
+    monkeypatch.setenv(MACHINE_ID_ENV, TEST_VECTOR_MACHINE_ID)
+    monkeypatch.setattr(device_mod, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(device_mod, "_linux_machine_id", lambda: "from-os")
+    assert machine_id() == "from-os"
+
+
+def test_machine_id_override_is_ignored_in_the_pyinstaller_build(monkeypatch) -> None:
+    monkeypatch.delenv(CLIENT_EXE_ENV, raising=False)
+    monkeypatch.setenv(MACHINE_ID_ENV, TEST_VECTOR_MACHINE_ID)
+    monkeypatch.setattr(bundled_client.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(device_mod, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(device_mod, "_linux_machine_id", lambda: "from-os")
+    assert machine_id() == "from-os"
+
+
+def test_a_client_exe_path_that_is_not_a_file_does_not_count_as_bundled(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv(CLIENT_EXE_ENV, str(tmp_path / "missing.exe"))
     monkeypatch.setenv(MACHINE_ID_ENV, TEST_VECTOR_MACHINE_ID)
     assert machine_id() == TEST_VECTOR_MACHINE_ID
 

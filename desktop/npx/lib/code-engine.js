@@ -17,6 +17,9 @@ const { Transform, pipeline } = require('node:stream');
 const { execFile } = require('node:child_process');
 const { CsError, testOverride, localAppData, appData, engineUrlOf } = require('./code-env');
 const { USER_AGENT } = require('./api');
+// The publisher pin (signer subject and certificate authority) is the launcher's,
+// so the engine and the Code tab trust the same publisher.
+const publisher = require('./code-publisher');
 
 const DEFAULT_MANIFEST = path.join(__dirname, 'engine-manifest.json');
 const ENGINE_EXE = 'horizon.exe';
@@ -111,18 +114,13 @@ function realAdapter() {
         );
       });
     },
+    // { Status, Subject, Issuer } of the Authenticode signature, read the same way as the Code tab's.
     async signatureStatus(file) {
-      const out = await runPowerShell(
-        [
-          "$ErrorActionPreference = 'Stop'",
-          '$sig = Get-AuthenticodeSignature -LiteralPath $env:CONTEXTSHRINK_CHECK_PATH',
-          '[pscustomobject]@{ Status = [string]$sig.Status } | ConvertTo-Json -Compress',
-        ].join('\n'),
-        { CONTEXTSHRINK_CHECK_PATH: file }
-      );
-      const data = JSON.parse(out.split(/\r?\n/).pop() || 'null');
-      if (!isPlainObject(data)) throw new Error('signature check gave no answer');
-      return { Status: data.Status };
+      try {
+        return await publisher.readSignature(file);
+      } catch {
+        throw new CsError('The ContextShrink engine signature could not be checked. Nothing was installed.');
+      }
     },
     async expandZip(zip, dest) {
       await runPowerShell(
@@ -255,6 +253,11 @@ async function installEngine(ctx, env, manifest, adapter) {
       throw new CsError(
         `The ContextShrink engine failed the signature check (status: ${check && check.Status ? check.Status : 'unknown'}). Nothing was installed.`
       );
+    }
+    // Valid is not enough: the signer must be the ContextShrink publisher.
+    const problem = publisher.signatureProblem(check);
+    if (problem) {
+      throw new CsError(`The ContextShrink engine failed the publisher check (${problem}). Nothing was installed.`);
     }
     fs.rmSync(finalDir, { recursive: true, force: true });
     fs.renameSync(staging, finalDir);

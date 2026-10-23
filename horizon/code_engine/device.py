@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from horizon.bundled_client import is_bundled_client
 from horizon.code_engine.store import read_json
 
 MACHINE_ID_ENV = "CONTEXTSHRINK_MACHINE_ID"
@@ -31,9 +32,13 @@ class MachineIdError(RuntimeError):
 
 
 def machine_id() -> str:
-    """The raw machine id: the test override, else the OS identifier."""
+    """The raw machine id: the test override, else the OS identifier.
+
+    The override is for tests only. Shipped engines ignore it, so a user's
+    environment cannot change the device identity the server registered.
+    """
     override = os.environ.get(MACHINE_ID_ENV, "")
-    if override.strip():
+    if override.strip() and not is_bundled_client():
         return override
     if sys.platform == "win32":
         value = _windows_machine_guid()

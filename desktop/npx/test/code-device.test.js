@@ -203,23 +203,37 @@ test('applyPlanNote refuses an answer it cannot use, and writes nothing', () =>
     assert.ok(!fs.existsSync(sb.licenseFile));
   }));
 
-test('the shared login error for device_limit has exit code 3 and names the devices', () =>
-  withEnv(async ({ api, sb, ctx }) => {
+test('a device limit names the devices once and keeps waiting; a sign-in that expires there exits with code 3', () =>
+  withEnv(async ({ api, sb, ctx, lines, adapter }) => {
     api.state.deviceLimit = [{ name: 'Laptop' }, { name: 'Desktop\u0007PC' }];
+    let sleeps = 0;
+    const sleep = async () => {
+      sleeps += 1;
+      if (sleeps === 2) {
+        api.state.deviceLimit = null;
+        api.state.pollStatus = 'expired';
+      }
+    };
     await assert.rejects(
-      device.ensureDevice(ctx, sb.env, { tool: 'claude', toolName: 'Claude', commandName: 'contextshrink-claude', deps: { adapter: require(ADAPTER)(sb.env), sleep: async () => {} } }),
+      device.ensureDevice(ctx, sb.env, {
+        tool: 'claude',
+        toolName: 'Claude',
+        commandName: 'contextshrink-claude',
+        deps: { adapter, sleep },
+      }),
       (error) => {
         assert.ok(error instanceof login.DeviceLimitError);
         assert.equal(error.exitCode, 3);
-        assert.equal(
-          error.message,
-          'This account already has 2 devices connected: Laptop, Desktop PC.\n' +
-            'Disconnect one first: run "npx contextshrink-claude uninstall" on that device, ' +
-            'or remove it at https://code.contextshrink.com/account. Then run this command again.'
-        );
+        assert.match(error.message, /expired while this account was still at its device limit/);
         return true;
       }
     );
+    const printed = lines.filter((line) => line.startsWith('This account already has 2 devices connected'));
+    assert.deepEqual(printed, [
+      'This account already has 2 devices connected: Laptop, Desktop PC.\n' +
+        'Disconnect one first: run "npx contextshrink-claude uninstall" on that device, ' +
+        'or remove it at https://code.contextshrink.com/account. Then run this command again.',
+    ]);
     assert.ok(!fs.existsSync(sb.deviceFile), 'a device.json was written after the limit');
   }));
 

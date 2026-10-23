@@ -452,6 +452,13 @@ async def fee_payment_issue(user_id) -> dict | None:
     }
 
 
+def _subscription_invoice_label(invoice) -> str:
+    """Fallback label for an invoice that has no description."""
+    if code_plan.invoice_is_code(invoice):
+        return "ContextShrink Code subscription"
+    return "ContextShrink Pro subscription"
+
+
 def _invoice_subscription_id(invoice) -> str | None:
     details = getattr(getattr(invoice, "parent", None), "subscription_details", None)
     return _expandable_id(details.subscription) if details else None
@@ -584,7 +591,7 @@ def install(app, current_user):
                 "id": inv.id,
                 "number": inv.number,
                 "created": _ts(inv.created).isoformat(),
-                "description": inv.description or "ContextShrink Pro subscription",
+                "description": inv.description or _subscription_invoice_label(inv),
                 "total": inv.total / 100,
                 "currency": inv.currency,
                 "status": inv.status,

@@ -37,6 +37,11 @@ def bundled_client_command() -> list[str] | None:
     return None
 
 
+def is_bundled_client() -> bool:
+    """True inside the shipped Windows client, either build (see ``bundled_client_command``)."""
+    return bundled_client_command() is not None
+
+
 def cli_command() -> list[str]:
     """The argv prefix that runs the Horizon CLI in this build."""
     return bundled_client_command() or [sys.executable, "-m", "horizon.cli"]

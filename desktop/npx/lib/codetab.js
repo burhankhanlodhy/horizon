@@ -26,6 +26,7 @@ const { Transform, pipeline } = require('node:stream');
 const { execFile } = require('node:child_process');
 const cfg = require('./config');
 const files = require('./files');
+const { readSignature, signatureProblem } = require('./code-publisher');
 const { USER_AGENT } = require('./api');
 
 class CodeTabError extends Error {}
@@ -42,14 +43,11 @@ const STAMP_NAME = 'npx-repair.stamp';
 const PLACEHOLDER_VERSION = '0.0.0-unset';
 const PLACEHOLDER_HASH = '0'.repeat(64);
 const DEFAULT_MANIFEST = path.join(__dirname, 'codetab-manifest.json');
-const SIGNER_SUBJECT = /(^|,\s*)CN=Muhammad Burhan Khan Lodhi(,|$)/;
-const SIGNER_ISSUER = 'Microsoft ID Verified';
 const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const HASH_SHAPE = /^[0-9a-f]{64}$/;
 const LOOPBACK = new Set(['127.0.0.1']);
 const DOWNLOAD_IDLE_MS = 30000;
 const HELPER_TIMEOUT_MS = 180000;
-const CHECK_TIMEOUT_MS = 60000;
 const UNREACHABLE = 'cannot download the Code tab files. Check your internet connection. Nothing was installed.';
 
 // Test-only overrides. They are ignored unless CONTEXTSHRINK_NPX_TEST=1.
@@ -268,66 +266,14 @@ function downloadTo(url, dest, entry, name, redirectsLeft = 3) {
   });
 }
 
-// The publisher check. Status must be Valid, the signer must be the ContextShrink
-// publisher and the certificate must come from Microsoft's ID Verified authority.
-function signatureProblem(info) {
-  if (!files.isPlainObject(info) || info.Status !== 'Valid') {
-    const status = files.isPlainObject(info) && info.Status ? info.Status : 'unknown';
-    return `signature status is ${status}`;
-  }
-  if (!SIGNER_SUBJECT.test(String(info.Subject || ''))) return 'the signer is not the expected publisher';
-  if (!String(info.Issuer || '').includes(SIGNER_ISSUER)) return 'the certificate is not from the expected authority';
-  return null;
-}
-
-// The file path goes in an environment variable, never in the script text.
-const SIGNATURE_SCRIPT = [
-  "$ErrorActionPreference = 'Stop'",
-  '$sig = Get-AuthenticodeSignature -LiteralPath $env:CONTEXTSHRINK_CHECK_PATH',
-  "$subject = ''",
-  "$issuer = ''",
-  '$cert = $sig.SignerCertificate',
-  'if ($null -ne $cert) { $subject = $cert.Subject; $issuer = $cert.Issuer }',
-  '[pscustomobject]@{ Status = [string]$sig.Status; Subject = $subject; Issuer = $issuer } | ConvertTo-Json -Compress',
-].join('\n');
-
-function powerShellPath() {
-  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
-  return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
-
-function readSignature(file) {
-  const encoded = Buffer.from(SIGNATURE_SCRIPT, 'utf16le').toString('base64');
-  return new Promise((resolve, reject) => {
-    execFile(
-      powerShellPath(),
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      {
-        env: { ...process.env, CONTEXTSHRINK_CHECK_PATH: file },
-        windowsHide: true,
-        timeout: CHECK_TIMEOUT_MS,
-        maxBuffer: 1 << 20,
-      },
-      (error, stdout) => {
-        const line = String(stdout || '').trim().split(/\r?\n/).pop() || '';
-        let info = null;
-        try {
-          info = JSON.parse(line);
-        } catch {
-          info = null;
-        }
-        if (error || !files.isPlainObject(info)) {
-          reject(new CodeTabError('could not check the signature of a Code tab file. Nothing was installed.'));
-        } else {
-          resolve(info);
-        }
-      }
-    );
-  });
-}
-
 async function checkSignature(file, name) {
-  const problem = signatureProblem(await readSignature(file));
+  let info;
+  try {
+    info = await readSignature(file);
+  } catch {
+    throw new CodeTabError('could not check the signature of a Code tab file. Nothing was installed.');
+  }
+  const problem = signatureProblem(info);
   if (problem) {
     throw new CodeTabError(`${name} failed the publisher check (${problem}). Nothing was installed.`);
   }
@@ -440,8 +386,10 @@ function gatewayFromSettings(terminal) {
 }
 
 // The forwarder format: no launch mode and no key. The launcher forwards to the engine.
+// The launcher only routes when v is 1 and enabled is true, so v must be written.
 function configFor(gateway) {
   return {
+    v: 1,
     owner: OWNER,
     enabled: true,
     base_url: gateway.base,
@@ -659,5 +607,6 @@ module.exports = {
   setUpCodeTab,
   undoCodeTab,
   codeTabStatus,
+  configFor,
   signatureProblem,
 };

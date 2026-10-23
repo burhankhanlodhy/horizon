@@ -111,12 +111,16 @@ test('API-key Codex auth is refused without reading or changing its key', () => 
   assert.ok(!r.output.includes('fake-private-api-key')); assert.equal(fs.readFileSync(path.join(f.dir, 'auth.json'), 'utf8'), auth);
 }));
 
-test('a device limit exits with code 3 and leaves the config untouched', () => fixture(async f => {
+test('a device limit is shown once, the sign-in keeps waiting, and expiring there exits with code 3', () => fixture(async f => {
   const original = 'model = "keep"\n'; fs.writeFileSync(f.config, original);
   f.api.state.deviceLimit = [{ name: 'Office PC' }, { name: 'Home laptop' }];
+  f.api.state.expireAfterLimitPolls = 2;
   const r = await f.run(); assert.equal(r.code, 3, r.output);
-  assert.match(r.stderr, /This account already has 2 devices connected: Office PC, Home laptop\./);
-  assert.match(r.stderr, /run "npx contextshrink-codex uninstall" on that device/);
+  assert.equal(r.stdout.split('This account already has 2 devices connected').length - 1, 1);
+  assert.match(r.stdout, /This account already has 2 devices connected: Office PC, Home laptop\./);
+  assert.match(r.stdout, /run "npx contextshrink-codex uninstall" on that device/);
+  assert.match(r.stdout, /Or disconnect one in the browser window and approve again; this command is still waiting\./);
+  assert.match(r.stderr, /expired while this account was still at its device limit/);
   assert.equal(fs.readFileSync(f.config, 'utf8'), original); assert.ok(!fs.existsSync(f.state));
 }));
 

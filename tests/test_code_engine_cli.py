@@ -9,9 +9,11 @@ import pytest
 from click.testing import CliRunner
 
 from horizon import bundled_client
+from horizon.cli.code_engine import force_engine_environment
 from horizon.cli.main import main
 from horizon.code_engine import runtime
 from horizon.code_engine.store import HOME_ENV
+from horizon.proxy.savings_profile import apply_savings_profile
 
 # A port nothing listens on, so the health probe fails fast and deterministically.
 PORT = "18999"
@@ -133,6 +135,18 @@ def test_spawn_on_windows_is_detached_without_a_console(home, monkeypatch) -> No
     flags = captured["flags"][0]
     assert flags & runtime._DETACHED_PROCESS
     assert flags & runtime._CREATE_NEW_PROCESS_GROUP
+
+
+def test_engine_runs_max_savings_but_never_modernizes_the_model() -> None:
+    env = {"HORIZON_MODEL_MODERNIZE": "1"}  # the user asked for it in their environment
+    force_engine_environment(env)
+    assert env["HORIZON_SAVINGS"] == "max"
+    assert env["HORIZON_MODEL_MODERNIZE"] == "0"
+
+    applied = apply_savings_profile(env)
+    assert "HORIZON_MODEL_MODERNIZE" not in applied  # the profile does not fill it back in
+    assert env["HORIZON_MODEL_MODERNIZE"] == "0"
+    assert "HORIZON_FOLD_AT_REWRITE" in applied  # the rest of max is still on
 
 
 def test_health_ignores_services_that_are_not_the_engine(monkeypatch) -> None:

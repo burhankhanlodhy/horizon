@@ -62,22 +62,61 @@ test('a browser that will not open does not stop the sign-in', () =>
     assert.ok(lines.includes('Could not open the browser. Open the link above yourself.'));
   }));
 
-test('a device limit is refused with exit code 3, the devices named, and this package\'s uninstall command', () =>
+const LIMIT_DEVICES = [
+  { id: 'a', name: 'Laptop', platform: 'windows', last_seen_at: null },
+  { id: 'b', name: 'Desktop', platform: 'windows', last_seen_at: null },
+];
+
+test('a device limit is shown once with the devices and this package\'s uninstall command, and the sign-in keeps waiting', () =>
+  withApi(async ({ api, ctx, lines }) => {
+    api.state.deviceLimit = LIMIT_DEVICES;
+    let sleeps = 0;
+    // The user disconnects a device in the browser and approves again.
+    const { promise } = signIn(api, ctx, {
+      sleep: async () => {
+        sleeps += 1;
+        if (sleeps === 2) api.state.deviceLimit = null;
+      },
+    });
+    const result = await promise;
+    assert.ok(result.device_key.startsWith('cs_dev_'));
+    assert.equal(api.calls.filter((c) => c.path === '/code/cli/poll').length, 3, 'limit twice, then approved');
+
+    const limitLines = lines.filter((line) => line.startsWith('This account already has 2 devices connected'));
+    assert.equal(limitLines.length, 1, 'the device limit is printed once');
+    assert.match(limitLines[0], /^This account already has 2 devices connected: Laptop, Desktop\.$/m);
+    assert.match(limitLines[0], /run "npx contextshrink-codex uninstall" on that device/);
+    assert.match(limitLines[0], /https:\/\/code\.contextshrink\.com\/account/);
+    assert.ok(lines.includes('Or disconnect one in the browser window and approve again; this command is still waiting.'));
+    assert.equal(api.issued.length, 1);
+  }));
+
+test('a sign-in that expires while at the device limit exits with code 3', () =>
   withApi(async ({ api, ctx }) => {
-    api.state.deviceLimit = [
-      { id: 'a', name: 'Laptop', platform: 'windows', last_seen_at: null },
-      { id: 'b', name: 'Desktop', platform: 'windows', last_seen_at: null },
-    ];
-    const { promise } = signIn(api, ctx);
+    api.state.deviceLimit = LIMIT_DEVICES;
+    const { promise } = signIn(api, ctx, {
+      sleep: async () => {
+        api.state.deviceLimit = null;
+        api.state.pollStatus = 'expired';
+      },
+    });
     await assert.rejects(promise, (error) => {
       assert.ok(error instanceof login.DeviceLimitError);
       assert.equal(error.exitCode, 3);
-      assert.match(error.message, /^This account already has 2 devices connected: Laptop, Desktop\.$/m);
-      assert.match(error.message, /run "npx contextshrink-codex uninstall" on that device/);
-      assert.match(error.message, /https:\/\/code\.contextshrink\.com\/account/);
+      assert.match(error.message, /expired while this account was still at its device limit/);
       return true;
     });
     assert.deepEqual(api.issued, [], 'a device key was issued past the limit');
+  }));
+
+test('a sign-in that expires without a device limit is an ordinary expiry, not exit code 3', () =>
+  withApi(async ({ api, ctx }) => {
+    api.state.pollStatus = 'expired';
+    await assert.rejects(signIn(api, ctx).promise, (error) => {
+      assert.ok(error instanceof login.LoginError);
+      assert.equal(error.exitCode, 1);
+      return true;
+    });
   }));
 
 test('an expired or denied sign-in is reported, and nothing is returned', () =>

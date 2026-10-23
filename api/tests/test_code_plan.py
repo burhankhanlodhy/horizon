@@ -196,7 +196,10 @@ class FakeDB:
                 "approved_user_id": None,
                 "device_id": None,
                 "consumed_at": None,
+                "limit_user_id": None,
             }
+        elif "UPDATE core.code_cli_requests SET limit_user_id" in sql:
+            self.requests[args[0]]["limit_user_id"] = args[1]
         elif "UPDATE core.code_devices SET name=$2" in sql:
             device = self._device_by_id(args[0])
             device.update(
@@ -390,6 +393,44 @@ def test_two_computers_connect_and_a_third_is_refused_with_the_list(client):
     assert detail["code"] == "device_limit"
     assert [d["name"] for d in detail["devices"]] == ["Laptop", "Desktop"]
     assert set(detail["devices"][0]) == {"id", "name", "platform", "last_seen_at"}
+    # The terminal learns why it is waiting, with the same devices.
+    polled = poll(client, started).json()
+    assert polled["status"] == "device_limit"
+    assert [d["name"] for d in polled["devices"]] == ["Laptop", "Desktop"]
+    assert set(polled["devices"][0]) == {"id", "name", "platform", "last_seen_at"}
+
+
+def test_device_limit_poll_ends_when_the_browser_approves_after_a_disconnect(client):
+    connect(client, HASH_A, "Laptop")
+    connect(client, HASH_B, "Desktop")
+    started = start(client, HASH_C, "Work PC").json()
+    assert approve(client, started["user_code"]).status_code == 409
+    assert poll(client, started).json()["status"] == "device_limit"
+
+    account_devices = client.get("/code/account", headers=auth("sess-alice")).json()["devices"]
+    laptop = next(d for d in account_devices if d["name"] == "Laptop")
+    revoked = client.delete(f"/code/devices/{laptop['id']}", headers=auth("sess-alice"))
+    assert revoked.status_code == 204
+    assert approve(client, started["user_code"]).status_code == 200
+
+    polled = poll(client, started).json()
+    assert polled["status"] == "approved"
+    assert polled["device_key"].startswith("cs_dev_")
+    assert poll(client, started).json() == {"status": "expired"}  # the key is handed over once
+
+
+def test_device_limit_poll_expires_with_the_request(client, env):
+    connect(client, HASH_A, "Laptop")
+    connect(client, HASH_B, "Desktop")
+    started = start(client, HASH_C, "Work PC").json()
+    assert approve(client, started["user_code"]).status_code == 409
+    env.clock.now = T0 + timedelta(seconds=601)
+    assert poll(client, started).json() == {"status": "expired"}
+
+
+def test_a_request_nobody_refused_polls_as_pending(client):
+    # Only a refused approval leaves the device_limit marker; a plain request stays pending.
+    started = start(client, HASH_C, "Work PC").json()
     assert poll(client, started).json() == {"status": "pending"}
 
 

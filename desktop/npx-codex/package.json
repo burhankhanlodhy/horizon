@@ -17,6 +17,7 @@
     "lib/code-engine.js",
     "lib/code-env.js",
     "lib/code-login.js",
+    "lib/code-publisher.js",
     "lib/config.js",
     "lib/engine-manifest.json",
     "lib/files.js",
@@ -26,7 +27,7 @@
     "lib/toml.js"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20.10"
   },
   "publishConfig": {
     "access": "public",
