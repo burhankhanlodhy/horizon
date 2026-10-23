@@ -289,7 +289,8 @@ CREATE INDEX IF NOT EXISTS idx_code_devices_user ON core.code_devices (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_code_devices_active_hash
     ON core.code_devices (user_id, device_hash) WHERE revoked_at IS NULL;
 
--- One free trial per device_hash across all accounts.
+-- Legacy one-time trial claim (one per device_hash). No longer written; read only by
+-- the free-week migration at the end of this file.
 CREATE TABLE IF NOT EXISTS core.code_trial_devices (
     device_hash TEXT        PRIMARY KEY,
     user_id     UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
@@ -331,3 +332,30 @@ CREATE TABLE IF NOT EXISTS metrics.code_usage_hourly (
     PRIMARY KEY (device_id, hour, tool)
 );
 CREATE INDEX IF NOT EXISTS idx_code_usage_user_hour ON metrics.code_usage_hourly (user_id, hour);
+
+-- Free week: each account gets one 7-day week per UTC month (started at its first
+-- use that month), and each device_hash gets one per month across all accounts.
+-- month is the first day of the UTC month the week started in.
+CREATE TABLE IF NOT EXISTS core.code_free_weeks (
+    user_id     UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
+    device_hash TEXT        NOT NULL,
+    month       DATE        NOT NULL,
+    started_at  TIMESTAMPTZ NOT NULL,
+    ends_at     TIMESTAMPTZ NOT NULL,
+    UNIQUE (user_id, month),
+    UNIQUE (device_hash, month)
+);
+
+-- Migration, runs on every boot and is idempotent: a one-time trial that started in
+-- the current UTC month becomes that month's free week, so those accounts keep it.
+INSERT INTO core.code_free_weeks (user_id, device_hash, month, started_at, ends_at)
+SELECT p.user_id, t.device_hash,
+       date_trunc('month', p.trial_started_at AT TIME ZONE 'UTC')::date,
+       p.trial_started_at, p.trial_ends_at
+FROM core.code_plans p
+JOIN core.code_trial_devices t ON t.user_id = p.user_id
+WHERE p.trial_started_at IS NOT NULL
+  AND p.trial_ends_at IS NOT NULL
+  AND date_trunc('month', p.trial_started_at AT TIME ZONE 'UTC')
+      = date_trunc('month', now() AT TIME ZONE 'UTC')
+ON CONFLICT DO NOTHING;
