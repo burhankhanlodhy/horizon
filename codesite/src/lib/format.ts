@@ -35,22 +35,14 @@ export function fmtDate(iso: string | null | undefined, utc = false): string {
   });
 }
 
-/** 500 in usd -> "$5.00". Amounts are in minor units (cents). */
-export function fmtMoney(minor: number, currency: string): string {
+/** Amount in dollars -> "$5.00" (5 is five dollars, never cents). */
+export function fmtMoney(dollars: number, currency: string): string {
   const code = (currency || "usd").toUpperCase();
   try {
-    return new Intl.NumberFormat("en", { style: "currency", currency: code }).format(minor / 100);
+    return new Intl.NumberFormat("en", { style: "currency", currency: code }).format(dollars);
   } catch {
-    return `${(minor / 100).toFixed(2)} ${code}`;
+    return `${dollars.toFixed(2)} ${code}`;
   }
-}
-
-/** Unix seconds (Stripe style) or an ISO string -> ISO string, or null. */
-export function toIso(value: number | string | null | undefined): string | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? new Date(value * 1000).toISOString() : null;
-  }
-  return typeof value === "string" && value ? value : null;
 }
 
 /** Whole days from now until the given time, never negative. */

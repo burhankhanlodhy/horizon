@@ -32,7 +32,6 @@ import {
   fmtPct,
   fmtRelative,
   platformLabel,
-  toIso,
   toolLabel,
 } from "../lib/format";
 import { useNavigateToLogin } from "../lib/useNavigateToLogin";
@@ -340,7 +339,7 @@ function BillingCard({
   const periodEnd = fmtDate(plan.current_period_end);
   const subscribed = plan.state === "active";
   const pending = subscribed && plan.cancel_at_period_end;
-  const freeTier = plan.state === "free" || plan.state === "canceled";
+  const freeTier = plan.state === "free";
 
   let title: string;
   let body: string;
@@ -355,9 +354,6 @@ function BillingCard({
   } else if (plan.state === "past_due") {
     title = "Payment failed";
     body = "Your last payment did not go through. Update your card to keep compression on.";
-  } else if (plan.state === "canceled") {
-    title = "Subscription ended";
-    body = `Compression is off unless your free week is active. Upgrade to $${price}/month to turn it back on.`;
   } else {
     title = "Free plan";
     body = `Free: one week every month. Pro: $${price}/month for unlimited use.`;
@@ -500,7 +496,7 @@ function InvoicesCard({ invoices, error }: { invoices: Invoice[] | null; error: 
 }
 
 function InvoiceRow({ invoice: inv }: { invoice: Invoice }) {
-  const date = fmtDate(toIso(inv.created));
+  const date = fmtDate(inv.created);
   const status = inv.status ? (INVOICE_STATUS[inv.status] ?? inv.status) : "Unknown";
   return (
     <li className="flex flex-col gap-2 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">

@@ -5,10 +5,10 @@ import { apiFetch } from "./api";
 export type Tool = "claude" | "codex";
 
 /**
- * Plan state from GET /code/account. "free" means there is no live paid
- * subscription, whatever the free week is doing.
+ * Plan state from GET /code/account. "free" whenever there is no live paid
+ * subscription, whatever the free week is doing. The API never sends "canceled".
  */
-export type PlanState = "free" | "active" | "past_due" | "canceled";
+export type PlanState = "free" | "active" | "past_due";
 
 export type FreeWeekStatus = "available" | "active" | "used";
 
@@ -64,9 +64,9 @@ export interface Account {
 export interface Invoice {
   id: string;
   number: string | null;
-  /** Unix seconds (as Stripe sends them) or an ISO string. */
-  created: number | string;
-  /** Amount in the currency's minor units (cents for usd). */
+  /** ISO timestamp. */
+  created: string;
+  /** Amount in dollars (Stripe total / 100), so 5 means $5.00. */
   total: number;
   currency: string;
   status: string | null;
@@ -111,14 +111,13 @@ export async function getAccount(): Promise<Account> {
 }
 
 /**
- * Accepts any plan object the API has sent. Older responses used the one-time
- * trial states ("trial", "none") and had no free_week. Those become "free"
- * with free_week null, so the page renders instead of crashing.
+ * Accepts the plan object as the API sends it. Anything that is not a live paid
+ * state becomes "free", and a missing free_week becomes null (unknown), so the
+ * page renders instead of crashing.
  */
 export function normalisePlan(raw: unknown): Plan {
   const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const state: PlanState =
-    p.state === "active" || p.state === "past_due" || p.state === "canceled" ? p.state : "free";
+  const state: PlanState = p.state === "active" || p.state === "past_due" ? p.state : "free";
   return {
     state,
     free_week: normaliseFreeWeek(p.free_week),
@@ -164,14 +163,10 @@ export function resumeSubscription(): Promise<unknown> {
   return apiFetch<unknown>("/code/subscription/resume", { method: "POST" });
 }
 
-/**
- * Invoice history for the code subscription, newest first. The API may send a
- * bare array or an object with an `invoices` array; both are accepted.
- */
+/** Invoice history for the code subscription: a bare list, up to 24 entries. */
 export async function getInvoices(): Promise<Invoice[]> {
-  const raw = await apiFetch<Invoice[] | { invoices?: Invoice[] }>("/code/invoices");
-  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.invoices) ? raw.invoices : [];
-  return list;
+  const raw = await apiFetch<Invoice[]>("/code/invoices");
+  return Array.isArray(raw) ? raw : [];
 }
 
 /** Starts Stripe Checkout for the $5/month plan, then leaves the site. */
