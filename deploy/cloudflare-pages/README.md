@@ -6,6 +6,7 @@ Replaces the Pi 4 (`deploy/pi4-webtier`), which hangs every week or so.
 |---|---|
 | `contextshrink.com` | Pages project `contextshrink-landing` (`landingpage/`) |
 | `app.contextshrink.com` | Pages project `contextshrink-dashboard` (`dashboard/`) |
+| `code.contextshrink.com` | Pages project `contextshrink-code` (`codesite/`, deploy with `-Site code`) |
 | `app.contextshrink.com/releases/*` | Pages Function `dashboard/functions/releases/[[path]].js` reading the **private** R2 bucket `contextshrink-releases` |
 
 The API and proxy stay on the Pi 5 tunnel; nothing here talks to them except
