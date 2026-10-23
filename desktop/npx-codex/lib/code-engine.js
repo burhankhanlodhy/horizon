@@ -29,6 +29,8 @@ const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const HASH_SHAPE = /^[0-9a-f]{64}$/;
 const DOWNLOAD_IDLE_MS = 30000;
 const ENSURE_TIMEOUT_MS = 20000;
+// Antivirus scanning can slow extraction of the ~9,400-entry engine zip a lot.
+const UNZIP_TIMEOUT_MS = 300000;
 const START_WAIT_MS = 5000;
 const HEALTH_TIMEOUT_MS = 300;
 const UNPUBLISHED = 'Engine not published yet. Nothing was changed.';
@@ -85,13 +87,13 @@ function powerShellPath() {
 }
 
 // Paths go in environment variables, never in the script text.
-function runPowerShell(script, vars) {
+function runPowerShell(script, vars, timeoutMs = ENSURE_TIMEOUT_MS) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
     execFile(
       powerShellPath(),
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { env: { ...process.env, ...vars }, windowsHide: true, timeout: ENSURE_TIMEOUT_MS, maxBuffer: 1 << 20 },
+      { env: { ...process.env, ...vars }, windowsHide: true, timeout: timeoutMs, maxBuffer: 1 << 20 },
       (error, stdout) => {
         if (error) reject(error);
         else resolve(String(stdout || '').trim());
@@ -100,8 +102,14 @@ function runPowerShell(script, vars) {
   });
 }
 
+// True when execFile killed the process because its timeout ran out.
+function isTimeout(error) {
+  return Boolean(error) && (error.killed === true || error.code === 'ETIMEDOUT');
+}
+
 // The real Windows adapter. Every method rejects on failure.
-function realAdapter() {
+// `powerShell` replaces runPowerShell in tests only.
+function realAdapter({ powerShell = runPowerShell } = {}) {
   return {
     openBrowser(url) {
       return new Promise((resolve, reject) => {
@@ -122,14 +130,16 @@ function realAdapter() {
         throw new CsError('The ContextShrink engine signature could not be checked. Nothing was installed.');
       }
     },
+    // .NET, not Expand-Archive: Expand-Archive takes ~93 s for the engine zip on Windows PowerShell 5.1.
     async expandZip(zip, dest) {
-      await runPowerShell(
-        "$ErrorActionPreference = 'Stop'\nExpand-Archive -LiteralPath $env:CONTEXTSHRINK_ZIP -DestinationPath $env:CONTEXTSHRINK_DEST -Force",
-        { CONTEXTSHRINK_ZIP: zip, CONTEXTSHRINK_DEST: dest }
+      await powerShell(
+        "$ErrorActionPreference = 'Stop'\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\n[System.IO.Compression.ZipFile]::ExtractToDirectory($env:CONTEXTSHRINK_ZIP, $env:CONTEXTSHRINK_DEST)",
+        { CONTEXTSHRINK_ZIP: zip, CONTEXTSHRINK_DEST: dest },
+        UNZIP_TIMEOUT_MS
       );
     },
     async writeShortcut(file, { target, args, workdir }) {
-      await runPowerShell(
+      await powerShell(
         [
           "$ErrorActionPreference = 'Stop'",
           '$shell = New-Object -ComObject WScript.Shell',
@@ -265,6 +275,11 @@ async function installEngine(ctx, env, manifest, adapter) {
     return exe;
   } catch (err) {
     if (err instanceof CsError) throw err;
+    if (isTimeout(err)) {
+      throw new CsError(
+        'The ContextShrink engine took too long to unpack (antivirus scanning can slow this). Nothing was installed. Run this command again.'
+      );
+    }
     throw new CsError('The ContextShrink engine could not be unpacked. Nothing was installed.');
   } finally {
     fs.rmSync(zip, { force: true });
@@ -363,6 +378,7 @@ function removeEngine(env) {
 
 module.exports = {
   ENGINE_EXE,
+  UNZIP_TIMEOUT_MS,
   loadManifest,
   engineRootOf,
   startupPathOf,

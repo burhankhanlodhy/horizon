@@ -154,3 +154,77 @@ test('the Startup shortcut is written for `code-engine run`, and removed on unin
     engine.removeEngine(sb.env);
     assert.ok(!fs.existsSync(sb.engineRoot));
   }));
+
+// The real adapter's PowerShell calls, captured instead of run.
+function recordingPowerShell() {
+  const calls = [];
+  const powerShell = async (script, vars, timeoutMs) => {
+    calls.push({ script, vars, timeoutMs });
+    return '';
+  };
+  return { calls, powerShell };
+}
+
+test('the unzip uses .NET ZipFile with the long timeout, and other PowerShell calls keep the short one', async () => {
+  const { calls, powerShell } = recordingPowerShell();
+  const real = engine.realAdapter({ powerShell });
+  await real.expandZip('C:\\tmp\\engine.zip', 'C:\\tmp\\staging');
+  assert.equal(calls.length, 1);
+  const [unzip] = calls;
+  assert.match(unzip.script, /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory\(\$env:CONTEXTSHRINK_ZIP, \$env:CONTEXTSHRINK_DEST\)/);
+  assert.match(unzip.script, /Add-Type -AssemblyName System\.IO\.Compression\.FileSystem/);
+  assert.doesNotMatch(unzip.script, /Expand-Archive/);
+  assert.equal(unzip.timeoutMs, engine.UNZIP_TIMEOUT_MS);
+  assert.ok(engine.UNZIP_TIMEOUT_MS >= 300000, 'the unzip timeout is too short for antivirus scanning');
+  assert.deepEqual(unzip.vars, { CONTEXTSHRINK_ZIP: 'C:\\tmp\\engine.zip', CONTEXTSHRINK_DEST: 'C:\\tmp\\staging' });
+
+  await real.writeShortcut('C:\\tmp\\x.lnk', { target: 'C:\\tmp\\horizon.exe', args: 'code-engine run', workdir: 'C:\\tmp' });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].timeoutMs, undefined, 'the shortcut call should keep the default (short) timeout');
+});
+
+test('an unzip killed by its timeout says it took too long, and nothing is installed', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const slow = {
+      ...adapter,
+      expandZip: async () => {
+        throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null });
+      },
+    };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, slow), (error) => {
+      assert.ok(error instanceof CsError);
+      assert.equal(
+        error.message,
+        'The ContextShrink engine took too long to unpack (antivirus scanning can slow this). Nothing was installed. Run this command again.'
+      );
+      assert.ok(!error.message.includes('Command failed') && !error.message.includes(sb.engineRoot));
+      return true;
+    });
+    assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)));
+    assert.deepEqual(fs.readdirSync(sb.engineRoot), [], 'a staging folder was left behind');
+  }));
+
+test('a PowerShell timeout from the real adapter gets the same message', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const powerShell = async () => {
+      throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null });
+    };
+    const real = { ...adapter, expandZip: engine.realAdapter({ powerShell }).expandZip };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, real), /took too long to unpack/);
+    assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)));
+  }));
+
+test('any other unzip failure keeps the plain unpack message', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const broken = {
+      ...adapter,
+      expandZip: async () => {
+        throw new Error('Exception calling ExtractToDirectory');
+      },
+    };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, broken), (error) => {
+      assert.ok(error instanceof CsError);
+      assert.equal(error.message, 'The ContextShrink engine could not be unpacked. Nothing was installed.');
+      return true;
+    });
+  }));
