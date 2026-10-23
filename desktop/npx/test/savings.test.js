@@ -79,24 +79,51 @@ test('existing status line and plugin entries survive connect and uninstall', ()
   assert.deepEqual(readJson(sb.settings), original);
 }));
 
-test('a Code tab owned by the desktop app keeps its own bar and receives no npx plugin', () => fixture(async ({ sb }) => {
+test('a Code tab owned by the desktop app still gets the npx line, and uninstall restores exactly', () => fixture(async ({ sb }) => {
   fs.mkdirSync(path.join(sb.dataDir, 'claude-code'), { recursive: true });
   fs.writeFileSync(path.join(sb.dataDir, 'claude-code/codetab.json'), JSON.stringify({ v: 1, enabled: true }));
-  await connect(sb);
+  const original = { model: 'opus' };
+  writeSettingsFile(sb, JSON.stringify(original));
+  const res = await connect(sb);
+  assert.match(res.stdout, /Savings line added above the prompt in Claude Code and the Desktop Code tab \(new sessions\)\./);
   const settings = readJson(sb.settings);
   assert.ok(settings.statusLine);
-  assert.ok(!settings.extraKnownMarketplaces);
-  assert.ok(!settings.enabledPlugins);
+  assert.equal(settings.enabledPlugins[PLUGIN], true);
+  assert.equal(settings.extraKnownMarketplaces[MARKET].source.source, 'directory');
+  await runCli(sb, ['uninstall']);
+  assert.deepEqual(readJson(sb.settings), original);
 }));
 
-test('a conflicting marketplace is never replaced or implicitly enabled', () => fixture(async ({ sb }) => {
+test('a conflicting marketplace is never replaced or implicitly enabled, and the reason is printed', () => fixture(async ({ sb }) => {
   const original = { extraKnownMarketplaces: { [MARKET]: { source: { source: 'directory', path: 'user-plugin' } } } };
   writeSettingsFile(sb, JSON.stringify(original));
-  await connect(sb);
+  const res = await connect(sb);
+  assert.match(res.stdout, new RegExp(`Savings line not added: a "${MARKET}" marketplace in Claude Code settings already points elsewhere\\.`));
   assert.deepEqual(readJson(sb.settings).extraKnownMarketplaces, original.extraKnownMarketplaces);
   assert.ok(!readJson(sb.settings).enabledPlugins);
   await runCli(sb, ['uninstall']);
   assert.deepEqual(readJson(sb.settings), original);
+}));
+
+test('when the desktop app already shows its line, the npx line is skipped with one reason and uninstall restores exactly', () => fixture(async ({ sb }) => {
+  const original = { enabledPlugins: { 'contextshrink@contextshrink': true } };
+  writeSettingsFile(sb, JSON.stringify(original));
+  const res = await connect(sb);
+  assert.match(res.stdout, /Savings line not added: the ContextShrink desktop app already shows its savings line above the prompt\./);
+  assert.ok(!res.stdout.includes('Savings line added'));
+  const settings = readJson(sb.settings);
+  assert.ok(!settings.extraKnownMarketplaces);
+  assert.deepEqual(settings.enabledPlugins, original.enabledPlugins);
+  await runCli(sb, ['uninstall']);
+  assert.deepEqual(readJson(sb.settings), original);
+}));
+
+test('a fresh connect prints that the line was added, and uninstall removes everything it added', () => bareFixture(async ({ sb }) => {
+  const res = await connect(sb);
+  assert.match(res.stdout, /Savings line added above the prompt in Claude Code and the Desktop Code tab \(new sessions\)\./);
+  const off = await runCli(sb, ['uninstall']);
+  assert.equal(off.code, 0, off.output);
+  assert.ok(!fs.existsSync(sb.settings));
 }));
 
 test('--no-code-tab installs only the terminal bar, and status describes it', () => fixture(async ({ sb }) => {

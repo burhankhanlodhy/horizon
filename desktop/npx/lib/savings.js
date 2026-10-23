@@ -3,7 +3,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const files = require('./files');
-const codetab = require('./codetab');
 const NAME = 'contextshrink-npx';
 const PLUGIN = `${NAME}@${NAME}`;
 const VERSION = require('../package.json').version;
@@ -15,17 +14,29 @@ function valueAt(payload, group, name) {
   return name === null ? payload[group] : payload[group]?.[name];
 }
 
-// True only when the desktop app manages the Code tab (a codetab.json owned by someone
-// else, or one that cannot be read). The npx plugin then stays out of its way. An absent
-// codetab.json is not a desktop app: Claude Code reads settings.json whether or not the
-// Code tab has been patched yet, so the line is registered as it was in 0.2.x.
-function desktopOwnsCodeTab(env) {
-  const file = codetab.codeTabPaths(env).config;
-  if (!fs.existsSync(file)) return false;
-  try {
-    const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return !files.isPlainObject(config) || config.owner !== 'npx';
-  } catch { return true; }
+// The ContextShrink desktop app's own savings line (desktop/claude-code-plugin), enabled
+// through its plugin marketplace. When it is on, a second line above the prompt would
+// duplicate it, so the npx line is not added.
+const DESKTOP_PLUGIN = 'contextshrink@contextshrink';
+function desktopLineOn(payload) {
+  return files.isPlainObject(payload.enabledPlugins) && payload.enabledPlugins[DESKTOP_PLUGIN] === true;
+}
+
+// Why the npx plugin cannot be registered, or null when it can. The plugin is display-only
+// and loads in every Claude Code instance (terminal and the Desktop Code tab), so it does
+// not depend on which program routes the Code tab. Only a conflict stops it.
+function pluginConflict(payload, ours) {
+  const marketplace = payload.extraKnownMarketplaces;
+  const enabled = payload.enabledPlugins;
+  if (marketplace !== undefined && !files.isPlainObject(marketplace)) return 'the marketplace settings are not in the expected format';
+  if (enabled !== undefined && !files.isPlainObject(enabled)) return 'the plugin settings are not in the expected format';
+  if (marketplace?.[NAME] !== undefined && !same(marketplace[NAME], ours.extraKnownMarketplaces)) {
+    return `a "${NAME}" marketplace in Claude Code settings already points elsewhere`;
+  }
+  if (enabled?.[PLUGIN] !== undefined && enabled[PLUGIN] !== true) {
+    return `"${PLUGIN}" is already set in Claude Code settings`;
+  }
+  return null;
 }
 
 function installRuntime(paths) {
@@ -72,10 +83,15 @@ function ensure(ctx, paths, { codeTab = true } = {}) {
   const values = installRuntime(paths);
   const previous = Array.isArray(state.ui) ? state.ui : [];
   const records = [];
-  const marketplace = settings.payload.extraKnownMarketplaces;
-  const skipPlugin = !codeTab || desktopOwnsCodeTab(ctx.env) ||
-    (marketplace !== undefined && !files.isPlainObject(marketplace)) ||
-    (marketplace?.[NAME] !== undefined && !same(marketplace[NAME], values.extraKnownMarketplaces));
+  // --no-code-tab leaves the line out on purpose. Otherwise a reason is given only when the
+  // line cannot be added: the desktop app's own line is on, or a conflicting entry exists.
+  let skipReason = null;
+  if (codeTab && desktopLineOn(settings.payload)) {
+    skipReason = 'the ContextShrink desktop app already shows its savings line above the prompt';
+  } else if (codeTab) {
+    skipReason = pluginConflict(settings.payload, values);
+  }
+  const skipPlugin = !codeTab || skipReason !== null;
   for (const [group, name] of fields) {
     const old = previous.find(entry => entry.group === group && entry.name === name);
     const current = valueAt(settings.payload, group, name);
@@ -95,6 +111,14 @@ function ensure(ctx, paths, { codeTab = true } = {}) {
     files.writePrivateJson(paths.state, state);
     try { files.writeSettings(paths.settings, settings); }
     catch (err) { files.writePrivateJson(paths.state, previousState); throw err; }
+  }
+  const addedNow = records.filter(entry => !previous.some(p => p.group === entry.group && p.name === entry.name));
+  if (addedNow.some(entry => entry.name !== null)) {
+    ctx.out('Savings line added above the prompt in Claude Code and the Desktop Code tab (new sessions).');
+  } else if (skipReason && !records.some(entry => entry.name !== null)) {
+    ctx.out(`Savings line not added: ${skipReason}.`);
+  }
+  if (!same(state, previousState) && !addedNow.some(entry => entry.name !== null)) {
     ctx.out(records.length
       ? 'Savings bar configured. It shows your usage saved today; open a new session.'
       : 'Savings bar: your existing display settings were kept.');
