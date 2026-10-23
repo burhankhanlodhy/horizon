@@ -29,7 +29,15 @@ const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const HASH_SHAPE = /^[0-9a-f]{64}$/;
 const DOWNLOAD_IDLE_MS = 30000;
 const ENSURE_TIMEOUT_MS = 20000;
-const START_WAIT_MS = 5000;
+// Antivirus scanning can slow extraction of the ~9,400-entry engine zip a lot.
+const UNZIP_TIMEOUT_MS = 300000;
+// How long a start waits for /__cs/health after `ensure`. The first start of a fresh
+// install loads the engine's Python dependencies while antivirus scans the new files,
+// which can take minutes; later starts are normally a few seconds.
+const START_WAIT_FRESH_MS = 180000;
+const START_WAIT_MS = 60000;
+const START_POLL_MS = 200;
+const STARTING_LINE = 'Starting the ContextShrink engine (the first start can take a minute)...';
 const HEALTH_TIMEOUT_MS = 300;
 const UNPUBLISHED = 'Engine not published yet. Nothing was changed.';
 
@@ -85,13 +93,13 @@ function powerShellPath() {
 }
 
 // Paths go in environment variables, never in the script text.
-function runPowerShell(script, vars) {
+function runPowerShell(script, vars, timeoutMs = ENSURE_TIMEOUT_MS) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
     execFile(
       powerShellPath(),
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { env: { ...process.env, ...vars }, windowsHide: true, timeout: ENSURE_TIMEOUT_MS, maxBuffer: 1 << 20 },
+      { env: { ...process.env, ...vars }, windowsHide: true, timeout: timeoutMs, maxBuffer: 1 << 20 },
       (error, stdout) => {
         if (error) reject(error);
         else resolve(String(stdout || '').trim());
@@ -100,8 +108,14 @@ function runPowerShell(script, vars) {
   });
 }
 
+// True when execFile killed the process because its timeout ran out.
+function isTimeout(error) {
+  return Boolean(error) && (error.killed === true || error.code === 'ETIMEDOUT');
+}
+
 // The real Windows adapter. Every method rejects on failure.
-function realAdapter() {
+// `powerShell` replaces runPowerShell in tests only.
+function realAdapter({ powerShell = runPowerShell } = {}) {
   return {
     openBrowser(url) {
       return new Promise((resolve, reject) => {
@@ -122,14 +136,16 @@ function realAdapter() {
         throw new CsError('The ContextShrink engine signature could not be checked. Nothing was installed.');
       }
     },
+    // .NET, not Expand-Archive: Expand-Archive takes ~93 s for the engine zip on Windows PowerShell 5.1.
     async expandZip(zip, dest) {
-      await runPowerShell(
-        "$ErrorActionPreference = 'Stop'\nExpand-Archive -LiteralPath $env:CONTEXTSHRINK_ZIP -DestinationPath $env:CONTEXTSHRINK_DEST -Force",
-        { CONTEXTSHRINK_ZIP: zip, CONTEXTSHRINK_DEST: dest }
+      await powerShell(
+        "$ErrorActionPreference = 'Stop'\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\n[System.IO.Compression.ZipFile]::ExtractToDirectory($env:CONTEXTSHRINK_ZIP, $env:CONTEXTSHRINK_DEST)",
+        { CONTEXTSHRINK_ZIP: zip, CONTEXTSHRINK_DEST: dest },
+        UNZIP_TIMEOUT_MS
       );
     },
     async writeShortcut(file, { target, args, workdir }) {
-      await runPowerShell(
+      await powerShell(
         [
           "$ErrorActionPreference = 'Stop'",
           '$shell = New-Object -ComObject WScript.Shell',
@@ -265,6 +281,11 @@ async function installEngine(ctx, env, manifest, adapter) {
     return exe;
   } catch (err) {
     if (err instanceof CsError) throw err;
+    if (isTimeout(err)) {
+      throw new CsError(
+        'The ContextShrink engine took too long to unpack (antivirus scanning can slow this). Nothing was installed. Run this command again.'
+      );
+    }
     throw new CsError('The ContextShrink engine could not be unpacked. Nothing was installed.');
   } finally {
     fs.rmSync(zip, { force: true });
@@ -272,7 +293,21 @@ async function installEngine(ctx, env, manifest, adapter) {
   }
 }
 
-/** The engine's /__cs/health answer, or null when nothing answers. */
+// The JSON object in a health body, or {} when the body is not one.
+function healthBodyOf(chunks) {
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return body !== null && typeof body === 'object' ? body : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The engine's /__cs/health answer for any HTTP 200: its body object, or {} when the
+ * body is not one. null when nothing answers with 200. `ok` is not read: ok:false
+ * means no plan (trial ended), and the engine still passes requests through.
+ */
 function engineHealth(env, timeoutMs = HEALTH_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let url;
@@ -286,38 +321,49 @@ function engineHealth(env, timeoutMs = HEALTH_TIMEOUT_MS) {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('error', () => resolve(null));
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          resolve(null);
-          return;
-        }
-        try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-        } catch {
-          resolve(null);
-        }
-      });
+      res.on('end', () => resolve(res.statusCode === 200 ? healthBodyOf(chunks) : null));
     });
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
   });
 }
 
+// The wait after `ensure`. CONTEXTSHRINK_NPX_TEST_START_WAIT_MS shortens it in tests
+// that run the CLI as a child process (it is read only in test mode).
+function startWaitOf(env, freshInstall) {
+  const forced = Number(testOverride(env, 'CONTEXTSHRINK_NPX_TEST_START_WAIT_MS'));
+  if (forced > 0) return forced;
+  return freshInstall ? START_WAIT_FRESH_MS : START_WAIT_MS;
+}
+
+const systemClock = { now: () => Date.now(), sleep };
+
+/** True when the pinned engine is already installed, so installEngine reuses it. */
+function engineInstalled(env, manifest) {
+  return fs.existsSync(path.join(engineRootOf(env), manifest.version, ENGINE_EXE));
+}
+
 /**
  * Runs `horizon.exe code-engine ensure` (it starts the engine detached and returns
- * quickly), then waits for the health check. Throws when the engine does not answer.
+ * quickly), then waits until /__cs/health answers with HTTP 200. Throws when it does
+ * not answer within the wait (START_WAIT_FRESH_MS after a fresh install, else
+ * START_WAIT_MS). An engine that already answers prints nothing.
+ * options: out (prints one line), freshInstall (the engine was just installed),
+ * clock ({ now, sleep }; tests inject a fake one).
  */
-async function startEngine(env, exe, adapter) {
+async function startEngine(env, exe, adapter, { out = () => {}, freshInstall = false, clock = systemClock } = {}) {
   try {
     await adapter.runEngine(exe, ['code-engine', 'ensure']);
   } catch {
     // The health check below decides; a failed ensure is reported the same way.
   }
-  const deadline = Date.now() + START_WAIT_MS;
+  if (await engineHealth(env)) return;
+  out(STARTING_LINE);
+  const deadline = clock.now() + startWaitOf(env, freshInstall);
   for (;;) {
+    await clock.sleep(START_POLL_MS);
     if (await engineHealth(env)) return;
-    if (Date.now() >= deadline) break;
-    await sleep(200);
+    if (clock.now() >= deadline) break;
   }
   throw new CsError('The ContextShrink engine did not start. Nothing was changed. Run this command again.');
 }
@@ -363,12 +409,14 @@ function removeEngine(env) {
 
 module.exports = {
   ENGINE_EXE,
+  UNZIP_TIMEOUT_MS,
   loadManifest,
   engineRootOf,
   startupPathOf,
   resolveAdapter,
   realAdapter,
   installEngine,
+  engineInstalled,
   engineHealth,
   startEngine,
   stopEngine,

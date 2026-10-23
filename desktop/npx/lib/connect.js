@@ -300,9 +300,10 @@ async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
     commandName: 'contextshrink-claude',
     deps: { adapter, sleep: deps.sleep },
   });
+  const freshInstall = !engine.engineInstalled(env, manifest);
   const exe = await engine.installEngine(ctx, env, manifest, adapter);
   device.applyPlanNote(ctx, env, note, 'Claude');
-  await engine.startEngine(env, exe, adapter);
+  await engine.startEngine(env, exe, adapter, { out: (line) => ctx.out(line), freshInstall });
   await engine.installStartup(env, exe, adapter);
 
   const entry = { hooks: [{ type: 'command', command: `"${exe}" code-engine ensure` }] };

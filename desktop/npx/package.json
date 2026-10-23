@@ -1,6 +1,6 @@
 {
   "name": "contextshrink-claude",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "ContextShrink Code for Claude Code: trims what Claude Code resends on every turn, compressed on your own computer.",
   "keywords": [
     "claude",

@@ -297,10 +297,26 @@ test('a trial that has ended still connects the engine, and says Claude works wi
     assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
   }));
 
+test('an engine with no plan (health ok:false) still connects, prints the plan-required message, and status says it runs', () =>
+  withSandbox(async ({ sb, api, engine }) => {
+    api.state.plan = 'ended';
+    engine.state.ok = false;
+    const res = await runCli(sb, ['connect']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.ok(res.stdout.includes('Your trial has ended. Subscribe for $5/month'), res.stdout);
+    assert.strictEqual(readSettings(sb).env.ANTHROPIC_BASE_URL, engine.url);
+    const status = await runCli(sb, ['status']);
+    assert.strictEqual(status.code, 0, status.output);
+    assert.match(status.stdout, /Connected through the ContextShrink engine at 127\.0\.0\.1:\d+\./);
+    assert.match(status.stdout, /Engine: running\./);
+  }));
+
 test('the engine that does not start leaves Claude Code settings untouched', () =>
   withSandbox(async ({ sb, engine }) => {
     engine.state.up = false;
-    const res = await runCli(sb, ['connect'], { env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail' } });
+    const res = await runCli(sb, ['connect'], {
+      env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail', CONTEXTSHRINK_NPX_TEST_START_WAIT_MS: '1500' },
+    });
     assert.strictEqual(res.code, 1, res.output);
     assert.match(res.stderr, /The ContextShrink engine did not start\. Nothing was changed/);
     assert.ok(!fs.existsSync(sb.settings), 'settings were written although the engine did not start');

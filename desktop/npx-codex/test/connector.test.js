@@ -196,10 +196,22 @@ test('on a system other than Windows connect refuses with the spec message, befo
   assert.equal(f.api.calls.length, 0);
 }));
 
+test('an engine with no plan (health ok:false) still connects Codex, prints the plan-required message, and status says it runs', () => fixture(async f => {
+  f.api.state.plan = 'ended';
+  f.engine.state.ok = false;
+  const r = await code.runBin(BIN, f.sb, ['connect']);
+  assert.equal(r.code, 0, r.output);
+  assert.ok(r.stdout.includes('Your trial has ended. Subscribe for $5/month'), r.stdout);
+  assert.ok(fs.existsSync(f.state), 'connect did not record its state');
+  const status = await f.run(['status']);
+  assert.equal(status.code, 0, status.output);
+  assert.match(status.stdout, /Engine: running\./);
+}));
+
 test('an engine that does not start leaves the Codex config untouched', () => fixture(async f => {
   f.engine.state.up = false;
   const original = 'model = "keep"\n'; fs.writeFileSync(f.config, original);
-  const r = await code.runBin(BIN, f.sb, [], { env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail' } });
+  const r = await code.runBin(BIN, f.sb, [], { env: { CONTEXTSHRINK_NPX_STUB_ENGINE: 'fail', CONTEXTSHRINK_NPX_TEST_START_WAIT_MS: '1500' } });
   assert.equal(r.code, 1, r.output);
   assert.match(r.stderr, /The ContextShrink engine did not start\. Nothing was changed/);
   assert.equal(fs.readFileSync(f.config, 'utf8'), original);

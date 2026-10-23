@@ -136,11 +136,110 @@ test('the engine starts when its health check answers, and stops for each instal
     assert.ok(server.hits > 0);
   }));
 
-test('an engine that never answers its health check is reported after the wait', () =>
+// The clock startEngine waits on: sleep() moves the time on at once, and onSleep runs
+// after each sleep, so a test can make the fake engine answer at a chosen time.
+function fakeClock(onSleep = () => {}) {
+  const clock = {
+    t: 0,
+    sleeps: 0,
+    now: () => clock.t,
+    sleep: async (ms) => {
+      clock.t += ms;
+      clock.sleeps += 1;
+      onSleep(clock);
+    },
+  };
+  return clock;
+}
+
+// Makes the fake engine answer its health check once the fake clock reaches `ms`.
+function upAt(server, ms) {
+  return (clock) => {
+    if (clock.t >= ms) server.state.up = true;
+  };
+}
+
+const STARTING = 'Starting the ContextShrink engine (the first start can take a minute)...';
+const NOT_STARTED = /The ContextShrink engine did not start\. Nothing was changed/;
+
+test('an engine that never answers its health check is reported after the 60 s wait', () =>
   withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
     const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
     server.state.up = false;
-    await assert.rejects(engine.startEngine(sb.env, exe, adapter), /The ContextShrink engine did not start\. Nothing was changed/);
+    const clock = fakeClock();
+    const lines = [];
+    await assert.rejects(
+      engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), clock }),
+      NOT_STARTED
+    );
+    assert.deepEqual(lines, [STARTING]);
+    assert.ok(clock.t >= 60000 && clock.t < 60200, `waited ${clock.t} ms`);
+  }));
+
+test('a slow first start after a fresh install succeeds within the 180 s wait, with one notice line', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock(upAt(server, 170000));
+    const lines = [];
+    await engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), freshInstall: true, clock });
+    assert.deepEqual(lines, [STARTING]);
+    assert.ok(clock.t >= 170000 && clock.t < 170200, `answered at ${clock.t} ms`);
+  }));
+
+test('a fresh install that is still not answering after 180 s is reported', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock();
+    await assert.rejects(engine.startEngine(sb.env, exe, adapter, { freshInstall: true, clock }), NOT_STARTED);
+    assert.ok(clock.t >= 180000 && clock.t < 180200, `waited ${clock.t} ms`);
+  }));
+
+test('a start after an earlier install is not given the fresh-install wait', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock(upAt(server, 90000));
+    await assert.rejects(engine.startEngine(sb.env, exe, adapter, { freshInstall: false, clock }), NOT_STARTED);
+    assert.ok(clock.t >= 60000 && clock.t < 60200, `waited ${clock.t} ms`);
+  }));
+
+test('an engine that already answers starts at once, with no notice and no wait', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    const clock = fakeClock();
+    const lines = [];
+    await engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), freshInstall: true, clock });
+    assert.deepEqual(lines, []);
+    assert.equal(clock.sleeps, 0);
+  }));
+
+test('ok:false (no plan) counts as started: the start succeeds and nothing is waited for', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.ok = false;
+    const clock = fakeClock();
+    await engine.startEngine(sb.env, exe, adapter, { clock });
+    assert.equal(clock.sleeps, 0);
+    assert.equal((await engine.engineHealth(sb.env)).ok, false);
+  }));
+
+test('any HTTP 200 counts as started, even when its body is not JSON', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.body = 'engine ready';
+    const clock = fakeClock();
+    await engine.startEngine(sb.env, exe, adapter, { clock });
+    assert.equal(clock.sleeps, 0);
+    assert.deepEqual(await engine.engineHealth(sb.env), {});
+  }));
+
+test('engineInstalled is false before the pinned version is installed and true after', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    assert.equal(engine.engineInstalled(sb.env, manifest), false);
+    await engine.installEngine(ctx, sb.env, manifest, adapter);
+    assert.equal(engine.engineInstalled(sb.env, manifest), true);
   }));
 
 test('the Startup shortcut is written for `code-engine run`, and removed on uninstall', () =>
@@ -153,4 +252,78 @@ test('the Startup shortcut is written for `code-engine run`, and removed on unin
     assert.ok(!fs.existsSync(sb.startup));
     engine.removeEngine(sb.env);
     assert.ok(!fs.existsSync(sb.engineRoot));
+  }));
+
+// The real adapter's PowerShell calls, captured instead of run.
+function recordingPowerShell() {
+  const calls = [];
+  const powerShell = async (script, vars, timeoutMs) => {
+    calls.push({ script, vars, timeoutMs });
+    return '';
+  };
+  return { calls, powerShell };
+}
+
+test('the unzip uses .NET ZipFile with the long timeout, and other PowerShell calls keep the short one', async () => {
+  const { calls, powerShell } = recordingPowerShell();
+  const real = engine.realAdapter({ powerShell });
+  await real.expandZip('C:\\tmp\\engine.zip', 'C:\\tmp\\staging');
+  assert.equal(calls.length, 1);
+  const [unzip] = calls;
+  assert.match(unzip.script, /\[System\.IO\.Compression\.ZipFile\]::ExtractToDirectory\(\$env:CONTEXTSHRINK_ZIP, \$env:CONTEXTSHRINK_DEST\)/);
+  assert.match(unzip.script, /Add-Type -AssemblyName System\.IO\.Compression\.FileSystem/);
+  assert.doesNotMatch(unzip.script, /Expand-Archive/);
+  assert.equal(unzip.timeoutMs, engine.UNZIP_TIMEOUT_MS);
+  assert.ok(engine.UNZIP_TIMEOUT_MS >= 300000, 'the unzip timeout is too short for antivirus scanning');
+  assert.deepEqual(unzip.vars, { CONTEXTSHRINK_ZIP: 'C:\\tmp\\engine.zip', CONTEXTSHRINK_DEST: 'C:\\tmp\\staging' });
+
+  await real.writeShortcut('C:\\tmp\\x.lnk', { target: 'C:\\tmp\\horizon.exe', args: 'code-engine run', workdir: 'C:\\tmp' });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].timeoutMs, undefined, 'the shortcut call should keep the default (short) timeout');
+});
+
+test('an unzip killed by its timeout says it took too long, and nothing is installed', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const slow = {
+      ...adapter,
+      expandZip: async () => {
+        throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null });
+      },
+    };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, slow), (error) => {
+      assert.ok(error instanceof CsError);
+      assert.equal(
+        error.message,
+        'The ContextShrink engine took too long to unpack (antivirus scanning can slow this). Nothing was installed. Run this command again.'
+      );
+      assert.ok(!error.message.includes('Command failed') && !error.message.includes(sb.engineRoot));
+      return true;
+    });
+    assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)));
+    assert.deepEqual(fs.readdirSync(sb.engineRoot), [], 'a staging folder was left behind');
+  }));
+
+test('a PowerShell timeout from the real adapter gets the same message', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const powerShell = async () => {
+      throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null });
+    };
+    const real = { ...adapter, expandZip: engine.realAdapter({ powerShell }).expandZip };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, real), /took too long to unpack/);
+    assert.ok(!fs.existsSync(path.join(sb.engineRoot, ENGINE_VERSION)));
+  }));
+
+test('any other unzip failure keeps the plain unpack message', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const broken = {
+      ...adapter,
+      expandZip: async () => {
+        throw new Error('Exception calling ExtractToDirectory');
+      },
+    };
+    await assert.rejects(engine.installEngine(ctx, sb.env, manifest, broken), (error) => {
+      assert.ok(error instanceof CsError);
+      assert.equal(error.message, 'The ContextShrink engine could not be unpacked. Nothing was installed.');
+      return true;
+    });
   }));
