@@ -4,3 +4,4 @@ asyncpg==0.30.0
 argon2-cffi==23.1.0
 email-validator==2.2.0
 stripe==16.0.0
+cryptography==44.0.3

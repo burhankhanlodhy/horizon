@@ -256,3 +256,75 @@ CREATE TABLE IF NOT EXISTS core.auth_tokens (
     used_at     TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON core.auth_tokens (user_id, purpose);
+
+-- ================================================== ContextShrink Code
+-- Flat-fee plan for Claude Code and Codex users (code_plan.py). Only hashes of
+-- device keys and CLI codes are stored; a device key is minted at poll time.
+CREATE TABLE IF NOT EXISTS core.code_plans (
+    user_id                UUID        PRIMARY KEY REFERENCES core.users (id) ON DELETE CASCADE,
+    trial_started_at       TIMESTAMPTZ,
+    trial_ends_at          TIMESTAMPTZ,
+    stripe_subscription_id TEXT        UNIQUE,
+    status                 TEXT,
+    current_period_end     TIMESTAMPTZ,
+    cancel_at_period_end   BOOLEAN     NOT NULL DEFAULT false,
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A device is one computer. key_hash is NULL until a poll mints its key; a
+-- revoked_at device no longer counts toward the device limit.
+CREATE TABLE IF NOT EXISTS core.code_devices (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
+    name         TEXT        NOT NULL,
+    platform     TEXT        NOT NULL,
+    device_hash  TEXT        NOT NULL,
+    key_hash     TEXT        UNIQUE,
+    tools        TEXT[]      NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_code_devices_user ON core.code_devices (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_code_devices_active_hash
+    ON core.code_devices (user_id, device_hash) WHERE revoked_at IS NULL;
+
+-- One free trial per device_hash across all accounts.
+CREATE TABLE IF NOT EXISTS core.code_trial_devices (
+    device_hash TEXT        PRIMARY KEY,
+    user_id     UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Pending and finished `npx` connect requests. poll_secret and user_code are
+-- stored only as SHA-256 hashes; consumed_at marks the one-time key delivery.
+CREATE TABLE IF NOT EXISTS core.code_cli_requests (
+    id               UUID        PRIMARY KEY,
+    user_code_hash   TEXT        NOT NULL UNIQUE,
+    poll_secret_hash TEXT        NOT NULL,
+    tool             TEXT        NOT NULL CHECK (tool IN ('claude', 'codex')),
+    device_hash      TEXT        NOT NULL,
+    device_name      TEXT        NOT NULL,
+    platform         TEXT        NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at       TIMESTAMPTZ NOT NULL,
+    approved_user_id UUID        REFERENCES core.users (id) ON DELETE CASCADE,
+    device_id        UUID        REFERENCES core.code_devices (id) ON DELETE SET NULL,
+    consumed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_code_cli_requests_expiry ON core.code_cli_requests (expires_at);
+
+-- Hourly usage counts per device (counts only: no prompts, models or paths).
+-- An upload replaces a bucket's values, so re-sending a bucket is harmless.
+CREATE TABLE IF NOT EXISTS metrics.code_usage_hourly (
+    user_id       UUID        NOT NULL REFERENCES core.users (id) ON DELETE CASCADE,
+    device_id     UUID        NOT NULL REFERENCES core.code_devices (id) ON DELETE CASCADE,
+    hour          TIMESTAMPTZ NOT NULL,
+    tool          TEXT        NOT NULL CHECK (tool IN ('claude', 'codex')),
+    requests      BIGINT      NOT NULL DEFAULT 0 CHECK (requests >= 0),
+    tokens_before BIGINT      NOT NULL DEFAULT 0 CHECK (tokens_before >= 0),
+    tokens_after  BIGINT      NOT NULL DEFAULT 0 CHECK (tokens_after >= 0),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (device_id, hour, tool)
+);
+CREATE INDEX IF NOT EXISTS idx_code_usage_user_hour ON metrics.code_usage_hourly (user_id, hour);

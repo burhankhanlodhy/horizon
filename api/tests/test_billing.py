@@ -70,6 +70,8 @@ class FakeConn:
             return 1 if any(r["payment_status"] == "failed" for r in self.fees.values()) else None
         if "SELECT user_id FROM core.subscriptions WHERE stripe_customer_id" in sql:
             return self.customers.get(args[0])
+        if "core.code_plans" in sql:
+            return None  # No ContextShrink Code subscriptions in these fakes.
         raise AssertionError(sql)
 
     async def fetchrow(self, sql, *args):

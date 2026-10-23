@@ -15,12 +15,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 
+import code_plan
 import db
 import stripe
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
-from savings_ledger import SAVINGS_USD
+from savings_ledger import FEE_ELIGIBLE_SAVINGS_USD
 
 logger = logging.getLogger("contextshrink.billing")
 
@@ -59,7 +60,7 @@ def savings_fee(savings: Decimal) -> Decimal:
 
 async def ledger_savings(user_id, start: datetime, end: datetime, connection=None) -> Decimal:
     value = await (connection if connection is not None else db._conn()).fetchval(
-        f"SELECT {SAVINGS_USD} "
+        f"SELECT {FEE_ELIGIBLE_SAVINGS_USD} "
         "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2 AND occurred_at < $3",
         user_id,
         start,
@@ -457,6 +458,10 @@ def _invoice_subscription_id(invoice) -> str | None:
 
 
 async def handle_event(event) -> None:
+    # ContextShrink Code subscriptions keep their own plan state and never reach
+    # the savings-fee branches below.
+    if await code_plan.handle_stripe_event(event):
+        return
     obj = event.data.object
     kind = event.type
     if kind == "checkout.session.completed":
