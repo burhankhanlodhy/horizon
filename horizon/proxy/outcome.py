@@ -472,6 +472,23 @@ def _warn_estimated_input(provider: str, model: str) -> None:
     )
 
 
+def _record_engine_usage(outcome: RequestOutcome) -> None:
+    """Hand one served request's before/after token counts to the engine, if any.
+
+    Only the two products the engine sells are counted: Anthropic Messages
+    (``claude``) and OpenAI Responses from Codex (``codex``).
+    """
+    from horizon.proxy.engine_hooks import record_usage
+
+    if outcome.provider == "anthropic":
+        tool = "claude"
+    elif outcome.provider == "openai" and outcome.client == "codex":
+        tool = "codex"
+    else:
+        return
+    record_usage(tool, outcome.original_tokens, outcome.optimized_tokens)
+
+
 def keepalive_adjusted_saving(
     compression_usd: float, *, keepalive_usd: float, ping_usd: float
 ) -> float:
@@ -576,6 +593,11 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> float:
     compact_edits = getattr(handler, "compact_edits", None)
     if compact_edits is not None:
         compact_edits.observe_outcome(outcome)
+
+    # ContextShrink Code usage: counts only, and only for requests served. The
+    # engine's sink ignores them while its license gate is closed.
+    if outcome.status_code < 400:
+        _record_engine_usage(outcome)
 
     # A rejected turn must not feed the savings/cost/log success stats; that
     # would let a request the provider never billed inflate the save-rate.

@@ -31,7 +31,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from horizon.proxy.account_analytics import compression_paused
+from horizon.proxy.account_analytics import account_compression_paused
+from horizon.proxy.engine_hooks import license_denied
 from horizon.proxy.helpers import _horizon_bypass_header
 
 
@@ -124,8 +125,11 @@ class CompressionDecision:
         """
         bypass = _horizon_bypass_header(headers)
         config_ok = bool(getattr(config, "optimize", False))
-        cap_reached = compression_paused()
+        cap_reached = account_compression_paused()
         license_ok = usage_reporter.should_compress if usage_reporter is not None else True
+        # The engine's license gate (horizon.proxy.engine_hooks) is a second
+        # commercial gate: it closes when the plan note is missing or expired.
+        license_ok = license_ok and not license_denied()
         has_msgs = bool(messages)
 
         # Precedence: bypass > config > plan cap > no_messages > license
