@@ -7,7 +7,8 @@ distribution the build machine's venv still carried (``horizon-ai 0.39.1``).
 metadata, the same file the Docker image bakes, so the build scripts write it
 from ``pyproject.toml`` before PyInstaller runs and remove it afterwards.
 
-    python build_info.py write    # prints the version written
+    python build_info.py write            # prints the version written (pyproject's)
+    python build_info.py write 0.8.0     # the engine: its own version (engine-version.txt)
     python build_info.py remove
 """
 
@@ -31,7 +32,12 @@ def pyproject_version() -> str:
 def main() -> None:
     action = sys.argv[1] if len(sys.argv) > 1 else ""
     if action == "write":
-        version = pyproject_version()
+        if len(sys.argv) > 2:
+            version = sys.argv[2]
+            if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+                raise SystemExit(f"not a release version: {version!r}")
+        else:
+            version = pyproject_version()
         TARGET.write_text(f"BUILD_VERSION = {version!r}\n", encoding="utf-8")
         print(version)
     elif action == "remove":

@@ -246,18 +246,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       # The engine for ContextShrink Code (npx contextshrink-claude / contextshrink-codex):
-      # the signed embedded client folder, zipped with horizon.exe at the zip root.
+      # the embedded Python with the proxy's dependencies (desktop/client/engine-requirements.txt),
+      # built into desktop\client\dist\engine and versioned by desktop/client/engine-version.txt
+      # (not the app version). It is not part of the Tauri bundle, so Tauri's signCommand does
+      # not sign it: the step below does, and the smoke test runs before anything is packaged.
+      - name: Build the engine (build-client-embed.ps1 -Engine)
+        shell: pwsh
+        run: .\desktop\client\build-client-embed.ps1 -Engine
+      - name: Sign the engine's files (desktop/sign.ps1)
+        if: vars.AZURE_CLIENT_ID != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # The same rule as the client (desktop/build-installer.ps1): every exe, dll and pyd
+          # that is not validly signed yet. PSF's python.exe and python3*.dll already are.
+          $toSign = @(Get-ChildItem "desktop\client\dist\engine" -Recurse -File -Include *.exe, *.dll, *.pyd |
+              Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" } |
+              ForEach-Object { $_.FullName })
+          "Engine files to sign: $($toSign.Count)"
+          if ($toSign.Count) { & .\desktop\sign.ps1 @toSign }
+      - name: Smoke-test the engine before packaging (desktop/client/smoke-test-engine.ps1)
+        shell: pwsh
+        run: .\desktop\client\smoke-test-engine.ps1 -EngineDir desktop\client\dist\engine
       # publish-installer.ps1 -Engine uploads both files to R2 under engine/<version>/.
       - name: Package the engine for publish-installer.ps1 (-Engine)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $name = "contextshrink-engine-windows-x86_64.zip"
-          $dist = (Resolve-Path "desktop\client\dist\horizon").Path
+          $dist = (Resolve-Path "desktop\client\dist\engine").Path
           if (-not (Test-Path (Join-Path $dist "horizon.exe"))) { throw "No horizon.exe in $dist" }
-          # The engine version is the desktop version (tauri.conf.json, as the installer uses).
-          $version = (Get-Content "desktop\app\src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json).version
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "No usable version in desktop\app\src-tauri\tauri.conf.json" }
+          # The engine's own version (engine-version.txt, its first line that is not a comment).
+          $version = @(Get-Content "desktop\client\engine-version.txt" |
+              Where-Object { $_.Trim() -and $_ -notmatch '^\s*#' })[0].Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "No usable version in desktop\client\engine-version.txt" }
+          if ($env:CS_SIGN_ENDPOINT) {
+              $unsigned = @(Get-ChildItem -LiteralPath $dist -Recurse -File -Include *.exe, *.dll, *.pyd |
+                  Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" })
+              if ($unsigned) { throw "$($unsigned.Count) engine file(s) are not validly signed, e.g. $($unsigned[0].Name)" }
+          }
           $out = "desktop\dist-engine"
           Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $out | Out-Null
