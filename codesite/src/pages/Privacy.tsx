@@ -40,7 +40,7 @@ export default function Privacy() {
                 Device registration: a one-way hash of the computer's machine ID (the ID itself is never sent),
                 plus the computer's name and platform.
               </li>
-              <li>Plan status: whether you are on the trial, subscribed, or not entitled.</li>
+              <li>Plan status: whether you are on the free plan (and whether this month's free week is running), subscribed, or past due.</li>
               <li>
                 Hourly counts: requests, input tokens before compression, input tokens after compression, and
                 which tool made the request.
@@ -77,7 +77,7 @@ export default function Privacy() {
 
           <div className="mt-12">
             <ButtonLink to="/signup" variant="ink">
-              Start your free trial
+              Create free account
             </ButtonLink>
           </div>
         </article>

@@ -10,13 +10,16 @@ type State =
   | { phase: "error" };
 
 /**
- * Gate for pages that need an account. Signed-out visitors go to /login with
- * ?next= set to the page they asked for, so they land back on it after sign-in.
+ * Gate for pages that need an account. Signed-out visitors go to /login (or
+ * /signup when `signedOutTo="signup"`) with ?next= set to the page they asked
+ * for, so they land back on it after sign-in or sign-up.
  */
 export function RequireAuth({
   children,
+  signedOutTo = "login",
 }: {
   children: (user: SessionUser) => ReactNode;
+  signedOutTo?: "login" | "signup";
 }) {
   const location = useLocation();
   const [state, setState] = useState<State>({ phase: "checking" });
@@ -49,7 +52,7 @@ export function RequireAuth({
 
   if (state.phase === "signed-out") {
     const next = `${location.pathname}${location.search}`;
-    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+    return <Navigate to={`/${signedOutTo}?next=${encodeURIComponent(next)}`} replace />;
   }
 
   if (state.phase === "error") {

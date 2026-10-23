@@ -35,7 +35,7 @@ export function SiteHeader({ anchors = false }: { anchors?: boolean }) {
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
           {signedIn ? (
-            <ButtonLink to="/account" variant="ghost" className="!px-3 !py-2 text-[12px]">
+            <ButtonLink to="/account" variant="ghost" className="hidden !px-3 !py-2 text-[12px] sm:inline-flex">
               Account
             </ButtonLink>
           ) : (
@@ -48,7 +48,7 @@ export function SiteHeader({ anchors = false }: { anchors?: boolean }) {
             variant="ink"
             className="!px-3 !py-2 whitespace-nowrap text-[12px]"
           >
-            {signedIn ? "Your plan" : "Start free trial"}
+            {signedIn ? "Your plan" : "Sign up free"}
           </ButtonLink>
         </div>
       </div>

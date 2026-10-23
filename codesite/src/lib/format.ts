@@ -19,11 +19,38 @@ export function fmtPct(p: number): string {
   return p < 10 ? `${p.toFixed(1)}%` : `${Math.round(p)}%`;
 }
 
-export function fmtDate(iso: string | null | undefined): string {
+/**
+ * "Oct 25, 2026". `utc` keeps the calendar day of a UTC instant, which matters
+ * for the free week: it renews at the start of a UTC month.
+ */
+export function fmtDate(iso: string | null | undefined, utc = false): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(utc ? { timeZone: "UTC" } : {}),
+  });
+}
+
+/** 500 in usd -> "$5.00". Amounts are in minor units (cents). */
+export function fmtMoney(minor: number, currency: string): string {
+  const code = (currency || "usd").toUpperCase();
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency: code }).format(minor / 100);
+  } catch {
+    return `${(minor / 100).toFixed(2)} ${code}`;
+  }
+}
+
+/** Unix seconds (Stripe style) or an ISO string -> ISO string, or null. */
+export function toIso(value: number | string | null | undefined): string | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? new Date(value * 1000).toISOString() : null;
+  }
+  return typeof value === "string" && value ? value : null;
 }
 
 /** Whole days from now until the given time, never negative. */

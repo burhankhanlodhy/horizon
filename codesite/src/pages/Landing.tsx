@@ -39,13 +39,15 @@ function Hero() {
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <ButtonLink to="/signup" className="w-full sm:w-auto">
-              Start your free trial
+              Create free account
             </ButtonLink>
             <ButtonLink href="#install" variant="ghost" className="w-full sm:w-auto">
               Install commands
             </ButtonLink>
           </div>
-          <p className="mt-5 text-sm text-ink-3">7 days free. No card needed. Windows first.</p>
+          <p className="mt-5 text-sm text-ink-3">
+            Free: one week every month (sign-up required). No card needed for the free week. Windows first.
+          </p>
           {USAGE_CLAIM && <p className="mt-2 font-mono text-sm text-ember-2">{USAGE_CLAIM}</p>}
         </div>
 
@@ -69,7 +71,7 @@ function TerminalPreview() {
           <span className="opacity-60">$ </span>npx contextshrink-claude
         </span>
         <span className="opacity-70">Opening your browser to approve this computer…</span>
-        <span className="text-sage">✓ Approved. Free trial: 7 days left.</span>
+        <span className="text-sage">✓ Approved. Free week: 7 days left.</span>
         <span className="text-sage">✓ Engine running. Claude Code is connected.</span>
         <span className="mt-1">
           <span className="opacity-60">$ </span>claude
@@ -162,7 +164,7 @@ function Privacy() {
                   Device registration: a one-way hash of the machine ID, plus the computer's name and
                   platform
                 </li>
-                <li>Your plan status: trial, subscribed, or not</li>
+                <li>Your plan status: free (with or without a free week running), or subscribed</li>
                 <li>Hourly counts of requests and input tokens, before and after compression</li>
               </ul>
             </div>
@@ -197,10 +199,10 @@ function Install() {
 
 function Pricing() {
   const points = [
-    "No card to start the trial.",
+    "Sign-up is required. No card needed for your free week.",
     "Works with Claude Code and Codex.",
-    "When the trial or subscription ends, Claude and Codex keep working without compression.",
-    `Subscribe, cancel, or swap computers from your account page. Up to ${DEVICE_LIMIT} computers.`,
+    "When your free week ends, Claude and Codex keep working without compression. Your next free week starts next month.",
+    `Pro is $5/month for unlimited use. Upgrade, cancel, or swap computers from your account page. Up to ${DEVICE_LIMIT} computers.`,
   ];
   return (
     <section id="pricing" className={SECTION}>
@@ -225,7 +227,7 @@ function Pricing() {
               ))}
             </ul>
             <ButtonLink to="/signup" className="mt-8 w-full sm:w-auto">
-              Start your free trial
+              Create free account
             </ButtonLink>
           </div>
         </div>
@@ -240,8 +242,8 @@ const FAQS: Array<{ q: string; a: string }> = [
     a: "Only counts. That is a one-way hash that identifies the computer, the computer's name and platform, your plan status, and hourly totals of requests and input tokens before and after compression. Never prompts, responses, code, file paths, model names, or your Claude or ChatGPT login.",
   },
   {
-    q: "What happens when the trial ends?",
-    a: "Claude Code and Codex keep working. ContextShrink stops compressing and passes your requests through unchanged, and nothing errors. Subscribe at any time to turn compression back on.",
+    q: "What happens after my free week?",
+    a: "Compression pauses. ContextShrink passes your requests through unchanged, so Claude Code and Codex keep working as usual and nothing errors. Your next free week starts the first time you use ContextShrink next month. To keep compression on every month, subscribe to Pro for $5/month.",
   },
   {
     q: "How do I move to a new computer?",
@@ -253,11 +255,11 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: "Does this replace my Claude or ChatGPT plan?",
-    a: "No. You keep your plan and your login. ContextShrink runs next to your tool on your computer and sends requests on to your provider. The only charge from us is the $5/month subscription, after the free trial.",
+    a: "No. You keep your plan and your login. ContextShrink runs next to your tool on your computer and sends requests on to your provider. The only charge from us is the $5/month Pro subscription, if you choose it.",
   },
   {
     q: "Can I cancel?",
-    a: "Yes, at any time from your account page. Compression stays on until the period you paid for ends.",
+    a: "Yes, at any time from your account page. Compression stays on until the period you paid for ends, and you can resume before then.",
   },
 ];
 
@@ -300,10 +302,10 @@ function ClosingCta() {
       <div className={cx(INNER, "ink-card flex flex-col items-start gap-6 rounded-lg p-7 sm:flex-row sm:items-center sm:justify-between sm:p-10")}>
         <div>
           <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">Try it on your next session.</h2>
-          <p className="mt-2 text-[15px] text-ink-2">7 days free, then $5/month. Cancel anytime.</p>
+          <p className="mt-2 text-[15px] text-ink-2">{PRICE_LINE}</p>
         </div>
         <ButtonLink to="/signup" className="w-full sm:w-auto">
-          Start your free trial
+          Create free account
         </ButtonLink>
       </div>
     </section>
