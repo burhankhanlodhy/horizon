@@ -19,11 +19,30 @@ export function fmtPct(p: number): string {
   return p < 10 ? `${p.toFixed(1)}%` : `${Math.round(p)}%`;
 }
 
-export function fmtDate(iso: string | null | undefined): string {
+/**
+ * "Oct 25, 2026". `utc` keeps the calendar day of a UTC instant, which matters
+ * for the free week: it renews at the start of a UTC month.
+ */
+export function fmtDate(iso: string | null | undefined, utc = false): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(utc ? { timeZone: "UTC" } : {}),
+  });
+}
+
+/** Amount in dollars -> "$5.00" (5 is five dollars, never cents). */
+export function fmtMoney(dollars: number, currency: string): string {
+  const code = (currency || "usd").toUpperCase();
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency: code }).format(dollars);
+  } catch {
+    return `${dollars.toFixed(2)} ${code}`;
+  }
 }
 
 /** Whole days from now until the given time, never negative. */

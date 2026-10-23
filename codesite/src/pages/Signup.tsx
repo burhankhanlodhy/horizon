@@ -5,7 +5,7 @@ import { Turnstile, turnstileEnabled } from "../components/Turnstile";
 import { Banner, Button } from "../components/ui";
 import { safeNext, signUp } from "../lib/auth";
 import { LANDING_URL } from "../lib/api";
-import { TRIAL_DAYS } from "../lib/constants";
+import { PRICE_LINE } from "../lib/constants";
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -63,7 +63,7 @@ export default function Signup() {
   return (
     <AuthShell
       title="Create your account"
-      intro={`Start your ${TRIAL_DAYS}-day free trial. No card needed.`}
+      intro={PRICE_LINE}
       wide
     >
       <form onSubmit={submit} noValidate className="flex flex-col gap-4">
@@ -179,7 +179,7 @@ export default function Signup() {
           to={`/login${location.search}`}
           className="font-medium text-ember-2 underline-offset-2 hover:underline"
         >
-          Sign in
+          Log in
         </Link>
       </p>
     </AuthShell>

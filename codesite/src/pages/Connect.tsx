@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AuthShell, fieldLabelCls } from "../components/AuthShell";
 import { RequireAuth } from "../components/RequireAuth";
 import { Banner, Button, Card, Spinner } from "../components/ui";
 import { ApiError, isUnauthorized } from "../lib/api";
-import { clearSession } from "../lib/auth";
+import { clearSession, signOut, type SessionUser } from "../lib/auth";
 import {
   approveCli,
   asDeviceLimit,
@@ -21,23 +21,84 @@ export default function Connect() {
   const [params] = useSearchParams();
   const raw = params.get("code") ?? "";
   const code = normaliseUserCode(raw);
+  const connectUrl = code ? `/connect?code=${code}` : "/connect";
 
   return (
-    <RequireAuth>
-      {() =>
+    // Connect is sign-up first: a visitor without an account is sent to /signup.
+    <RequireAuth signedOutTo="signup">
+      {(user) =>
         code ? (
-          <ConnectView key={code} code={code} />
+          <ConnectView key={code} code={code} user={user} />
         ) : (
-          <AuthShell
+          <ConnectShell
+            user={user}
+            connectUrl={connectUrl}
             title="Connect a computer"
             intro="Open the link from your terminal, or enter the code shown there."
           >
-            {raw && <Banner tone="error" className="mb-5">That code does not look right. It has 8 letters and numbers.</Banner>}
+            {raw && <Banner tone="error">That code does not look right. It has 8 letters and numbers.</Banner>}
             <CodeEntry />
-          </AuthShell>
+          </ConnectShell>
         )
       }
     </RequireAuth>
+  );
+}
+
+/**
+ * Auth-style card for every /connect state. It shows which account will be
+ * approved, so nobody connects a computer to the wrong account by accident.
+ */
+function ConnectShell({
+  user,
+  connectUrl,
+  title,
+  intro,
+  wide,
+  children,
+}: {
+  user: SessionUser;
+  connectUrl: string;
+  title: string;
+  intro?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <AuthShell title={title} intro={intro} wide={wide}>
+      <div className="flex flex-col gap-6">
+        <ApprovingAs user={user} connectUrl={connectUrl} />
+        {children}
+      </div>
+    </AuthShell>
+  );
+}
+
+function ApprovingAs({ user, connectUrl }: { user: SessionUser; connectUrl: string }) {
+  const navigate = useNavigate();
+  const [switching, setSwitching] = useState(false);
+
+  const switchAccount = async () => {
+    if (switching) return;
+    setSwitching(true);
+    await signOut();
+    navigate(`/signup?next=${encodeURIComponent(connectUrl)}`, { replace: true });
+  };
+
+  return (
+    <div className="flex flex-col gap-3 rounded-[2px] border border-line bg-paper-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <p className="min-w-0 truncate text-sm text-ink-2">
+        Approving as <span className="font-medium text-ink">{user.email}</span>
+      </p>
+      <Button
+        variant="ghost"
+        onClick={() => void switchAccount()}
+        disabled={switching}
+        className="!py-2 text-[12px] sm:shrink-0"
+      >
+        {switching ? "Signing out…" : "Switch account"}
+      </Button>
+    </div>
   );
 }
 
@@ -94,8 +155,9 @@ type LoadState =
   | { phase: "gone"; message: string }
   | { phase: "error"; message: string };
 
-function ConnectView({ code }: { code: string }) {
+function ConnectView({ code, user }: { code: string; user: SessionUser }) {
   const navigate = useNavigate();
+  const connectUrl = `/connect?code=${code}`;
   const [load, setLoad] = useState<LoadState>({ phase: "loading" });
   /** Devices from a 409 device_limit response. Cleared once a slot frees up. */
   const [limitDevices, setLimitDevices] = useState<Device[] | null>(null);
@@ -105,17 +167,19 @@ function ConnectView({ code }: { code: string }) {
   const [busyDevice, setBusyDevice] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const expireToLogin = useCallback(() => {
+  // An expired session means signed out, so send the visitor to sign-up and
+  // bring them back to this approval afterwards.
+  const expireToSignup = useCallback(() => {
     clearSession();
-    navigate(`/login?next=${encodeURIComponent(`/connect?code=${code}`)}`, { replace: true });
-  }, [code, navigate]);
+    navigate(`/signup?next=${encodeURIComponent(connectUrl)}`, { replace: true });
+  }, [connectUrl, navigate]);
 
   const refresh = useCallback(async () => {
     try {
       const request = await getCliRequest(code);
       setLoad({ phase: "ready", request });
     } catch (e) {
-      if (isUnauthorized(e)) return expireToLogin();
+      if (isUnauthorized(e)) return expireToSignup();
       if (e instanceof ApiError && e.status === 404) {
         setLoad({
           phase: "gone",
@@ -129,7 +193,7 @@ function ConnectView({ code }: { code: string }) {
         message: e instanceof Error ? e.message : "Could not load this request.",
       });
     }
-  }, [code, expireToLogin]);
+  }, [code, expireToSignup]);
 
   useEffect(() => {
     void refresh();
@@ -144,7 +208,7 @@ function ConnectView({ code }: { code: string }) {
       await approveCli(code);
       setApproved(true);
     } catch (e) {
-      if (isUnauthorized(e)) return expireToLogin();
+      if (isUnauthorized(e)) return expireToSignup();
       const limit = asDeviceLimit(e instanceof ApiError ? e.detail : undefined);
       if (limit) {
         setLimitDevices(limit.devices);
@@ -172,7 +236,7 @@ function ConnectView({ code }: { code: string }) {
       setNotice(`Disconnected ${device.name}. You can approve this computer now.`);
       await refresh();
     } catch (e) {
-      if (isUnauthorized(e)) return expireToLogin();
+      if (isUnauthorized(e)) return expireToSignup();
       setApproveError(e instanceof Error ? e.message : "Could not disconnect that computer.");
     } finally {
       setBusyDevice(null);
@@ -181,7 +245,7 @@ function ConnectView({ code }: { code: string }) {
 
   if (approved && load.phase === "ready") {
     return (
-      <AuthShell title="Approved. Go back to your terminal.">
+      <ConnectShell user={user} connectUrl={connectUrl} title="Approved. Go back to your terminal.">
         <div className="flex flex-col gap-5">
           <p className="text-[15px] leading-relaxed text-ink-2">
             <span className="font-medium text-ink">{load.request.device_name}</span> is connected to{" "}
@@ -195,21 +259,21 @@ function ConnectView({ code }: { code: string }) {
             Open your account to see plan and devices
           </Link>
         </div>
-      </AuthShell>
+      </ConnectShell>
     );
   }
 
   if (load.phase === "loading") {
     return (
-      <AuthShell title="Connect this computer">
+      <ConnectShell user={user} connectUrl={connectUrl} title="Connect this computer">
         <Spinner label="Loading this request" />
-      </AuthShell>
+      </ConnectShell>
     );
   }
 
   if (load.phase === "gone" || load.phase === "error") {
     return (
-      <AuthShell title="Connect this computer">
+      <ConnectShell user={user} connectUrl={connectUrl} title="Connect this computer">
         <div className="flex flex-col gap-5">
           <Banner tone="error">{load.message}</Banner>
           <Button variant="ghost" onClick={() => void refresh()} className="w-full">
@@ -219,7 +283,7 @@ function ConnectView({ code }: { code: string }) {
             Enter a different code
           </Link>
         </div>
-      </AuthShell>
+      </ConnectShell>
     );
   }
 
@@ -227,7 +291,9 @@ function ConnectView({ code }: { code: string }) {
   const devices = limitDevices ?? (request.device_limit.reached ? request.device_limit.devices : null);
 
   return (
-    <AuthShell
+    <ConnectShell
+      user={user}
+      connectUrl={connectUrl}
       title="Approve this computer?"
       intro="Approving connects this computer to your ContextShrink account. Only the computer name and platform are shown here."
       wide
@@ -242,8 +308,8 @@ function ConnectView({ code }: { code: string }) {
         </Card>
 
         <p className="text-sm leading-relaxed text-ink-3">
-          Your first approved computer starts your 7-day free trial. After that, subscribe for $5/month
-          from your account page. Up to {DEVICE_LIMIT} computers per account.
+          Free: one week every month, starting the first time you use ContextShrink that month. Pro: $5/month
+          for unlimited use, from your account page. Up to {DEVICE_LIMIT} computers per account.
         </p>
 
         {notice && <Banner tone="success">{notice}</Banner>}
@@ -290,7 +356,7 @@ function ConnectView({ code }: { code: string }) {
           Not you? Close this page. Nothing is connected until you approve.
         </p>
       </div>
-    </AuthShell>
+    </ConnectShell>
   );
 }
 

@@ -9,11 +9,11 @@
  */
 export const USAGE_CLAIM: string | null = null;
 
-export const TRIAL_DAYS = 7;
 export const PRICE_MONTHLY_USD = 5;
 export const DEVICE_LIMIT = 2;
 
-export const PRICE_LINE = "7 days free, then $5/month. Cancel anytime. Up to 2 devices.";
+export const PRICE_LINE =
+  "Free: one week every month (sign-up required). Pro: $5/month for unlimited use.";
 
 export const INSTALL_COMMANDS = [
   {

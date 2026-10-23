@@ -3,7 +3,14 @@
 import { apiFetch } from "./api";
 
 export type Tool = "claude" | "codex";
-export type PlanState = "trial" | "active" | "past_due" | "canceled" | "none";
+
+/**
+ * Plan state from GET /code/account. "free" whenever there is no live paid
+ * subscription, whatever the free week is doing. The API never sends "canceled".
+ */
+export type PlanState = "free" | "active" | "past_due";
+
+export type FreeWeekStatus = "available" | "active" | "used";
 
 export interface Device {
   id: string;
@@ -25,12 +32,25 @@ export interface CliRequest {
   };
 }
 
+export interface FreeWeek {
+  status: FreeWeekStatus;
+  started_at: string | null;
+  ends_at: string | null;
+  /** When the next free week can start (next UTC month). */
+  renews_at: string | null;
+}
+
+/**
+ * The plan object, normalised. `free_week` is null when the API did not send
+ * one (an older deployment), which the UI shows as "status unavailable".
+ */
 export interface Plan {
   state: PlanState;
-  trial_ends_at: string | null;
+  free_week: FreeWeek | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   entitled: boolean;
+  price_usd: number;
 }
 
 /** GET /code/account */
@@ -38,6 +58,19 @@ export interface Account {
   plan: Plan;
   devices: Device[];
   device_limit: number;
+}
+
+/** One row of GET /code/invoices. Only the code subscription's invoices. */
+export interface Invoice {
+  id: string;
+  number: string | null;
+  /** ISO timestamp. */
+  created: string;
+  /** Amount in dollars (Stripe total / 100), so 5 means $5.00. */
+  total: number;
+  currency: string;
+  status: string | null;
+  url: string | null;
 }
 
 export interface UsageWindow {
@@ -72,8 +105,39 @@ export function approveCli(userCode: string): Promise<unknown> {
   });
 }
 
-export function getAccount(): Promise<Account> {
-  return apiFetch<Account>("/code/account");
+export async function getAccount(): Promise<Account> {
+  const raw = await apiFetch<Omit<Account, "plan"> & { plan: unknown }>("/code/account");
+  return { ...raw, plan: normalisePlan(raw.plan) };
+}
+
+/**
+ * Accepts the plan object as the API sends it. Anything that is not a live paid
+ * state becomes "free", and a missing free_week becomes null (unknown), so the
+ * page renders instead of crashing.
+ */
+export function normalisePlan(raw: unknown): Plan {
+  const p = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const state: PlanState = p.state === "active" || p.state === "past_due" ? p.state : "free";
+  return {
+    state,
+    free_week: normaliseFreeWeek(p.free_week),
+    current_period_end: typeof p.current_period_end === "string" ? p.current_period_end : null,
+    cancel_at_period_end: p.cancel_at_period_end === true,
+    entitled: p.entitled === true,
+    price_usd: typeof p.price_usd === "number" ? p.price_usd : 5,
+  };
+}
+
+function normaliseFreeWeek(raw: unknown): FreeWeek | null {
+  if (!raw || typeof raw !== "object") return null;
+  const f = raw as Record<string, unknown>;
+  if (f.status !== "available" && f.status !== "active" && f.status !== "used") return null;
+  return {
+    status: f.status,
+    started_at: typeof f.started_at === "string" ? f.started_at : null,
+    ends_at: typeof f.ends_at === "string" ? f.ends_at : null,
+    renews_at: typeof f.renews_at === "string" ? f.renews_at : null,
+  };
 }
 
 export function disconnectDevice(id: string): Promise<void> {
@@ -84,6 +148,25 @@ export function disconnectDevice(id: string): Promise<void> {
 
 export function getUsageSummary(): Promise<UsageSummary> {
   return apiFetch<UsageSummary>("/code/usage/summary");
+}
+
+/**
+ * Cancels the subscription at the end of the paid period. The caller reloads
+ * the account afterwards, so the response body is not needed.
+ */
+export function cancelSubscription(): Promise<unknown> {
+  return apiFetch<unknown>("/code/subscription/cancel", { method: "POST" });
+}
+
+/** Undoes a pending cancellation. */
+export function resumeSubscription(): Promise<unknown> {
+  return apiFetch<unknown>("/code/subscription/resume", { method: "POST" });
+}
+
+/** Invoice history for the code subscription: a bare list, up to 24 entries. */
+export async function getInvoices(): Promise<Invoice[]> {
+  const raw = await apiFetch<Invoice[]>("/code/invoices");
+  return Array.isArray(raw) ? raw : [];
 }
 
 /** Starts Stripe Checkout for the $5/month plan, then leaves the site. */
