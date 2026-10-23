@@ -136,11 +136,110 @@ test('the engine starts when its health check answers, and stops for each instal
     assert.ok(server.hits > 0);
   }));
 
-test('an engine that never answers its health check is reported after the wait', () =>
+// The clock startEngine waits on: sleep() moves the time on at once, and onSleep runs
+// after each sleep, so a test can make the fake engine answer at a chosen time.
+function fakeClock(onSleep = () => {}) {
+  const clock = {
+    t: 0,
+    sleeps: 0,
+    now: () => clock.t,
+    sleep: async (ms) => {
+      clock.t += ms;
+      clock.sleeps += 1;
+      onSleep(clock);
+    },
+  };
+  return clock;
+}
+
+// Makes the fake engine answer its health check once the fake clock reaches `ms`.
+function upAt(server, ms) {
+  return (clock) => {
+    if (clock.t >= ms) server.state.up = true;
+  };
+}
+
+const STARTING = 'Starting the ContextShrink engine (the first start can take a minute)...';
+const NOT_STARTED = /The ContextShrink engine did not start\. Nothing was changed/;
+
+test('an engine that never answers its health check is reported after the 60 s wait', () =>
   withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
     const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
     server.state.up = false;
-    await assert.rejects(engine.startEngine(sb.env, exe, adapter), /The ContextShrink engine did not start\. Nothing was changed/);
+    const clock = fakeClock();
+    const lines = [];
+    await assert.rejects(
+      engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), clock }),
+      NOT_STARTED
+    );
+    assert.deepEqual(lines, [STARTING]);
+    assert.ok(clock.t >= 60000 && clock.t < 60200, `waited ${clock.t} ms`);
+  }));
+
+test('a slow first start after a fresh install succeeds within the 180 s wait, with one notice line', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock(upAt(server, 170000));
+    const lines = [];
+    await engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), freshInstall: true, clock });
+    assert.deepEqual(lines, [STARTING]);
+    assert.ok(clock.t >= 170000 && clock.t < 170200, `answered at ${clock.t} ms`);
+  }));
+
+test('a fresh install that is still not answering after 180 s is reported', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock();
+    await assert.rejects(engine.startEngine(sb.env, exe, adapter, { freshInstall: true, clock }), NOT_STARTED);
+    assert.ok(clock.t >= 180000 && clock.t < 180200, `waited ${clock.t} ms`);
+  }));
+
+test('a start after an earlier install is not given the fresh-install wait', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.up = false;
+    const clock = fakeClock(upAt(server, 90000));
+    await assert.rejects(engine.startEngine(sb.env, exe, adapter, { freshInstall: false, clock }), NOT_STARTED);
+    assert.ok(clock.t >= 60000 && clock.t < 60200, `waited ${clock.t} ms`);
+  }));
+
+test('an engine that already answers starts at once, with no notice and no wait', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    const clock = fakeClock();
+    const lines = [];
+    await engine.startEngine(sb.env, exe, adapter, { out: (line) => lines.push(line), freshInstall: true, clock });
+    assert.deepEqual(lines, []);
+    assert.equal(clock.sleeps, 0);
+  }));
+
+test('ok:false (no plan) counts as started: the start succeeds and nothing is waited for', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.ok = false;
+    const clock = fakeClock();
+    await engine.startEngine(sb.env, exe, adapter, { clock });
+    assert.equal(clock.sleeps, 0);
+    assert.equal((await engine.engineHealth(sb.env)).ok, false);
+  }));
+
+test('any HTTP 200 counts as started, even when its body is not JSON', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest, server }) => {
+    const exe = await engine.installEngine(ctx, sb.env, manifest, adapter);
+    server.state.body = 'engine ready';
+    const clock = fakeClock();
+    await engine.startEngine(sb.env, exe, adapter, { clock });
+    assert.equal(clock.sleeps, 0);
+    assert.deepEqual(await engine.engineHealth(sb.env), {});
+  }));
+
+test('engineInstalled is false before the pinned version is installed and true after', () =>
+  withEngine(async ({ sb, ctx, adapter, manifest }) => {
+    assert.equal(engine.engineInstalled(sb.env, manifest), false);
+    await engine.installEngine(ctx, sb.env, manifest, adapter);
+    assert.equal(engine.engineInstalled(sb.env, manifest), true);
   }));
 
 test('the Startup shortcut is written for `code-engine run`, and removed on uninstall', () =>

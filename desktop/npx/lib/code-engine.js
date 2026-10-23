@@ -31,7 +31,13 @@ const DOWNLOAD_IDLE_MS = 30000;
 const ENSURE_TIMEOUT_MS = 20000;
 // Antivirus scanning can slow extraction of the ~9,400-entry engine zip a lot.
 const UNZIP_TIMEOUT_MS = 300000;
-const START_WAIT_MS = 5000;
+// How long a start waits for /__cs/health after `ensure`. The first start of a fresh
+// install loads the engine's Python dependencies while antivirus scans the new files,
+// which can take minutes; later starts are normally a few seconds.
+const START_WAIT_FRESH_MS = 180000;
+const START_WAIT_MS = 60000;
+const START_POLL_MS = 200;
+const STARTING_LINE = 'Starting the ContextShrink engine (the first start can take a minute)...';
 const HEALTH_TIMEOUT_MS = 300;
 const UNPUBLISHED = 'Engine not published yet. Nothing was changed.';
 
@@ -287,7 +293,21 @@ async function installEngine(ctx, env, manifest, adapter) {
   }
 }
 
-/** The engine's /__cs/health answer, or null when nothing answers. */
+// The JSON object in a health body, or {} when the body is not one.
+function healthBodyOf(chunks) {
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return body !== null && typeof body === 'object' ? body : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The engine's /__cs/health answer for any HTTP 200: its body object, or {} when the
+ * body is not one. null when nothing answers with 200. `ok` is not read: ok:false
+ * means no plan (trial ended), and the engine still passes requests through.
+ */
 function engineHealth(env, timeoutMs = HEALTH_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let url;
@@ -301,38 +321,49 @@ function engineHealth(env, timeoutMs = HEALTH_TIMEOUT_MS) {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('error', () => resolve(null));
-      res.on('end', () => {
-        if (res.statusCode !== 200) {
-          resolve(null);
-          return;
-        }
-        try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-        } catch {
-          resolve(null);
-        }
-      });
+      res.on('end', () => resolve(res.statusCode === 200 ? healthBodyOf(chunks) : null));
     });
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
   });
 }
 
+// The wait after `ensure`. CONTEXTSHRINK_NPX_TEST_START_WAIT_MS shortens it in tests
+// that run the CLI as a child process (it is read only in test mode).
+function startWaitOf(env, freshInstall) {
+  const forced = Number(testOverride(env, 'CONTEXTSHRINK_NPX_TEST_START_WAIT_MS'));
+  if (forced > 0) return forced;
+  return freshInstall ? START_WAIT_FRESH_MS : START_WAIT_MS;
+}
+
+const systemClock = { now: () => Date.now(), sleep };
+
+/** True when the pinned engine is already installed, so installEngine reuses it. */
+function engineInstalled(env, manifest) {
+  return fs.existsSync(path.join(engineRootOf(env), manifest.version, ENGINE_EXE));
+}
+
 /**
  * Runs `horizon.exe code-engine ensure` (it starts the engine detached and returns
- * quickly), then waits for the health check. Throws when the engine does not answer.
+ * quickly), then waits until /__cs/health answers with HTTP 200. Throws when it does
+ * not answer within the wait (START_WAIT_FRESH_MS after a fresh install, else
+ * START_WAIT_MS). An engine that already answers prints nothing.
+ * options: out (prints one line), freshInstall (the engine was just installed),
+ * clock ({ now, sleep }; tests inject a fake one).
  */
-async function startEngine(env, exe, adapter) {
+async function startEngine(env, exe, adapter, { out = () => {}, freshInstall = false, clock = systemClock } = {}) {
   try {
     await adapter.runEngine(exe, ['code-engine', 'ensure']);
   } catch {
     // The health check below decides; a failed ensure is reported the same way.
   }
-  const deadline = Date.now() + START_WAIT_MS;
+  if (await engineHealth(env)) return;
+  out(STARTING_LINE);
+  const deadline = clock.now() + startWaitOf(env, freshInstall);
   for (;;) {
+    await clock.sleep(START_POLL_MS);
     if (await engineHealth(env)) return;
-    if (Date.now() >= deadline) break;
-    await sleep(200);
+    if (clock.now() >= deadline) break;
   }
   throw new CsError('The ContextShrink engine did not start. Nothing was changed. Run this command again.');
 }
@@ -385,6 +416,7 @@ module.exports = {
   resolveAdapter,
   realAdapter,
   installEngine,
+  engineInstalled,
   engineHealth,
   startEngine,
   stopEngine,

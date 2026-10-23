@@ -97,9 +97,10 @@ async function connect(ctx, paths) {
     commandName: 'contextshrink-codex',
     deps: { adapter },
   });
+  const freshInstall = !engine.engineInstalled(env, manifest);
   const exe = await engine.installEngine(ctx, env, manifest, adapter);
   device.applyPlanNote(ctx, env, note, 'Codex');
-  await engine.startEngine(env, exe, adapter);
+  await engine.startEngine(env, exe, adapter, { out: (line) => ctx.out(line), freshInstall });
   await engine.installStartup(env, exe, adapter);
 
   const change = toml.connectText(original, paths.engineUrl + '/v1');

@@ -201,7 +201,11 @@ function startCodeApi() {
   });
 }
 
-/** A fake local engine: answers /__cs/health while `state.up` is true. */
+/**
+ * A fake local engine: answers /__cs/health with 200 while `state.up` is true.
+ *   ok: false    the engine has no plan (trial ended): ok:false, plan "ended"
+ *   body: string a raw body to answer with instead of the JSON
+ */
 function startFakeEngine() {
   const engine = { url: '', hits: 0, state: { up: true } };
   const server = http.createServer((req, res) => {
@@ -212,8 +216,13 @@ function startFakeEngine() {
         res.end();
         return;
       }
+      const noPlan = engine.state.ok === false;
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, engine: ENGINE_VERSION, plan: 'trial' }));
+      res.end(
+        engine.state.body !== undefined
+          ? engine.state.body
+          : JSON.stringify({ ok: !noPlan, engine: ENGINE_VERSION, plan: noPlan ? 'ended' : 'trial' })
+      );
       return;
     }
     res.writeHead(404);
