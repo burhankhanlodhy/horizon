@@ -42,6 +42,12 @@ services:
       STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # ContextShrink Code subscription (api/code_plan.py). The secret is an
+      # Ed25519 seed; keep it in .env only.
+      CODE_ENTITLEMENT_PRIVATE_KEY: ${CODE_ENTITLEMENT_PRIVATE_KEY:-}
+      CODE_SITE_URL: ${CODE_SITE_URL:-https://code.contextshrink.com}
+      CODE_API_URL: ${CODE_API_URL:-https://api.contextshrink.com}
+      STRIPE_CODE_PRICE_LOOKUP_KEY: ${STRIPE_CODE_PRICE_LOOKUP_KEY:-contextshrink_code_monthly}
       APP_URL: ${APP_URL:-https://app.contextshrink.com}
       # Accounts (comma-separated emails) that can read Contact form messages.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
