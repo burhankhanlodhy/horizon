@@ -28,7 +28,7 @@ function startFakeApi() {
       raw += chunk;
     });
     req.on('end', () => {
-      calls.push({ method: req.method, path: req.url });
+      calls.push({ method: req.method, path: req.url, headers: req.headers });
       const send = (status, body) => {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(body === undefined ? '' : JSON.stringify(body));

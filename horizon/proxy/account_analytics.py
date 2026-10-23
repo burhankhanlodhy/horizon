@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -38,6 +39,32 @@ class AccountContext:
     emitted: set[str] = field(default_factory=set)
     graph_estimates: dict[str, dict] = field(default_factory=dict)
     graph_estimates_supported: bool = False
+    team_id: str | None = None
+    membership_id: str | None = None
+    authorized_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    revalidate: Callable[[], Awaitable[tuple[int, dict | None]]] | None = field(default=None, repr=False)
+
+    @property
+    def tenant_id(self) -> str:
+        """Stable workspace identity for learning, caches and keep-alive ownership."""
+        return "team_" + self.membership_id if self.team_id else self.user_id
+
+    async def is_active(self) -> bool:
+        """Background pings require the same current authorization as user requests."""
+        if self.revalidate is None:
+            return True
+        started = datetime.now(timezone.utc).isoformat()
+        try:
+            status, owner = await self.revalidate()
+            allowed = bool(status == 200 and owner and owner["user_id"] == self.user_id
+                           and owner["key_id"] == self.key_id and owner.get("team_id") == self.team_id
+                           and owner.get("membership_id") == self.membership_id
+                           and owner.get("compression_allowed", True))
+            if allowed:
+                self.authorized_at = started
+            return allowed
+        except Exception:
+            return False
 
 
 _account: ContextVar[AccountContext | None] = ContextVar("verified_proxy_account", default=None)
@@ -45,7 +72,10 @@ _account: ContextVar[AccountContext | None] = ContextVar("verified_proxy_account
 
 def account_id() -> str | None:
     context = _account.get()
-    return context.user_id if context else None
+    if context is None:
+        return None
+    # Preserve personal namespaces; Team sessions must never reuse personal caches.
+    return context.tenant_id
 
 
 def capture_graph_estimates(items) -> None:
@@ -198,6 +228,9 @@ class AccountAnalytics:
             data = result.json()
             UUID(data["user_id"])
             UUID(data["key_id"])
+            if data.get("team_id"):
+                UUID(data["team_id"])
+                UUID(data["membership_id"])
             return 200, data
         except Exception:
             return 503, None
@@ -272,6 +305,9 @@ async def record_account_outcome(
         ),
         "user_id": context.user_id,
         "key_id": context.key_id,
+        "team_id": context.team_id,
+        "membership_id": context.membership_id,
+        "authorized_at": context.authorized_at,
         "runtime_id": context.service.runtime_id,
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "request_id": outcome.request_id,
@@ -318,6 +354,8 @@ async def record_account_outcome(
 
         for graph_event in events(context, outcome):
             graph_event.update(user_id=context.user_id, key_id=context.key_id,
+                               team_id=context.team_id, membership_id=context.membership_id,
+                               authorized_at=context.authorized_at,
                                runtime_id=context.service.runtime_id, occurred_at=event["occurred_at"])
             await asyncio.to_thread(context.service._enqueue, graph_event)
     except Exception as exc:
@@ -341,6 +379,9 @@ async def record_keepalive_ping(context: AccountContext, record: dict) -> None:
         "event_id": str(uuid5(UUID(context.service.runtime_id), context.key_id + ":" + request_id)),
         "user_id": context.user_id,
         "key_id": context.key_id,
+        "team_id": context.team_id,
+        "membership_id": context.membership_id,
+        "authorized_at": context.authorized_at,
         "runtime_id": context.service.runtime_id,
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
@@ -427,6 +468,7 @@ class AccountMiddleware:
             and headers.get("x-horizon-model-catalog") == "codex"
         )
         required = "proxy:responses" if path.rstrip("/").endswith("responses") or native_codex_catalog else "proxy:messages"
+        authorized_at = datetime.now(timezone.utc).isoformat()
         status, data = await self.service.authorize(key, required)
         if data is None:
             return await self._deny(
@@ -441,6 +483,9 @@ class AccountMiddleware:
             self.service,
             compression_allowed=data.get("compression_allowed", True) is not False,
             graph_estimates_supported=data.get("graph_estimates_supported") is True,
+            team_id=data.get("team_id"), membership_id=data.get("membership_id"),
+            revalidate=lambda: self.service.authorize(key, required),
+            authorized_at=authorized_at,
         )
         scope.setdefault("state", {})["account_user_id"] = context.user_id
         # Never send account or service credentials upstream, or trust identity hints.
@@ -448,6 +493,7 @@ class AccountMiddleware:
             "x-horizon-user-id",
             "x-horizon-proxy-token",
             "x-contextshrink-service-token",
+            "x-contextshrink-team",
         } | credential_headers
         scope["headers"] = [
             (k, v)
@@ -474,11 +520,14 @@ class AccountMiddleware:
             if message["type"] == "websocket.receive":
                 # Revalidate each incoming turn; revoked keys cannot keep using
                 # a long-lived socket. A turn already sent upstream may finish.
+                authorized_at = datetime.now(timezone.utc).isoformat()
                 status, owner = await self.service.authorize(key, required)
                 if (
                     owner is None
                     or owner["user_id"] != context.user_id
                     or owner["key_id"] != context.key_id
+                    or owner.get("team_id") != context.team_id
+                    or owner.get("membership_id") != context.membership_id
                 ):
                     await send({"type": "websocket.close", "code": 1008})
                     return {"type": "websocket.disconnect", "code": 1008}
@@ -486,6 +535,7 @@ class AccountMiddleware:
                 # computed at accept time applies again on reconnect.
                 context.compression_allowed = owner.get("compression_allowed", True) is not False
                 context.graph_estimates_supported = owner.get("graph_estimates_supported") is True
+                context.authorized_at = authorized_at
             return message
 
         try:

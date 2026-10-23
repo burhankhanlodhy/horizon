@@ -10,6 +10,8 @@ import {
   SectionHeader,
 } from "../components/ui";
 import { apiFetch, PROXY_URL } from "../lib/api";
+import { cn } from "../lib/utils";
+import { useSelectedTeamId } from "../lib/workspace";
 
 type Key = {
   id: string;
@@ -20,13 +22,17 @@ type Key = {
   last_used_at: string | null;
   revoked_at: string | null;
   requests: number;
+owner_name?: string | null;
 };
 const SCOPES = ["proxy:messages", "proxy:responses"];
 const inputCls =
   "w-full rounded-lg border border-ink/20 bg-ink/5 px-3.5 py-2.5 text-sm text-ink outline-none";
 
 export default function ApiKeys() {
+const teamId = useSelectedTeamId();
+ const [workspaceName, setWorkspaceName] = useState("Personal");
   const [keys, setKeys] = useState<Key[]>([]);
+  const [view, setView] = useState<"active" | "archived">("active");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState(SCOPES);
@@ -34,12 +40,16 @@ export default function ApiKeys() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const activeKeys = keys.filter((key) => !key.revoked_at);
+  const archivedKeys = keys.filter((key) => Boolean(key.revoked_at));
+  const visibleKeys = view === "active" ? activeKeys : archivedKeys;
   const load = async () => setKeys(await apiFetch<Key[]>("/keys"));
   useEffect(() => {
+if (teamId) void apiFetch<{ team: { name: string } }>(`/teams/${encodeURIComponent(teamId)}`).then((result) => setWorkspaceName(result.team.name)).catch(() => setWorkspaceName("Team"));
     load()
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [teamId]);
 
   const create = async () => {
     if (!name.trim() || !scopes.length || busy) return;
@@ -52,6 +62,7 @@ export default function ApiKeys() {
       });
       const { key: secret, ...entry } = key;
       setKeys((old) => [entry, ...old]);
+      setView("active");
       setIssued(secret);
       setName("");
       setOpen(false);
@@ -77,10 +88,7 @@ export default function ApiKeys() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-xl text-sm text-ink-3">
-          Each key belongs to your account. Requests made with any of your keys
-          appear together in your Advanced Analytics.
-        </p>
+        <p className="max-w-xl text-sm text-ink-3">Showing keys for <strong className="text-ink">{workspaceName}</strong>. Requests are billed to this workspace. Team keys belong to each member; personal keys stay in Personal.</p>
         <GradientButton
           onClick={() => {
             setIssued(null);
@@ -90,29 +98,61 @@ export default function ApiKeys() {
           <Plus size={15} /> Create key
         </GradientButton>
       </div>
+      <div className="flex" role="group" aria-label="API key views">
+        <div className="flex rounded-lg border border-ink/10 p-1 text-sm">
+          {(["active", "archived"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={view === option}
+              aria-controls="api-key-list"
+              onClick={() => setView(option)}
+              className={cn(
+                "rounded-md px-4 py-2 transition",
+                view === option
+                  ? "bg-ink font-semibold text-paper"
+                  : "text-ink-3 hover:text-ink",
+              )}
+            >
+              {option === "active" ? "Active" : "Archived"}
+              {!loading && ` (${option === "active" ? activeKeys.length : archivedKeys.length})`}
+            </button>
+          ))}
+        </div>
+      </div>
       {error && (
         <p role="alert" className="text-sm text-red-500">
           {error}
         </p>
       )}
       {loading && <p className="text-sm text-ink-3">Loading keys…</p>}
-      {!loading && !keys.length && !error && (
-        <Card className="p-6">
-          <p className="text-sm text-ink-3">
-            No API keys yet. Create one to connect a tool and start collecting
-            your usage.
-          </p>
-        </Card>
-      )}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {keys.map((k) => (
+      <div id="api-key-list" role="region" aria-label={view === "active" ? "Active API keys" : "Archived API keys"}>
+        {!loading && !visibleKeys.length && !error && (
+          <Card className="p-6">
+            <p className="text-sm text-ink-3">
+              {view === "archived"
+                ? "No revoked API keys."
+                : keys.length
+                  ? "No active API keys. Revoked keys are in Archived."
+                  : "No API keys yet. Create one to connect a tool and start collecting your usage."}
+            </p>
+          </Card>
+        )}
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {visibleKeys.map((k) => (
           <Card key={k.id} hairline className="p-5">
             <div className="flex justify-between gap-3">
               <div>
                 <h3 className="font-semibold text-ink">{k.name}</h3>
+{k.owner_name && <p className="mt-1 text-xs text-ink-3">Owned by {k.owner_name}</p>}
                 <p className="mt-1 text-xs text-ink-3">
                   Created {new Date(k.created_at).toLocaleString()}
                 </p>
+                {k.revoked_at && (
+                  <p className="mt-1 text-xs text-ink-3">
+                    Revoked {new Date(k.revoked_at).toLocaleString()}
+                  </p>
+                )}
               </div>
               <Badge tone={k.revoked_at ? "red" : "green"}>
                 {k.revoked_at ? "revoked" : "active"}
@@ -130,13 +170,14 @@ export default function ApiKeys() {
                   : "Never used"}
               </span>
               {!k.revoked_at && (
-                <GhostButton onClick={() => revoke(k.id)}>
+                <GhostButton disabled={busy} onClick={() => revoke(k.id)}>
                   {busy ? "Working…" : "Revoke"}
                 </GhostButton>
               )}
             </div>
           </Card>
         ))}
+        </div>
       </div>
       <Card className="p-6">
         <SectionHeader eyebrow="Connect a tool" title="Account proxy access" />

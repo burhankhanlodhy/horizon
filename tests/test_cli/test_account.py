@@ -36,12 +36,14 @@ class FakeApi:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.workspace_headers: list[tuple[str, str | None]] = []
         self.revoked: set[str] = set()
         self.password = "right"
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.calls.append((request.method, path))
+        self.workspace_headers.append((path, request.headers.get("x-contextshrink-team")))
         token = request.headers.get("authorization", "")
         if path == "/auth/login":
             body = json.loads(request.content)
@@ -267,3 +269,18 @@ def test_relay_command_pins_tool_upstreams_and_uses_the_cli_key(env, monkeypatch
     assert isinstance(hosted.ensure_relay(18689), _Proc)
     assert spawned["credential"] == "cli-api-key"
     assert spawned["cmd"][-2:] == ["--upstream", "https://api.kimi.com/coding/v1"]
+
+
+def test_explicit_team_scopes_key_lifecycle_and_account_reads(env):
+    _, api = env
+    team = "00000000-0000-4000-8000-000000000099"
+    runner = CliRunner()
+    signed_in = _login(runner, "right", "--team", team)
+    assert signed_in.exit_code == 0, signed_in.output
+    assert hosted.load_state()["team_id"] == team
+    account = runner.invoke(main, ["account", "--json"])
+    assert account.exit_code == 0, account.output
+    signed_out = runner.invoke(main, ["logout"])
+    assert signed_out.exit_code == 0, signed_out.output
+    assert all(scope is None if path.startswith("/auth/") and path != "/auth/me" else scope == team
+               for path, scope in api.workspace_headers)

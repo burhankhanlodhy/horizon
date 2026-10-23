@@ -43,6 +43,11 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       APP_URL: ${APP_URL:-https://app.contextshrink.com}
+      CONTEXTSHRINK_TEAMS_ENABLED: ${CONTEXTSHRINK_TEAMS_ENABLED:-false}
+      CONTEXTSHRINK_TEAM_SSO_ENABLED: ${CONTEXTSHRINK_TEAM_SSO_ENABLED:-false}
+      SSO_ALLOWED_HOSTS: ${SSO_ALLOWED_HOSTS:-}
+      SSO_API_URL: ${SSO_API_URL:-https://api.contextshrink.com}
+      SSO_ENCRYPTION_KEY: ${SSO_ENCRYPTION_KEY:-}
       # Accounts (comma-separated emails) that can read Contact form messages.
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # Outgoing email (password reset, email confirmation) over SMTP.

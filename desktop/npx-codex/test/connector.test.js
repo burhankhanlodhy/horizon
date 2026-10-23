@@ -53,6 +53,27 @@ async function fixture(fn) {
   finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); }
 }
 
+test('explicit Team scope is saved and used for key creation and later logout only', () => fixture(async f => {
+  const team = '00000000-0000-4000-8000-000000000099';
+  const connected = await f.run(['connect', '--team', team]);
+  assert.equal(connected.code, 0, connected.output);
+  assert.equal(JSON.parse(fs.readFileSync(f.state, 'utf8')).team_id, team);
+  assert.equal(f.calls.find(c => c.path === '/keys').headers['x-contextshrink-team'], team);
+  assert.equal(f.calls.find(c => c.path === '/auth/login').headers['x-contextshrink-team'], undefined);
+  const disconnected = await f.run(['disconnect']);
+  assert.equal(disconnected.code, 0, disconnected.output);
+  const logout = await f.run(['logout']);
+  assert.equal(logout.code, 0, logout.output);
+  assert.equal(f.calls.find(c => c.method === 'DELETE').headers['x-contextshrink-team'], team);
+}));
+
+test('invalid Team scope is refused before credentials or configuration writes', () => fixture(async f => {
+  const result = await f.run(['connect', '--team', 'not-a-team']);
+  assert.equal(result.code, 2);
+  assert.equal(f.calls.length, 0);
+  assert.equal(fs.existsSync(f.config), false);
+}));
+
 test('connect configures a ChatGPT-auth Responses provider with separate gateway header', () => fixture(async f => {
   const original = '# keep comment\nmodel = "my-existing-model"\n[features]\nfoo = true\n';
   fs.writeFileSync(f.config, original);

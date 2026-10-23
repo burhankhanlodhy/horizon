@@ -16,6 +16,8 @@ from uuid import UUID
 import account_email
 import db
 import security
+import team_billing
+import teams
 from fastapi import Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -61,8 +63,11 @@ class EventIn(BaseModel):
     event_id: UUID
     user_id: UUID
     key_id: UUID
+    team_id: UUID | None = None
+    membership_id: UUID | None = None
     runtime_id: UUID
     occurred_at: datetime
+    authorized_at: datetime | None = None
     request_id: str = Field(max_length=150)
     provider: str = Field(default="unknown", max_length=100)
     model: str = Field(default="unknown", max_length=200)
@@ -98,6 +103,11 @@ class EventIn(BaseModel):
 
     @model_validator(mode="after")
     def graph_diagnostics_are_not_usage_or_dollar_credit(self):
+        if self.authorized_at is not None:
+            if self.authorized_at.utcoffset() is None or self.occurred_at.utcoffset() is None:
+                raise ValueError("Authorization and completion timestamps must include UTC offsets")
+            if self.authorized_at > self.occurred_at:
+                raise ValueError("Authorization cannot occur after completion")
         # Also handles old proxies still sending priced retrieval estimates.
         if self.kind == "graph_estimate":
             self.savings_usd = self.cost_usd = self.keepalive_usd = 0
@@ -130,13 +140,18 @@ def public_key(row):
 FREE_SAVINGS_CAP_USD = float(os.environ.get("FREE_SAVINGS_CAP_USD", "20"))
 
 
-async def compression_entitlement(user_id) -> dict:
+async def compression_entitlement(user_id, team_id=None) -> dict:
     """Whether the proxy may compress for this account right now.
 
     Active Pro/Team plans are uncapped. Everything else, including a paid plan
     that is not active (e.g. a savings fee unpaid past the grace period), gets
     the Free cap.
     """
+    if team_id is not None:
+        allowed = teams.enabled() and await team_billing.entitlement(team_id)
+        return {"plan": "team", "capped": False, "cap_usd": None,
+                "cycle_savings_usd": None, "cycle_start": None, "cycle_end": None,
+                "compression_allowed": bool(allowed)}
     row = await db._conn().fetchrow(
         f"""
         SELECT COALESCE(sub.plan,'free') AS plan,
@@ -165,7 +180,7 @@ async def compression_entitlement(user_id) -> dict:
         return {**base, "capped": False, "cycle_savings_usd": None, "compression_allowed": True}
     saved = await db._conn().fetchval(
         f"SELECT {SAVINGS_USD} "
-        "FROM metrics.proxy_events WHERE user_id=$1 AND occurred_at >= $2",
+        "FROM metrics.proxy_events WHERE user_id=$1 AND team_id IS NULL AND occurred_at >= $2",
         user_id,
         cycle_start,
     )
@@ -216,21 +231,33 @@ TOTALS = f"""
 """
 
 
+def workspace_filter(user, alias=""):
+    """Only trusted session context determines a workspace and its visibility."""
+    prefix = alias + "." if alias else ""
+    if user.get("team_id"):
+        if user.get("team_role") in ("owner", "admin"):
+            return f"{prefix}team_id=$1", user["team_id"]
+        return f"{prefix}membership_id=$1", user["membership_id"]
+    return f"{prefix}user_id=$1 AND {prefix}team_id IS NULL", user["user_id"]
+
+
 def scope_filter(user, scope, days):
     # Fixed ownership predicate also covers feed, CSV and grouping queries.
+    ownership, identity = workspace_filter(user)
     return (
-        """user_id=$1 AND (
+        ownership + """ AND (
         $2='lifetime' OR
         ($2='history' AND occurred_at >= now() - ($3::int * interval '1 day')) OR
         ($2='session' AND runtime_id=(SELECT runtime_id FROM metrics.proxy_runs
                                      ORDER BY started_at DESC LIMIT 1)))""",
-        (user["user_id"], scope, days),
+        (identity, scope, days),
     )
 
 
 async def basic_usage(user, days):
     """Calendar-day usage available on every plan; all dates and comparisons are UTC."""
-    current = "user_id=$1 AND occurred_at >= $2 AND occurred_at <= $3"
+    ownership, identity = workspace_filter(user)
+    current = ownership + " AND occurred_at >= $2 AND occurred_at <= $3"
     async with (
         db._conn().acquire() as conn,
         conn.transaction(isolation="repeatable_read", readonly=True),
@@ -241,14 +268,14 @@ async def basic_usage(user, days):
             "- (($1::int - 1) * interval '1 day') AS start",
             days,
         )
-        args = (user["user_id"], bounds["start"], bounds["as_of"])
+        args = (identity, bounds["start"], bounds["as_of"])
         totals = await conn.fetchrow(
             f"SELECT {TOTALS} FROM metrics.proxy_events WHERE {current}", *args
         )
         previous = await conn.fetchrow(
-            f"SELECT {TOTALS} FROM metrics.proxy_events WHERE user_id=$1 "
+            f"SELECT {TOTALS} FROM metrics.proxy_events WHERE {ownership} "
             "AND occurred_at >= $2::timestamptz - ($3::int * interval '1 day') AND occurred_at < $2::timestamptz",
-            user["user_id"],
+            identity,
             bounds["start"],
             days,
         )
@@ -341,14 +368,17 @@ def install(app, current_user):
 
     @app.get("/keys")
     async def list_keys(user=Depends(current_user)):
+        ownership, identity = workspace_filter(user, "k")
         rows = await db._conn().fetch(
-            """
+            f"""
             SELECT k.id,k.name,k.prefix,k.scopes,k.created_at,k.last_used_at,k.revoked_at,
-                   (SELECT count(*) FROM metrics.proxy_events e WHERE e.key_id=k.id AND e.user_id=$1
+                   k.team_id,k.membership_id,k.user_id,u.name AS owner_name,
+                   (SELECT count(*) FROM metrics.proxy_events e WHERE e.key_id=k.id
                     AND COALESCE(e.data->>'kind','request') = 'request') AS requests
-            FROM core.api_keys k WHERE k.user_id=$1 ORDER BY k.created_at DESC
+            FROM core.api_keys k JOIN core.users u ON u.id=k.user_id
+            WHERE {ownership} ORDER BY k.created_at DESC
         """,
-            user["user_id"],
+            identity,
         )
         return [public_key(r) for r in rows]
 
@@ -356,31 +386,41 @@ def install(app, current_user):
     async def create_key(body: KeyIn, user=Depends(current_user)):
         # The desktop app and `horizon login` connect by creating a key.
         account_email.require_verified(user)
+        team_id, membership_id = user.get("team_id"), user.get("membership_id")
+        if team_id and not (teams.enabled() and await team_billing.entitlement(team_id)):
+            raise HTTPException(403, "An active Team subscription is required to create Team keys")
         if not body.name.strip():
             raise HTTPException(422, "Key name cannot be blank")
         key = "cs_live_" + security.new_session_token()
         row = await db._conn().fetchrow(
             """
-            INSERT INTO core.api_keys(user_id,name,key_hash,prefix,scopes)
-            VALUES($1,$2,$3,$4,$5) RETURNING id,name,prefix,scopes,created_at,last_used_at,revoked_at
+            INSERT INTO core.api_keys(user_id,name,key_hash,prefix,scopes,team_id,membership_id)
+            SELECT $1,$2,$3,$4,$5,$6,$7 WHERE $6::uuid IS NULL OR EXISTS (
+                SELECT 1 FROM core.team_memberships m WHERE m.id=$7 AND m.team_id=$6
+                AND m.user_id=$1 AND m.left_at IS NULL FOR UPDATE)
+            RETURNING id,name,prefix,scopes,created_at,last_used_at,revoked_at,team_id,membership_id
         """,
             user["user_id"],
             body.name.strip(),
             security.hash_token(key),
             key[:16],
             list(set(body.scopes)),
+            team_id, membership_id,
         )
+        if row is None:
+            raise HTTPException(403, "Team membership is no longer active")
         return {**public_key(row), "key": key, "requests": 0}
 
     @app.delete("/keys/{key_id}", status_code=204)
     async def revoke_key(key_id: UUID, user=Depends(current_user)):
+        ownership, identity = workspace_filter(user)
         row = await db._conn().fetchrow(
-            """
+            f"""
             UPDATE core.api_keys SET revoked_at=COALESCE(revoked_at,now())
-            WHERE id=$1 AND user_id=$2 RETURNING id
+            WHERE {ownership} AND id=$2 RETURNING id
         """,
+            identity,
             key_id,
-            user["user_id"],
         )
         if row is None:
             raise HTTPException(404, "Key not found")
@@ -391,12 +431,18 @@ def install(app, current_user):
         row = await db.resolve_api_key(security.hash_token(body.key))
         if row is None:
             raise HTTPException(401, "Invalid or revoked proxy key")
+        if row.get("team_id") and not teams.enabled():
+            raise HTTPException(401, "Team keys are not available")
         if body.scope not in row["scopes"]:
-            raise HTTPException(403, "Proxy key does not have the required scope")
-        entitlement = await compression_entitlement(row["user_id"])
+            raise HTTPException(403, "Proxy key does not have required scope")
+        entitlement = await compression_entitlement(row["user_id"], row.get("team_id"))
+        if row.get("team_id") and not entitlement["compression_allowed"]:
+            raise HTTPException(403, "Team subscription is inactive")
         return {
             "user_id": str(row["user_id"]),
             "key_id": str(row["id"]),
+            "team_id": str(row["team_id"]) if row.get("team_id") else None,
+            "membership_id": str(row["membership_id"]) if row.get("membership_id") else None,
             "plan": entitlement["plan"],
             "compression_allowed": entitlement["compression_allowed"],
             "graph_estimates_supported": True,
@@ -419,15 +465,30 @@ def install(app, current_user):
         async with db._conn().acquire() as conn, conn.transaction():
             for e in body.events:
                 # Existing (including revoked) key ownership is mandatory.
-                owned = await conn.fetchval(
-                    "SELECT 1 FROM core.api_keys WHERE id=$1 AND user_id=$2", e.key_id, e.user_id
+                owned = await conn.fetchrow(
+                    "SELECT k.team_id,k.membership_id FROM core.api_keys k "
+                    "LEFT JOIN core.team_memberships m ON m.id=k.membership_id "
+                    "WHERE k.id=$1 AND k.user_id=$2 AND k.created_at <= $3 "
+                    "AND (k.revoked_at IS NULL OR $3 <= k.revoked_at) "
+                    "AND $3 <= $4 AND $4 <= now() + interval '5 minutes' "
+                    "AND (k.team_id IS NULL OR (m.team_id=k.team_id AND m.user_id=k.user_id "
+                    "AND m.joined_at <= $3 AND (m.left_at IS NULL OR $3 <= m.left_at)))",
+                    e.key_id, e.user_id, e.authorized_at or e.occurred_at, e.occurred_at,
                 )
-                if not owned:
+                if owned is None:
                     raise HTTPException(422, "Event key ownership mismatch")
+                if ((e.team_id is not None and e.team_id != owned["team_id"])
+                    or (e.membership_id is not None and e.membership_id != owned["membership_id"])):
+                    raise HTTPException(422, "Event Team attribution mismatch")
+                # Only the service-authenticated proxy supplies authorized_at. Keep
+                # key/membership time guards at authorization, while allowing an
+                # in-flight request to complete and report after removal. Legacy
+                # outboxes retain the stricter completion-time checks.
+                e.team_id, e.membership_id = owned["team_id"], owned["membership_id"]
                 await conn.execute(
                     """
-                    INSERT INTO metrics.proxy_events(event_id,user_id,key_id,runtime_id,occurred_at,status,model,provider,project,agent,data)
-                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) ON CONFLICT(event_id) DO NOTHING
+                    INSERT INTO metrics.proxy_events(event_id,user_id,key_id,runtime_id,occurred_at,status,model,provider,project,agent,data,team_id,membership_id)
+                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13) ON CONFLICT(event_id) DO NOTHING
                 """,
                     e.event_id,
                     e.user_id,
@@ -440,6 +501,7 @@ def install(app, current_user):
                     e.project,
                     e.agent,
                     e.model_dump_json(),
+                    e.team_id, e.membership_id,
                 )
         return {"accepted": len(body.events)}
 

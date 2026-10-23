@@ -11,6 +11,8 @@ import SignOut from "./pages/SignOut";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Messages from "./pages/Messages";
+import Team, { AcceptTeamInvitation } from "./pages/Team";
+import SsoCallback from "./pages/SsoCallback";
 import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/AccountEmail";
 import { refreshUser, type SessionUser } from "./lib/auth";
 import { AccountProvider, useAccount } from "./lib/account";
@@ -114,6 +116,8 @@ export default function App() {
             <Route path="keys" element={<ApiKeys />} />
             <Route path="usage" element={<Usage />} />
             <Route path="subscriptions" element={<Subscriptions />} />
+            <Route path="team" element={<Team />} />
+            <Route path="team-invitations/accept" element={<AcceptTeamInvitation />} />
             <Route path="downloads" element={<Downloads />} />
             <Route path="docs" element={<Documentation />} />
             <Route path="messages" element={<AdminOnly><Messages /></AdminOnly>} />
@@ -128,6 +132,7 @@ export default function App() {
             </FullPageCenter>
           }
         />
+        <Route path="/sso/callback" element={<FullPageCenter><SsoCallback /></FullPageCenter>} />
         <Route
           path="/signup"
           element={

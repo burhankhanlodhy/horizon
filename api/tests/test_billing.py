@@ -54,11 +54,15 @@ class FakeConn:
         return next((r for r in self.fees.values() if r["stripe_invoice_id"] == invoice_id), None)
 
     async def fetch(self, sql, *args):
+        if "FROM core.team_subscriptions s" in sql:
+            return []
         if "billing.fee_overdue" in sql:
             return [{"user_id": UID, "stripe_subscription_id": s} for s in self.overdue]
         raise AssertionError(sql)
 
     async def fetchval(self, sql, *args):
+        if "SELECT team_id FROM core.team_subscriptions WHERE stripe_customer_id" in sql:
+            return None
         if "pg_try_advisory_lock" in sql:
             if args[0] in self.locks:
                 return False

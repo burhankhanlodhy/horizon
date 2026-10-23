@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { ArrowLeft, LogIn } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { EASE, GradientButton } from "../components/ui";
-import { getPostAuthDestination, signIn } from "../lib/auth";
+import { beginSso, postAuthPath, signIn } from "../lib/auth";
 
 const LANDING_URL =
   (import.meta.env.VITE_LANDING_URL as string | undefined) ??
@@ -20,6 +20,7 @@ export default function Login() {
   const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [teamId, setTeamId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -33,14 +34,31 @@ export default function Login() {
     setBusy(true);
     try {
       await signIn(email.trim(), password);
-      if (new URLSearchParams(location.search).get("next") === "/dashboard") {
+      const destination = postAuthPath(location.state, new URLSearchParams(location.search).get("next"));
+      if (destination === "/dashboard") {
         window.location.assign("/dashboard");
         return;
       }
-      navigate(getPostAuthDestination(location.state), { replace: true });
+      navigate(destination, { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sign in failed.");
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitSso = async () => {
+    if (busy) return;
+    if (!teamId.trim()) {
+      setError("Enter your Team ID to continue with company SSO.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await beginSso(teamId, false, postAuthPath(location.state, new URLSearchParams(location.search).get("next")));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to start Team SSO.");
       setBusy(false);
     }
   };
@@ -92,6 +110,25 @@ export default function Login() {
             onKeyDown={(e) => e.key === "Enter" && submit()}
           />
         </label>
+        <label className="block border-t border-white/10 pt-4">
+          <span className="mb-1.5 block text-xs font-medium text-ink-3">Team ID for company SSO</span>
+          <input
+            type="text"
+            autoComplete="off"
+            value={teamId}
+            onChange={(e) => setTeamId(e.target.value)}
+            placeholder="Paste your Team ID"
+            className={inputCls}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void submitSso()}
+          className="w-full rounded-lg border border-ink/15 bg-ink/5 px-4 py-2.5 text-sm font-semibold text-ink transition hover:border-ember/40 disabled:opacity-60"
+        >
+          {busy ? "Connecting to your company…" : "Continue with company SSO"}
+        </button>
         <button
           type="button"
           onClick={() => navigate("/forgot-password")}

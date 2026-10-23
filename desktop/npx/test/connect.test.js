@@ -30,6 +30,19 @@ function assertNoKeyLeak(api, outputs) {
   }
 }
 
+test('Team sign-in scopes creation and revocation while keeping auth personal', () =>
+  withSandbox(async ({ api, sb }) => {
+    const team = '00000000-0000-4000-8000-000000000099';
+    const result = await runCli(sb, ['connect', '--team', team, '--no-code-tab'], { input: SIGN_IN });
+    assert.strictEqual(result.code, 0, result.output);
+    assert.strictEqual(api.calls.find(c => c.path === '/keys').headers['x-contextshrink-team'], team);
+    assert.strictEqual(api.calls.find(c => c.path === '/auth/login').headers['x-contextshrink-team'], undefined);
+    const logout = await runCli(sb, ['logout'], { input: SIGN_IN });
+    assert.strictEqual(logout.code, 0, logout.output);
+    assert.strictEqual(api.calls.find(c => c.method === 'DELETE').headers['x-contextshrink-team'], team);
+  })
+);
+
 test('connect writes the three env keys and savings bar, keeping every other setting', () =>
   withSandbox(async ({ api, sb }) => {
     const original = [

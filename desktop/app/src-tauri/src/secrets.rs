@@ -10,6 +10,8 @@ use keyring::Entry;
 const SERVICE: &str = "ContextShrink Desktop";
 const SESSION: &str = "session";
 const DEVICE_KEY_ID: &str = "device-key-id";
+const DEVICE_KEY_TEAM_ID: &str = "device-key-team-id";
+const TEAM_ID: &str = "team-id";
 
 fn entry(name: &str) -> Option<Entry> {
     Entry::new(SERVICE, name).ok()
@@ -66,7 +68,36 @@ pub fn set_device_key_id(id: &str) -> Result<(), String> {
     set(DEVICE_KEY_ID, id)
 }
 
+pub fn team_id() -> Option<String> {
+    get(TEAM_ID)
+}
+pub fn set_team_id(team_id: Option<&str>) -> Result<(), String> {
+    match team_id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => set(TEAM_ID, id.trim()),
+        None => {
+            clear(TEAM_ID);
+            Ok(())
+        }
+    }
+}
+pub fn device_key_team_id() -> Option<String> {
+    get(DEVICE_KEY_TEAM_ID)
+}
+pub fn set_device_key_team_id(team_id: Option<&str>) -> Result<(), String> {
+    match team_id.filter(|id| !id.trim().is_empty()) {
+        Some(id) => set(DEVICE_KEY_TEAM_ID, id.trim()),
+        None => {
+            clear(DEVICE_KEY_TEAM_ID);
+            Ok(())
+        }
+    }
+}
+pub fn clear_device_key() {
+    clear(DEVICE_KEY_ID);
+    clear(DEVICE_KEY_TEAM_ID);
+}
 pub fn clear_all() {
     clear(SESSION);
-    clear(DEVICE_KEY_ID);
+    clear_device_key();
+    // Keep the selected Team across sign-out, restart and repair.
 }

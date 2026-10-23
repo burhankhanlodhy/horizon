@@ -18,6 +18,7 @@ Usage:
   npx contextshrink-claude logout                Disconnect and revoke this computer's account key
 
 Options:
+  --team <id>    Connect to a Team workspace (ID from the dashboard)
   --force        Replace another gateway or existing header (disconnect restores it)
   --key          Read an account key from stdin instead of signing in
   --no-code-tab  Do not set up Claude Desktop's Code tab (Windows; connect and login)
@@ -30,17 +31,21 @@ function parseArgs(argv) {
   const args = argv.slice();
   let command = 'connect';
   if (args.length && !args[0].startsWith('-')) command = args.shift();
+  let teamId;
+  const teamIndex = args.indexOf('--team');
+  if (teamIndex >= 0) { teamId = args[teamIndex + 1] || ''; args.splice(teamIndex, 2); }
   const flags = new Set(args);
   const known = new Set(['--force', '--key', '--no-code-tab', '-h', '--help', '--version', '-v']);
   const unknown = args.filter((a) => !known.has(a));
-  return { command, flags, unknown };
+  if (teamId !== undefined && (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(teamId) || !['connect', 'login'].includes(command) || flags.has('--key'))) unknown.push('--team requires a Team ID and sign-in');
+  return { command, flags, unknown, teamId };
 }
 
 async function run(argv, io) {
   const out = (line = '') => io.stdout.write(line + '\n');
   const err = (line = '') => io.stderr.write(line + '\n');
 
-  const { command, flags, unknown } = parseArgs(argv);
+  const { command, flags, unknown, teamId } = parseArgs(argv);
   if (flags.has('--version') || flags.has('-v')) {
     out(require('../package.json').version);
     return 0;
@@ -82,11 +87,12 @@ async function run(argv, io) {
   try {
     switch (command) {
       case 'connect':
-        return await connect(ctx, { force: flags.has('--force'), codeTab: !flags.has('--no-code-tab') });
+        return await connect(ctx, { teamId, force: flags.has('--force'), codeTab: !flags.has('--no-code-tab') });
       case 'login':
         return await connect(ctx, {
           force: flags.has('--force'),
           login: true,
+          teamId,
           keyFromStdin: flags.has('--key'),
           codeTab: !flags.has('--no-code-tab'),
         });

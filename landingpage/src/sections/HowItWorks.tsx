@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Bot, Cloud, Shrink } from "lucide-react";
-import { CodeBlock, EASE, Kicker } from "../components/ui";
+import { EASE, Kicker } from "../components/ui";
 import { cn } from "../lib/utils";
 
 function DiagramNode({
@@ -96,9 +96,11 @@ export function HowItWorks() {
             transition={{ duration: 0.5, ease: EASE, delay: 0.1 }}
           >
             <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3">
-              step 1 — Singup for a Plan
+              step 1 — sign up for a plan
             </p>
-            <CodeBlock code="Sign up for a Plan of your Choice" />
+            <div className="paper-panel p-4 font-mono text-[12.5px] leading-relaxed text-ink-2">
+              Sign up for a Plan of your Choice
+            </div>
           </motion.div>
           <motion.div
             initial={{ opacity: 0, y: 18 }}
@@ -109,7 +111,9 @@ export function HowItWorks() {
             <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3">
               step 2 — connect your agent
             </p>
-            <CodeBlock code="Download the Installer and Start using any coding agent " />
+            <div className="paper-panel p-4 font-mono text-[12.5px] leading-relaxed text-ink-2">
+              Download the Installer and Start using any coding agent
+            </div>
           </motion.div>
         </div>
       </div>

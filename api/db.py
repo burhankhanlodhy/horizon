@@ -89,7 +89,7 @@ async def create_session(user_id: str, token_hash: str) -> datetime:
 async def resolve_session(token_hash: str) -> asyncpg.Record | None:
     query = f"""
         SELECT u.id AS user_id, u.email, u.name, u.created_at, u.email_verified_at,
-               s.id AS session_id,
+               s.id AS session_id, s.sso_team_id,
                COALESCE(sub.plan, 'free') AS plan,
                {EFFECTIVE_STATUS_SQL.format(grace="$2")} AS subscription_status
         FROM core.sessions s
@@ -98,6 +98,12 @@ async def resolve_session(token_hash: str) -> asyncpg.Record | None:
         WHERE s.token_hash = $1
           AND s.revoked_at IS NULL
           AND s.expires_at > now()
+          AND (s.sso_team_id IS NULL OR EXISTS (
+              SELECT 1 FROM core.team_sso_configs c
+              JOIN core.team_memberships m ON m.team_id=c.team_id
+              WHERE c.team_id=s.sso_team_id AND c.revision=s.sso_revision AND c.enabled
+                AND m.id=s.sso_membership_id AND m.user_id=s.user_id AND m.left_at IS NULL
+          ))
     """
     row = await _conn().fetchrow(query, token_hash, FEE_GRACE_DAYS)
     if row:
@@ -120,7 +126,10 @@ async def revoke_session(token_hash: str) -> None:
 
 async def resolve_api_key(key_hash: str) -> asyncpg.Record | None:
     row = await _conn().fetchrow(
-        "SELECT id, user_id, scopes FROM core.api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+        "SELECT k.id, k.user_id, k.scopes, k.team_id, k.membership_id FROM core.api_keys k "
+        "WHERE k.key_hash=$1 AND k.revoked_at IS NULL AND (k.team_id IS NULL OR EXISTS ("
+        "SELECT 1 FROM core.team_memberships m WHERE m.id=k.membership_id "
+        "AND m.team_id=k.team_id AND m.user_id=k.user_id AND m.left_at IS NULL))",
         key_hash,
     )
     if row:

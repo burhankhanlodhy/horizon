@@ -20,7 +20,7 @@ class ApiError extends Error {
   }
 }
 
-function request(baseUrl, route, { method = 'GET', token, body, timeoutMs = TIMEOUT_MS } = {}) {
+function request(baseUrl, route, { method = 'GET', token, body, teamId, timeoutMs = TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     let url;
     try {
@@ -37,6 +37,7 @@ function request(baseUrl, route, { method = 'GET', token, body, timeoutMs = TIME
       headers['content-length'] = payload.length;
     }
     if (token) headers.authorization = `Bearer ${token}`;
+    if (teamId) headers['x-contextshrink-team'] = teamId;
     const req = lib.request(url, { method, headers, timeout: timeoutMs }, (res) => {
       const chunks = [];
       let bytes = 0;
@@ -89,11 +90,12 @@ async function signIn(baseUrl, email, password) {
 }
 
 /** Creates the proxy key for this computer. Returns { id, key }; the key is secret. */
-async function createDeviceKey(baseUrl, token, name) {
+async function createDeviceKey(baseUrl, token, name, teamId) {
   const res = await request(baseUrl, '/keys', {
     method: 'POST',
     token,
     body: { name, scopes: KEY_SCOPES },
+    teamId,
   });
   if (res.status >= 400) throw new ApiError(detailOf(res, 'Could not create the account key'), res.status);
   const { id, key } = res.body || {};
@@ -104,10 +106,11 @@ async function createDeviceKey(baseUrl, token, name) {
 }
 
 /** Revokes a key by id. A key that is already gone counts as revoked. */
-async function revokeDeviceKey(baseUrl, token, id) {
+async function revokeDeviceKey(baseUrl, token, id, teamId) {
   const res = await request(baseUrl, `/keys/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     token,
+    teamId,
   });
   if (res.status === 404 || res.status === 204 || res.status === 200) return;
   throw new ApiError(detailOf(res, 'Could not revoke the account key'), res.status);

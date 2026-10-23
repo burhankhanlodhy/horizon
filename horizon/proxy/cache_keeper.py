@@ -386,7 +386,7 @@ class CacheKeeper:
             not liveness_id or getattr(owner, "compression_allowed", True) is False
         ):
             return
-        group = group_of(headers, liveness_id, getattr(owner, "user_id", None))
+        group = group_of(headers, liveness_id, getattr(owner, "tenant_id", getattr(owner, "user_id", None)))
         # A real request for an ended id is the session coming back (``claude --resume``
         # reuses the id): it starts a fresh group. Pings never come through here.
         self._ended.pop(group, None)
@@ -618,6 +618,10 @@ class CacheKeeper:
                 self._release(g, "unsupported")
                 return 0
             generation, owner, meta, model, ttl = g.generation, g.owner, g.meta, g.model, g.ttl
+            if owner is not None and hasattr(owner, "is_active") and not await owner.is_active():
+                g.stopped = True
+                self._release(g, "authorization")
+                return 0
             rates = _rates(model) if g.flavor == ANTHROPIC else _rates(model, "openai")
             started = self._clock()
             status, usage, estimated = 0, {}, False

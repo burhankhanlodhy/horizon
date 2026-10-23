@@ -22,6 +22,7 @@ graph search|trace|query PROJECT "QUERY_OR_SYMBOL"
 ` : '';
 const HELP = `contextshrink-codex ${VERSION}
 Usage: npx contextshrink-codex [connect|login|status|savings|savings-window|chats|${GRAPH_AVAILABLE ? 'graph|' : ''}disconnect|logout]
+  --team <id>   Connect to a Team workspace (copy its ID from the dashboard)
   connect       Sign in to ContextShrink and configure local Codex
   login [--key] Rotate the device key, or paste a ContextShrink key
   status        Inspect the local connection without making model requests
@@ -75,7 +76,7 @@ async function credentials(ctx, paths) {
   const password = await ctx.prompter.ask('Password: ', { hidden: true });
   return api.signIn(paths.apiUrl, email, password);
 }
-async function connect(ctx, paths, { login, keyFromStdin }) {
+async function connect(ctx, paths, { login, keyFromStdin, teamId }) {
   checkAuthMode(paths);
   const current = read(paths.config);
   const state = stateAt(paths);
@@ -84,7 +85,7 @@ async function connect(ctx, paths, { login, keyFromStdin }) {
   if (state) {
     // Validate ownership even on a repeat connect; never claim a route after edits.
     original = toml.restore(current, state);
-    if (!login) { ctx.out('Already configured. Restart the desktop app and start a new Codex chat.'); return 0; }
+    if (!login && (!teamId || teamId === state.team_id)) { ctx.out('Already configured. Restart the desktop app and start a new Codex chat.'); return 0; }
   }
   // Validate the entire config before requesting credentials or minting a key.
   toml.connectText(original, paths.proxyUrl + '/v1', 'cs_live_preflightabcdefghijklmnop');
@@ -95,22 +96,23 @@ async function connect(ctx, paths, { login, keyFromStdin }) {
       if (!/^cs_live_[A-Za-z0-9_-]{20,200}$/.test(key)) throw new toml.ConfigError('That is not a ContextShrink account key.');
     } else {
       token = await credentials(ctx, paths);
-      const created = await api.createDeviceKey(paths.apiUrl, token, `${os.hostname().slice(0, 60)} (npx Codex)`);
+      const created = await api.createDeviceKey(paths.apiUrl, token, `${os.hostname().slice(0, 60)} (npx Codex)`, teamId);
       key = created.key; id = created.id;
     }
     const keepalive = /^[a-f0-9]{24}$/.test(account.keepalive_id || '') ? account.keepalive_id : crypto.randomBytes(12).toString('hex');
     const change = toml.connectText(original, `${paths.proxyUrl}/k/${keepalive}/v1`, key);
-    const next = { version: 2, ...change, configExisted: state ? state.configExisted : fs.existsSync(paths.config), device_key_id: id, keepalive_id: keepalive };
+    const next = { version: 2, ...change, configExisted: state ? state.configExisted : fs.existsSync(paths.config), device_key_id: id, keepalive_id: keepalive, team_id: teamId || null };
     // Record restoration data before activating the route. Roll back on write failure.
     files.writePrivateJson(paths.state, next);
     try { writeConfig(paths, change.written); }
     catch (err) { if (state) files.writePrivateJson(paths.state, state); else files.removeFile(paths.state); throw err; }
     persisted = true;
-    files.writePrivateJson(paths.account, { version: 1, keepalive_id: keepalive, device_key_id: id });
+    files.writePrivateJson(paths.account, { version: 1, keepalive_id: keepalive, device_key_id: id, team_id: teamId || null });
     if (token && account.device_key_id && account.device_key_id !== id) {
-      try { await api.revokeDeviceKey(paths.apiUrl, token, account.device_key_id); }
+      try { await api.revokeDeviceKey(paths.apiUrl, token, account.device_key_id, account.team_id); }
       catch { ctx.out('The earlier key remains active; revoke it on the API Keys page.'); }
     }
+    ctx.out(teamId ? `Workspace: Team ${teamId}` : 'Workspace: Personal (or the workspace of your pasted key).');
     ctx.out('Codex configured for proxy.contextshrink.com using your existing ChatGPT sign-in.');
     ctx.out('Restart ChatGPT/Codex Desktop fully, then start a NEW local Codex chat.');
     ctx.out('Check savings with: npx contextshrink-codex savings');
@@ -118,7 +120,7 @@ async function connect(ctx, paths, { login, keyFromStdin }) {
     return 0;
   } catch (error) {
     if (token && id && !persisted) {
-      try { await api.revokeDeviceKey(paths.apiUrl, token, id); } catch { ctx.err('A new key could not be revoked. Review the API Keys page.'); }
+      try { await api.revokeDeviceKey(paths.apiUrl, token, id, teamId); } catch { ctx.err('A new key could not be revoked. Review the API Keys page.'); }
     }
     throw error;
   } finally { if (token) await api.signOut(paths.apiUrl, token); }
@@ -137,7 +139,7 @@ function disconnect(ctx, paths) {
   // This also recovers a failed account-file write after an otherwise successful login.
   const account = files.readOwnJson(paths.account, 'Codex account state') || {};
   if (account.device_key_id !== state.device_key_id) {
-    files.writePrivateJson(paths.account, { version: 1, keepalive_id: state.keepalive_id, device_key_id: state.device_key_id });
+    files.writePrivateJson(paths.account, { version: 1, keepalive_id: state.keepalive_id, device_key_id: state.device_key_id, team_id: state.team_id || null });
   }
   if (!state.configExisted && restored === '') files.removeFile(paths.config);
   else writeConfig(paths, restored);
@@ -152,7 +154,7 @@ async function logout(ctx, paths) {
   if (!account) { ctx.out('No saved device key.'); return 0; }
   if (account.device_key_id) {
     const token = await credentials(ctx, paths);
-    try { await api.revokeDeviceKey(paths.apiUrl, token, account.device_key_id); }
+    try { await api.revokeDeviceKey(paths.apiUrl, token, account.device_key_id, account.team_id); }
     finally { await api.signOut(paths.apiUrl, token); }
     ctx.out('Device key revoked.');
   } else ctx.out('A pasted key is not revoked here; manage it on the API Keys page.');
@@ -215,6 +217,13 @@ async function run(argv, io) {
     if (!GRAPH_AVAILABLE) { ctx.err('Graph tools are experimental and not part of this release.'); return 2; }
     return require('./graph-command.cjs').run(flags, ctx);
   }
+  let teamId;
+  if (flags.includes('--team')) {
+    const index = flags.indexOf('--team');
+    teamId = flags[index + 1];
+    if (!['connect', 'login'].includes(command) || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(teamId || '') || flags.includes('--key')) { ctx.err('Use connect --team <Team ID> or login --team <Team ID>.'); return 2; }
+    flags.splice(index, 2);
+  }
   const selectedChats = command === 'chats' ? chatArgs(flags) : null;
   if (!COMMANDS.has(command) || (command === 'chats' ? !selectedChats : flags.some(f => f !== '--key') || (flags.length && command !== 'login'))) { ctx.err(HELP); return 2; }
   let lock, lockFile;
@@ -233,7 +242,7 @@ async function run(argv, io) {
     if (command === 'chats') return runChats(ctx, paths, selectedChats);
     if (command === 'disconnect') return disconnect(ctx, paths);
     if (command === 'logout') return await logout(ctx, paths);
-    return await connect(ctx, paths, { login: command === 'login', keyFromStdin: flags.includes('--key') });
+    return await connect(ctx, paths, { login: command === 'login', keyFromStdin: flags.includes('--key'), teamId });
   } catch (err) {
     const known = err instanceof toml.ConfigError || err instanceof files.FileError || err instanceof api.ApiError || err instanceof Cancelled;
     // Never echo unexpected parser/HTTP errors that could include a secret config.

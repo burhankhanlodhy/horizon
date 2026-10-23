@@ -13,12 +13,16 @@ interface User {
   email: string;
   plan?: "free" | "pro" | "team" | null;
   subscription_status?: string | null;
+team_id?: string | null;
+team_role?: string | null;
+personal_plan?: string | null;
 }
 
 interface Session {
   user: User;
   device: string;
   dashboard_url: string;
+team_id: string | null;
 }
 
 interface Tool {
@@ -97,11 +101,13 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState("");
+const [savedTeamId, setSavedTeamId] = useState("");
 
   const restore = useCallback(async () => {
     setBooting(true);
     setBootError("");
     try {
+      setSavedTeamId((await invoke<string | null>("selected_team_id")) ?? "");
       setSession(await invoke<Session | null>("restore_session"));
     } catch (e) {
       setBootError(message(e));
@@ -122,9 +128,11 @@ export default function App() {
         <button className="primary" onClick={() => void restore()}>
           Try again
         </button>
+        <button onClick={() => void invoke("logout").catch(() => undefined).finally(() => { setSession(null); setBootError(""); setBooting(false); })}>Change Team ID or sign in</button>
+        {savedTeamId && <button onClick={() => void invoke("use_personal_workspace").then(() => { setSavedTeamId(""); return restore(); })}>Use Personal workspace</button>}
       </Splash>
     );
-  else if (!session) screen = <Login onSignedIn={setSession} />;
+  else if (!session) screen = <Login savedTeamId={savedTeamId} onSignedIn={(next) => { setSavedTeamId(next.team_id ?? ""); setSession(next); }} />;
   else screen = <Home session={session} onSignedOut={() => setSession(null)} />;
   return (
     <>
@@ -243,9 +251,10 @@ function Splash({ text, children }: { text: string; children?: React.ReactNode }
   );
 }
 
-function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
+function Login({ onSignedIn, savedTeamId }: { onSignedIn: (s: Session) => void; savedTeamId: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+const [teamId, setTeamId] = useState(savedTeamId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -254,7 +263,7 @@ function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
     setBusy(true);
     setError("");
     try {
-      onSignedIn(await invoke<Session>("login", { email, password }));
+      onSignedIn(await invoke<Session>("login", { email, password, teamId: teamId.trim() || null }));
     } catch (err) {
       setError(message(err));
     } finally {
@@ -281,6 +290,11 @@ function Login({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
+        </label>
+        <label>
+          Team ID (optional)
+          <input type="text" autoComplete="off" value={teamId} onChange={(e) => setTeamId(e.target.value)} placeholder="Leave blank for Personal" />
+          <span className="muted small">Copy the Team ID from the Team page in your dashboard.</span>
         </label>
         {error && <p className="error">{error}</p>}
         <button className="primary" disabled={busy}>
@@ -378,6 +392,7 @@ function Home({ session, onSignedOut }: { session: Session; onSignedOut: () => v
         <div className="who">
           <span>{user.name}</span>
           <span className="muted small">{user.email}</span>
+<span className="muted small">Workspace: {session.team_id ? `Team ${session.team_id}` : "Personal"}</span>
         </div>
       </header>
 

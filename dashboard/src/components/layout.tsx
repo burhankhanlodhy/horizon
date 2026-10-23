@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Link,
   NavLink,
@@ -22,12 +22,15 @@ import {
   Shrink,
   UserRound,
   X,
+  UsersRound,
 } from "lucide-react";
 import { cn, fmtUsd } from "../lib/utils";
 import { EASE } from "./ui";
 import { initials, useAccount } from "../lib/account";
 import { PROXY_URL, apiFetch } from "../lib/api";
 import { openPortal } from "../lib/billing";
+import { getSsoSessionTeamId } from "../lib/auth";
+import { getSelectedTeamId, setSelectedTeamId, useSelectedTeamId, WORKSPACE_CHANGE_EVENT } from "../lib/workspace";
 import {
   useBillingEstimate,
   type CompressionEntitlement,
@@ -185,6 +188,7 @@ const nav = [
   { to: "/keys", label: "API Keys", icon: KeyRound },
   { to: "/usage", label: "Usage", icon: BarChart3 },
   { to: "/subscriptions", label: "Subscriptions", icon: CreditCard },
+  { to: "/team", label: "Team", icon: UsersRound },
   { to: "/downloads", label: "Downloads", icon: Download },
   { to: "/docs", label: "Documentation", icon: BookOpen },
 ];
@@ -203,6 +207,7 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
     title: "Subscriptions",
     subtitle: "Providers, quotas and billing",
   },
+  "/team": { title: "Team", subtitle: "People, invitations and seat capacity" },
   "/downloads": {
     title: "Downloads",
     subtitle: "The ContextShrink desktop app for your computer",
@@ -240,14 +245,15 @@ function Logo() {
   );
 }
 
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+function NavItems({ onNavigate, teamEnabled }: { onNavigate?: () => void; teamEnabled: boolean }) {
   const { advanced, user } = useAccount();
   const items = user.is_admin
     ? [...nav, { to: "/messages", label: "Messages", icon: Inbox }]
     : nav;
+  const visibleItems = items.filter((item) => item.to !== "/team" || teamEnabled);
   return (
     <nav className="mt-8 flex flex-1 flex-col gap-1">
-      {items.map(({ to, label, icon: Icon }) => (
+      {visibleItems.map(({ to, label, icon: Icon }) => (
         <NavLink key={to} to={to} end={to === "/"} onClick={onNavigate}>
           {({ isActive }) => (
             <div
@@ -327,9 +333,45 @@ function ProxyStatus() {
 }
 
 export function Shell() {
-  const { user } = useAccount();
+  const { user, reloadAccount } = useAccount();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [teams, setTeams] = useState<{ id: string; name: string; role: string; status: string }[]>([]);
+  const [teamFeatureEnabled, setTeamFeatureEnabled] = useState(false);
+  const workspaceId = useSelectedTeamId();
+  const ssoSessionTeamId = getSsoSessionTeamId();
+  const teamListRequest = useRef(0);
+  const refreshTeams = async (validateSelection: boolean) => {
+    const request = ++teamListRequest.current;
+    try {
+      const { teams: available } = await apiFetch<{ teams: { id: string; name: string; role: string; status: string }[] }>("/teams");
+      if (request !== teamListRequest.current) return;
+      setTeams(available ?? []);
+      setTeamFeatureEnabled(true);
+      if (validateSelection && workspaceId && !available?.some((team) => team.id === workspaceId)) {
+        setSelectedTeamId(null);
+      }
+    } catch {
+      if (request !== teamListRequest.current) return;
+      if (validateSelection) {
+        setTeams([]);
+        setTeamFeatureEnabled(false);
+        setSelectedTeamId(null);
+      }
+    }
+  };
+  useEffect(() => {
+    const onWorkspaceChange = () => {
+      void reloadAccount();
+      void refreshTeams(false);
+    };
+    window.addEventListener(WORKSPACE_CHANGE_EVENT, onWorkspaceChange);
+    return () => window.removeEventListener(WORKSPACE_CHANGE_EVENT, onWorkspaceChange);
+  }, [reloadAccount]);
+  useEffect(() => {
+    void refreshTeams(true);
+  }, []);
+  const changeWorkspace = (next: string) => setSelectedTeamId(next || null);
   const meta = pageMeta[location.pathname] ?? {
     title: "ContextShrink",
     subtitle: "",
@@ -340,7 +382,7 @@ export function Shell() {
       {/* desktop sidebar */}
       <aside className="paper-panel hidden w-[250px] shrink-0 flex-col rounded-none border-y-0 border-l-0 px-4 py-6 lg:flex">
         <Logo />
-        <NavItems />
+        <NavItems teamEnabled={teamFeatureEnabled} />
         <ProxyStatus />
       </aside>
 
@@ -371,7 +413,7 @@ export function Shell() {
                   <X size={18} />
                 </button>
               </div>
-              <NavItems onNavigate={() => setMobileOpen(false)} />
+              <NavItems teamEnabled={teamFeatureEnabled} onNavigate={() => setMobileOpen(false)} />
               <ProxyStatus />
             </motion.aside>
           </motion.div>
@@ -401,6 +443,13 @@ export function Shell() {
               <p className="text-[13px] text-ink-3">{meta.subtitle}</p>
             )}
           </div>
+          <label className="flex items-center gap-1.5 text-xs text-ink-3">
+            Workspace
+            <select aria-label="Workspace" disabled={Boolean(ssoSessionTeamId)} value={ssoSessionTeamId ?? workspaceId ?? ""} onChange={(event) => changeWorkspace(event.target.value)} className="max-w-44 rounded-lg border border-ink/15 bg-card px-2.5 py-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-70">
+              <option value="">Personal</option>
+              {teams.filter((team) => team.status !== "left").map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+            </select>
+          </label>
           <div className="paper-panel hidden items-center gap-2 rounded-lg px-3 py-2 text-xs text-ink-3 md:flex">
             <svg
               width="13"

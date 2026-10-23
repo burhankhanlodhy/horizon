@@ -1,6 +1,6 @@
 """npx bar reads only the authenticated key's aggregate, on every plan."""
-import sys
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -82,7 +82,12 @@ def test_revocation_is_checked_on_each_poll(client):
 def test_gateway_exposes_only_the_named_usage_routes():
     caddy = (Path(__file__).resolve().parents[2] / "deploy/pi5-webtier/Caddyfile").read_text()
     pattern = next(line.split("path_regexp api ", 1)[1] for line in caddy.splitlines() if "@public_api path_regexp api " in line)
-    for allowed in ("/usage/key-summary", "/usage/summary"):
+    team = "00000000-0000-4000-8000-000000000099"
+    for allowed in ("/usage/key-summary", "/usage/summary", "/teams", f"/teams/{team}",
+                    f"/teams/{team}/invitations", f"/teams/{team}/invitations/{team}/resend",
+                    f"/teams/{team}/members/{team}", f"/teams/{team}/transfer-ownership",
+                    f"/teams/{team}/billing/seats/preview", "/team-invitations/accept"):
         assert re.fullmatch(pattern, allowed)
-    for private in ("/usage/keys", "/usage/key-summary/other", "/internal/proxy/authorize", "/docs"):
+    for private in ("/usage/keys", "/usage/key-summary/other", "/internal/proxy/authorize", "/docs",
+                    f"/teams/{team}/anything", f"/teams/{team}/billing/secrets"):
         assert not re.fullmatch(pattern, private)

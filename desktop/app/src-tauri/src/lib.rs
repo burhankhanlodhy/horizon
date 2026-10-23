@@ -215,6 +215,7 @@ struct Session {
     user: User,
     device: String,
     dashboard_url: String,
+    team_id: Option<String>,
 }
 
 /// Result of connecting Claude Code: its status and one row per target.
@@ -234,23 +235,34 @@ fn device_name() -> String {
 
 /// Makes sure this device has a working proxy key, creating one if needed.
 async fn ensure_device_key(state: &AppState, token: &str) -> Result<(), String> {
+    let team_id = secrets::team_id();
     if let Some(id) = secrets::device_key_id() {
-        let active = state.api.key_is_active(token, &id).await.map_err(|e| e.text())?;
-        if active && state.client.has_key() {
-            return Ok(());
+        let prior_team_id = secrets::device_key_team_id();
+        if prior_team_id.as_deref() == team_id.as_deref() {
+            let active = state.api.key_is_active(token, &id, team_id.as_deref()).await.map_err(|e| e.text())?;
+            if active && state.client.has_key() {
+                return Ok(());
+            }
         }
+        // The old device key belongs to its recorded workspace. Revoke it there
+        // before creating a replacement in the newly selected workspace.
+        let _ = state.api.revoke_key(token, &id, prior_team_id.as_deref()).await;
+        secrets::clear_device_key();
+        state.client.clear_key();
     }
-    let key = state
-        .api
-        .create_device_key(token, &device_name())
-        .await
-        .map_err(|e| e.text())?;
+    let key = state.api.create_device_key(token, &device_name(), team_id.as_deref()).await.map_err(|e| e.text())?;
     if let Err(e) = state.client.store_key(&key.key) {
-        // Never leave an unusable key active on the account.
-        let _ = state.api.revoke_key(token, &key.id).await;
+        let _ = state.api.revoke_key(token, &key.id, team_id.as_deref()).await;
         return Err(e);
     }
-    secrets::set_device_key_id(&key.id)
+    secrets::set_device_key_id(&key.id)?;
+    if let Err(e) = secrets::set_device_key_team_id(team_id.as_deref()) {
+        let _ = state.api.revoke_key(token, &key.id, team_id.as_deref()).await;
+        secrets::clear_device_key();
+        state.client.clear_key();
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Makes sure the forwarder on `port` is the one this app's client starts: its
@@ -418,6 +430,7 @@ async fn open_session(state: &AppState, token: &str, user: User) -> Result<Sessi
         user,
         device: device_name(),
         dashboard_url: api::app_url(),
+        team_id: secrets::team_id(),
     })
 }
 
@@ -427,7 +440,7 @@ async fn restore_session(state: State<'_, AppState>) -> Result<Option<Session>, 
     let Some(token) = secrets::session() else {
         return Ok(None);
     };
-    match state.api.me(&token).await {
+    match state.api.me(&token, secrets::team_id().as_deref()).await {
         Ok(user) => open_session(&state, &token, user).await.map(Some),
         Err(ApiError::Unauthorized) => {
             secrets::clear_all();
@@ -443,15 +456,29 @@ async fn login(
     state: State<'_, AppState>,
     email: String,
     password: String,
+    team_id: Option<String>,
 ) -> Result<Session, String> {
-    let (token, user) = state
+    let (token, _login_user) = state
         .api
         .login(email.trim(), &password)
         .await
         .map_err(|e| e.text())?;
-    secrets::set_session(&token)?;
-    // Fresh plan details (login returns only identity).
-    let user = state.api.me(&token).await.unwrap_or(user);
+    let team_id = team_id.filter(|id| !id.trim().is_empty()).map(|id| id.trim().to_string());
+    // Validate the selected workspace before changing the saved workspace or
+    // session. A typo or inaccessible Team must leave the previous selection and
+    // device-key association intact.
+    let user = match state.api.me(&token, team_id.as_deref()).await {
+        Ok(user) => user,
+        Err(error) => {
+            state.api.logout(&token).await;
+            return Err(error.text());
+        }
+    };
+    secrets::set_team_id(team_id.as_deref())?;
+    if let Err(error) = secrets::set_session(&token) {
+        let _ = state.api.logout(&token).await;
+        return Err(error);
+    }
     open_session(&state, &token, user).await
 }
 
@@ -467,7 +494,7 @@ async fn logout(state: State<'_, AppState>) -> Result<(), String> {
     state.session_open.store(false, Ordering::SeqCst);
     if let Some(token) = secrets::session() {
         if let Some(id) = secrets::device_key_id() {
-            let _ = state.api.revoke_key(&token, &id).await;
+            let _ = state.api.revoke_key(&token, &id, secrets::device_key_team_id().as_deref()).await;
         }
         state.api.logout(&token).await;
     }
@@ -495,7 +522,7 @@ pub fn uninstall_cleanup() {
         if let Some(token) = secrets::session() {
             tauri::async_runtime::block_on(async {
                 if let Some(id) = secrets::device_key_id() {
-                    let _ = state.api.revoke_key(&token, &id).await;
+                    let _ = state.api.revoke_key(&token, &id, secrets::device_key_team_id().as_deref()).await;
                 }
                 state.api.logout(&token).await;
             });
@@ -532,14 +559,25 @@ fn local_data_dir() -> Option<PathBuf> {
     None
 }
 
+/// The remembered workspace is available before sign-in so the user can keep or change it.
+#[tauri::command]
+fn selected_team_id() -> Option<String> {
+    secrets::team_id()
+}
+
+/// Clear an inaccessible saved Team only after an explicit user choice.
+#[tauri::command]
+fn use_personal_workspace() -> Result<(), String> {
+    secrets::set_team_id(None)
+}
 /// Plan, savings, Free cap and unpaid-fee details for the header.
 #[tauri::command]
 async fn account_summary(state: State<'_, AppState>) -> Result<Value, String> {
     let token = secrets::session().ok_or("Not signed in")?;
-    let user = state.api.me(&token).await.map_err(|e| e.text())?;
+    let user = state.api.me(&token, secrets::team_id().as_deref()).await.map_err(|e| e.text())?;
     let estimate = state
         .api
-        .billing_estimate(&token)
+        .billing_estimate(&token, secrets::team_id().as_deref())
         .await
         .map_err(|e| e.text())?;
     Ok(serde_json::json!({ "user": user, "estimate": estimate }))
@@ -762,6 +800,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             restore_session,
+            selected_team_id,
+            use_personal_workspace,
             login,
             logout,
             account_summary,

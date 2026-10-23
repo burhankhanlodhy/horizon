@@ -315,3 +315,38 @@ def test_end_is_idempotent_and_harmless_without_a_group() -> None:
     assert _key("never-seen") in keeper._groups
     clock.t += 3300
     assert _run(keeper.tick()) == 1
+
+
+def test_team_and_personal_keepalive_groups_cannot_merge_for_the_same_user():
+    from horizon.proxy.account_analytics import AccountContext
+    clock = _Clock()
+    upstream = _Upstream({"tok"})
+    keeper = CacheKeeper(upstream, clock=clock)
+    personal = AccountContext("same-user", "personal-key", None)
+    team = AccountContext("same-user", "team-key", None, team_id="team", membership_id="member")
+    _request(keeper, "personal", "tok", owner=personal)
+    _request(keeper, "team", "tok", owner=team)
+    assert _key(owner_id=personal.tenant_id) in keeper._groups
+    assert _key(owner_id=team.tenant_id) in keeper._groups
+    assert len(keeper._groups) == 2
+    assert keeper.end(LIVENESS, team.tenant_id) is True
+    assert _key(owner_id=team.tenant_id) not in keeper._groups
+    assert not keeper._groups[_key(owner_id=personal.tenant_id)].stopped
+
+
+def test_background_team_ping_stops_when_membership_authorization_is_revoked():
+    from horizon.proxy.account_analytics import AccountContext
+    clock, up = _Clock(), _Upstream({"tok"})
+    keeper = CacheKeeper(up, clock=clock)
+    calls = []
+    async def denied():
+        calls.append(True)
+        return 403, None
+    owner = AccountContext("user", "key", None, team_id="team", membership_id="member", revalidate=denied)
+    _request(keeper, "before-removal", "tok", owner=owner)
+    clock.t += 3300
+    assert _run(keeper.tick()) == 0
+    assert calls == [True]
+    assert not up.tokens  # No upstream request or bill after revocation.
+    group = keeper._groups[_key(owner_id=owner.tenant_id)]
+    assert group.stopped and not group.headers and not group.body

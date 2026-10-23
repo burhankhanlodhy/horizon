@@ -45,7 +45,7 @@ def _logout(state: dict[str, Any], *, quiet: bool = False) -> bool:
     revoked = False
     if token:
         try:
-            hosted.revoke_key(token, str(state["key_id"]))
+            hosted.revoke_key(token, str(state["key_id"]), state.get("team_id"))
             revoked = True
         except hosted.ApiError as exc:
             if not quiet:
@@ -63,10 +63,13 @@ def _logout(state: dict[str, Any], *, quiet: bool = False) -> bool:
 @main.command()
 @click.option("--email", default=None, help="Account email (prompted when omitted).")
 @click.option("--force", is_flag=True, help="Sign in again, replacing this device's key.")
-def login(email: str | None, force: bool) -> None:
+@click.option("--team", "team_id", type=click.UUID, default=None, help="Team workspace ID from the dashboard.")
+def login(email: str | None, force: bool, team_id=None) -> None:
     """Sign in to ContextShrink so `horizon wrap` uses the hosted proxy."""
     state = hosted.load_state()
     if state and not force:
+        if team_id and str(team_id) != state.get("team_id"):
+            _fail("Use horizon login --force --team <Team ID> to change this device's workspace.")
         click.echo(f"Already signed in as {state.get('email')} ({state.get('device')}).")
         click.echo("Use `horizon login --force` to sign in again, or `horizon logout`.")
         return
@@ -83,7 +86,7 @@ def login(email: str | None, force: bool) -> None:
         _fail(str(exc))
     device = hosted.device_name()
     try:
-        key = hosted.create_device_key(token, device)
+        key = hosted.create_device_key(token, device, str(team_id) if team_id else None)
     except hosted.ApiError as exc:
         hosted.end_session(token)
         _fail(f"could not create a device key: {exc}")
@@ -93,7 +96,7 @@ def login(email: str | None, force: bool) -> None:
         set_secret(hosted.SESSION_ENTRY, token, allow_file=True)
     except VaultError as exc:
         try:
-            hosted.revoke_key(token, str(key["id"]))
+            hosted.revoke_key(token, str(key["id"]), str(team_id) if team_id else None)
         finally:
             hosted.end_session(token)
         _fail(str(exc))
@@ -104,6 +107,7 @@ def login(email: str | None, force: bool) -> None:
             "name": user.get("name"),
             "user_id": user.get("id"),
             "key_id": key["id"],
+            "team_id": str(team_id) if team_id else None,
             "device": device,
             "storage": storage,
             "api_url": hosted.api_url(),
@@ -112,6 +116,7 @@ def login(email: str | None, force: bool) -> None:
         }
     )
     click.echo(f"Signed in as {user.get('email') or email}. Device key '{device}' created.")
+    click.echo(f"  Workspace: Team {team_id}" if team_id else "  Workspace: Personal")
     if storage == "file":
         from horizon.vault import fallback_path
 
@@ -161,10 +166,10 @@ def account(as_json: bool) -> None:
     if not token:
         _fail("this device's session is missing. Run: horizon login --force")
     try:
-        user = hosted.me(token)
-        estimate = hosted.billing_estimate(token)
-        usage = hosted.usage_summary(token, 30)
-        key_active = hosted.key_is_active(token, str(state["key_id"]))
+        user = hosted.me(token, state.get("team_id"))
+        estimate = hosted.billing_estimate(token, state.get("team_id"))
+        usage = hosted.usage_summary(token, 30, state.get("team_id"))
+        key_active = hosted.key_is_active(token, str(state["key_id"]), state.get("team_id"))
     except hosted.ApiError as exc:
         _fail(str(exc))
 

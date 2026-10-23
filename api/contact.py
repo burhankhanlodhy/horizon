@@ -152,7 +152,7 @@ async def set_handled(message_id: UUID, handled: bool) -> bool:
 
 def install(app: FastAPI, current_user) -> None:
     async def require_admin(user: asyncpg.Record = Depends(current_user)) -> asyncpg.Record:
-        if not is_admin(user["email"]):
+        if user.get("sso_team_id") or not is_admin(user["email"]):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Admins only")
         return user
 

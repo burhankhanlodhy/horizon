@@ -22,6 +22,9 @@ import sys
 import stripe
 
 PRO_PRICE_LOOKUP_KEY = os.environ.get("STRIPE_PRO_PRICE_LOOKUP_KEY", "contextshrink_pro_monthly")
+TEAM_PRICE_LOOKUP_KEY = os.environ.get(
+    "STRIPE_TEAM_PRICE_LOOKUP_KEY", "contextshrink_team_seat_monthly"
+)
 WEBHOOK_EVENTS = [
     "checkout.session.completed",
     "customer.subscription.created",
@@ -67,6 +70,35 @@ def ensure_pro_price(client: stripe.StripeClient) -> None:
     log(f"Created Pro product {product.id} and price {price.id}")
 
 
+def ensure_team_price(client: stripe.StripeClient) -> None:
+    """Create the recurring $5 seat price used by Team Checkout."""
+    found = client.v1.prices.list(
+        {"lookup_keys": [TEAM_PRICE_LOOKUP_KEY], "active": True, "limit": 1}
+    )
+    if found.data:
+        log(f"Team seat price exists: {found.data[0].id}")
+        return
+    product = client.v1.products.create(
+        {
+            "name": "ContextShrink Team",
+            "description": "Monthly ContextShrink Team seats; minimum three seats.",
+        },
+        {"idempotency_key": "contextshrink-team-product-v1"},
+    )
+    price = client.v1.prices.create(
+        {
+            "product": product.id,
+            "currency": "usd",
+            "unit_amount": 500,
+            "recurring": {"interval": "month"},
+            "lookup_key": TEAM_PRICE_LOOKUP_KEY,
+            "nickname": "Team seat monthly ($5)",
+        },
+        {"idempotency_key": "contextshrink-team-seat-price-v1"},
+    )
+    log(f"Created Team product {product.id} and seat price {price.id}")
+
+
 def ensure_portal(client: stripe.StripeClient, return_url: str) -> None:
     existing = client.v1.billing_portal.configurations.list({"limit": 1})
     if existing.data:
@@ -84,6 +116,29 @@ def ensure_portal(client: stripe.StripeClient, return_url: str) -> None:
         {"idempotency_key": "contextshrink-portal-v1"},
     )
     log(f"Created Customer Portal configuration {config.id}")
+
+
+def ensure_team_portal(client: stripe.StripeClient, return_url: str) -> None:
+    """Create a Team portal without self-service subscription quantity edits."""
+    existing = client.v1.billing_portal.configurations.list({"limit": 100})
+    for config in existing.data:
+        metadata = config.metadata.to_dict() if config.metadata else {}
+        if metadata.get("contextshrink_scope") == "team":
+            log(f"Team Customer Portal configuration exists: {config.id}")
+            return
+    config = client.v1.billing_portal.configurations.create(
+        {
+            "default_return_url": return_url,
+            "metadata": {"contextshrink_scope": "team"},
+            "features": {
+                "invoice_history": {"enabled": True},
+                "payment_method_update": {"enabled": True},
+                "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+            },
+        },
+        {"idempotency_key": "contextshrink-team-portal-v1"},
+    )
+    log(f"Created Team Customer Portal configuration {config.id}")
 
 
 def ensure_webhook(client: stripe.StripeClient, url: str, print_secret: bool) -> None:
@@ -114,7 +169,9 @@ def main() -> None:
     client = stripe.StripeClient(key)
     app_url = os.environ.get("APP_URL", "https://app.contextshrink.com").rstrip("/")
     ensure_pro_price(client)
+    ensure_team_price(client)
     ensure_portal(client, f"{app_url}/subscriptions")
+    ensure_team_portal(client, f"{app_url}/subscriptions")
     if args.webhook_url:
         ensure_webhook(client, args.webhook_url, args.print_webhook_secret)
 

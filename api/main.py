@@ -8,8 +8,9 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
+from uuid import UUID
 
 import account_email
 import analytics
@@ -18,10 +19,13 @@ import billing
 import contact
 import db
 import security
+import team_billing
+import team_sso
+import teams
 import turnstile
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 CORS_ORIGINS = [
@@ -85,6 +89,10 @@ class AccountOut(UserOut):
     email_verified: bool = True
     # True while unverified accounts may not create proxy keys.
     email_verification_required: bool = False
+    team_id: str | None = None
+    team_role: str | None = None
+    personal_plan: str | None = None
+    sso_team_id: str | None = None
 
 
 class SubscriptionIn(BaseModel):
@@ -98,6 +106,17 @@ def _money(value: Decimal) -> Decimal:
 
 async def account_billing_estimate(user: asyncpg.Record) -> dict:
     """Calculate a private estimate from the authenticated account's proxy ledger."""
+    if user.get("team_id"):
+        result = await team_billing.estimate(user["team_id"], user)
+        total = {"seat_fee": result["seats_usd"], "savings_fee": result["savings_fee_usd"], "total": result["total_usd"]}
+        return {
+            **result, "plan": "team", "period_source": "subscription",
+            "estimated_savings_usd": result["savings_usd"],
+            "savings_fee_threshold_usd": 20.0, "savings_fee_rate": 0.05,
+            "estimates": {"team": total}, "estimated_total_usd": result["total_usd"],
+            "currency": "USD", "payment_issue": None,
+            "compression": await analytics.compression_entitlement(user["user_id"], user["team_id"]),
+        }
     row = await db._conn().fetchrow(
         "SELECT current_period_start, current_period_end, seat_count "
         "FROM core.subscriptions WHERE user_id=$1",
@@ -170,14 +189,34 @@ class IngestIn(BaseModel):
 
 async def current_user(
     authorization: str | None = Header(default=None),
-) -> asyncpg.Record:
+    x_contextshrink_team: str | None = Header(default=None),
+) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
     token = authorization.removeprefix("Bearer ").strip()
     row = await db.resolve_session(security.hash_token(token))
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
-    return row
+    user = dict(row)
+    if user.get("sso_team_id"):
+        if os.environ.get("CONTEXTSHRINK_TEAM_SSO_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+            raise HTTPException(401, "Team SSO is not available; use password sign-in")
+        if isinstance(x_contextshrink_team, str) and x_contextshrink_team and x_contextshrink_team != str(user["sso_team_id"]):
+            raise HTTPException(403, "This SSO session is limited to its Team workspace")
+        x_contextshrink_team = str(user["sso_team_id"])
+    if isinstance(x_contextshrink_team, str) and x_contextshrink_team:
+        try:
+            team_id = UUID(x_contextshrink_team)
+        except ValueError:
+            raise HTTPException(422, "Invalid Team workspace") from None
+        context = await teams.context(user, team_id)
+        active = await team_billing.entitlement(team_id)
+        user.update(
+            personal_plan=user["plan"], team_id=context["team_id"],
+            membership_id=context["membership_id"], team_role=context["role"],
+            plan="team", subscription_status="active" if active else "inactive",
+        )
+    return user
 
 
 # ------------------------------------------------------------ auth routes
@@ -251,14 +290,28 @@ async def me(user: asyncpg.Record = Depends(current_user)):
         created_at=user["created_at"],
         plan=user["plan"],
         subscription_status=user["subscription_status"],
-        is_admin=contact.is_admin(user["email"]),
+        is_admin=not user.get("sso_team_id") and contact.is_admin(user["email"]),
         email_verified=user["email_verified_at"] is not None,
         email_verification_required=account_email.verification_required(),
+        team_id=str(user["team_id"]) if user.get("team_id") else None,
+        team_role=user.get("team_role"), personal_plan=user.get("personal_plan"),
+        sso_team_id=str(user["sso_team_id"]) if user.get("sso_team_id") else None,
     )
 
 
 @app.get("/subscription")
 async def subscription(user: asyncpg.Record = Depends(current_user)):
+    if user.get("team_id"):
+        row = await team_billing._team_row(user["team_id"])
+        return {
+            "plan": "team", "status": user["subscription_status"],
+            "team_id": str(user["team_id"]), "team_role": user["team_role"],
+            "billing_mode": "stripe", "has_billing_account": bool(row["stripe_customer_id"]),
+            "has_subscription": bool(row["stripe_subscription_id"]),
+            "cancel_at_period_end": row["cancel_at_period_end"], "cancel_at": None,
+            "current_period_end": row["current_period_end"],
+            "estimate": await account_billing_estimate(user),
+        }
     row = await db._conn().fetchrow(
         "SELECT stripe_customer_id, stripe_subscription_id, cancel_at_period_end, cancel_at, current_period_end "
         "FROM core.subscriptions WHERE user_id=$1",
@@ -278,6 +331,8 @@ async def subscription(user: asyncpg.Record = Depends(current_user)):
 
 @app.put("/subscription")
 async def change_subscription(body: SubscriptionIn, user: asyncpg.Record = Depends(current_user)):
+    if user.get("team_id"):
+        raise HTTPException(409, "Manage this Team subscription from Team billing")
     # Only Free is self-serve here. Paid plans start in Stripe Checkout
     # (POST /billing/checkout) and are granted solely by verified webhooks.
     if body.plan != "free":
@@ -334,3 +389,6 @@ analytics.install(app, current_user)
 billing.install(app, current_user)
 contact.install(app, current_user)
 account_email.install(app, current_user)
+teams.install(app, current_user)
+team_billing.install(app, current_user, teams.context)
+team_sso.install(app, current_user)

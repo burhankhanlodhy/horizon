@@ -133,12 +133,14 @@ class ApiError(RuntimeError):
 _transport: httpx.BaseTransport | None = None
 
 
-def _request(method: str, path: str, *, token: str | None = None, json_body: Any = None) -> Any:
+def _request(method: str, path: str, *, token: str | None = None, json_body: Any = None, team_id: str | None = None) -> Any:
     from horizon._version import __version__
 
     headers = {"user-agent": f"ContextShrinkCLI/{__version__}"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if team_id:
+        headers["x-contextshrink-team"] = team_id
     try:
         with httpx.Client(timeout=20, transport=_transport) as client:
             resp = client.request(method, api_url(path), headers=headers, json=json_body)
@@ -168,22 +170,22 @@ def login(email: str, password: str) -> tuple[str, dict[str, Any]]:
     return str(body["token"]), dict(body.get("user") or {})
 
 
-def create_device_key(token: str, name: str) -> dict[str, Any]:
-    body = _request("POST", "/keys", token=token, json_body={"name": name, "scopes": KEY_SCOPES})
+def create_device_key(token: str, name: str, team_id: str | None = None) -> dict[str, Any]:
+    body = _request("POST", "/keys", token=token, team_id=team_id, json_body={"name": name, "scopes": KEY_SCOPES})
     if not isinstance(body, dict) or not body.get("key") or not body.get("id"):
         raise ApiError("Unexpected key response")
     return body
 
 
-def key_is_active(token: str, key_id: str) -> bool:
-    keys = _request("GET", "/keys", token=token)
+def key_is_active(token: str, key_id: str, team_id: str | None = None) -> bool:
+    keys = _request("GET", "/keys", token=token, team_id=team_id)
     return isinstance(keys, list) and any(
         k.get("id") == key_id and k.get("revoked_at") is None for k in keys if isinstance(k, dict)
     )
 
 
-def revoke_key(token: str, key_id: str) -> None:
-    _request("DELETE", f"/keys/{key_id}", token=token)
+def revoke_key(token: str, key_id: str, team_id: str | None = None) -> None:
+    _request("DELETE", f"/keys/{key_id}", token=token, team_id=team_id)
 
 
 def end_session(token: str) -> None:
@@ -193,16 +195,16 @@ def end_session(token: str) -> None:
         pass
 
 
-def me(token: str) -> dict[str, Any]:
-    return dict(_request("GET", "/auth/me", token=token) or {})
+def me(token: str, team_id: str | None = None) -> dict[str, Any]:
+    return dict(_request("GET", "/auth/me", token=token, team_id=team_id) or {})
 
 
-def billing_estimate(token: str) -> dict[str, Any]:
-    return dict(_request("GET", "/billing/estimate", token=token) or {})
+def billing_estimate(token: str, team_id: str | None = None) -> dict[str, Any]:
+    return dict(_request("GET", "/billing/estimate", token=token, team_id=team_id) or {})
 
 
-def usage_summary(token: str, days: int = 30) -> dict[str, Any]:
-    return dict(_request("GET", f"/usage/summary?days={days}", token=token) or {})
+def usage_summary(token: str, days: int = 30, team_id: str | None = None) -> dict[str, Any]:
+    return dict(_request("GET", f"/usage/summary?days={days}", token=token, team_id=team_id) or {})
 
 
 # -- relays -------------------------------------------------------------------------

@@ -219,7 +219,7 @@ async function finishConnect(ctx, paths, options) {
  * when already connected; `keyFromStdin` uses a key the user pastes instead of
  * signing in. `codeTab` false skips the Claude Desktop Code tab part (Windows).
  */
-async function connect(ctx, { force = false, login = false, keyFromStdin = false, codeTab = true } = {}) {
+async function connect(ctx, { force = false, login = false, keyFromStdin = false, codeTab = true, teamId } = {}) {
   const paths = cfg.resolvePaths(ctx.env);
   if (fs.existsSync(paths.desktopState)) {
     throw new Refusal(
@@ -236,7 +236,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
 
   if (state) {
     if (matchesWritten(block || {}, state.written)) {
-      if (!login) {
+      if (!login && (!teamId || teamId === home.team_id)) {
         if (plan.action === 'write') {
           // Connected by an earlier version, which did not set tool search. Add it
           // now. The proxy keys stay as they are, so no sign-in is needed.
@@ -274,7 +274,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     } else {
       const creds = await askCredentials(ctx);
       token = await api.signIn(paths.apiUrl, creds.email, creds.password);
-      const created = await api.createDeviceKey(paths.apiUrl, token, deviceKeyName());
+      const created = await api.createDeviceKey(paths.apiUrl, token, deviceKeyName(), teamId);
       key = created.key;
       deviceKeyId = created.id;
     }
@@ -296,6 +296,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
       version: 1,
       keepalive_id: keepalive,
       device_key_id: deviceKeyId,
+      team_id: teamId || null,
       updated_at: new Date().toISOString(),
     });
     persist(paths, settings, state, nextState, nextBlock);
@@ -303,7 +304,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     // A key from an earlier connect is ours. Revoke it now the new one is in place.
     if (token && home.device_key_id && home.device_key_id !== deviceKeyId) {
       try {
-        await api.revokeDeviceKey(paths.apiUrl, token, home.device_key_id);
+        await api.revokeDeviceKey(paths.apiUrl, token, home.device_key_id, home.team_id);
       } catch {
         ctx.out('Could not revoke the key from the earlier connect. Revoke it on the API Keys page.');
       }
@@ -315,7 +316,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     // A key made in this run must not stay active when nothing points at it.
     if (token && deviceKeyId) {
       try {
-        await api.revokeDeviceKey(paths.apiUrl, token, deviceKeyId);
+        await api.revokeDeviceKey(paths.apiUrl, token, deviceKeyId, teamId);
       } catch {
         // Reported below with the original error; the key can be revoked on the API Keys page.
       }
@@ -325,6 +326,7 @@ async function connect(ctx, { force = false, login = false, keyFromStdin = false
     if (token) await api.signOut(paths.apiUrl, token);
   }
 
+  ctx.out(teamId ? `Workspace: Team ${teamId}` : 'Workspace: Personal (or the workspace of your pasted key).');
   ctx.out(login ? 'Saved a new account key for this computer.' : 'Connected.');
   ctx.out(`Claude Code now sends its requests to ${new URL(paths.proxyUrl).host}.`);
   if (plan.action === 'write') ctx.out('Tool search is on (ENABLE_TOOL_SEARCH=true).');
@@ -471,7 +473,7 @@ async function logout(ctx) {
   }
   const token = await api.signIn(paths.apiUrl, creds.email, creds.password);
   try {
-    await api.revokeDeviceKey(paths.apiUrl, token, saved.device_key_id);
+    await api.revokeDeviceKey(paths.apiUrl, token, saved.device_key_id, saved.team_id);
   } finally {
     await api.signOut(paths.apiUrl, token);
   }
