@@ -4092,6 +4092,16 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
 
     _install_extensions(app, config, enabled=getattr(config, "proxy_extensions", None))
 
+    # ContextShrink Code engine identity: only registered when `horizon code-engine
+    # run` installed its gate. `ok` says whether compression is licensed right now.
+    from horizon.proxy.engine_hooks import health_payload
+
+    if health_payload() is not None:
+
+        @app.get("/__cs/health")
+        async def code_engine_health():
+            return JSONResponse(health_payload())
+
     # Health & Metrics
     # HEAD too: uptime monitors (UptimeRobot) probe with HEAD, and a HEAD that
     # matched no route would fall through to the passthrough relay.
@@ -6032,6 +6042,12 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         policy_allowed=_compact_policy_allowed,
     )
     app.add_middleware(AccountMiddleware, service=account_analytics)
+    if health_payload() is not None:
+        # Engine only: an unlicensed Messages call is relayed byte for byte, before
+        # any body-rewriting stage runs (horizon.proxy.engine_passthrough).
+        from horizon.proxy.engine_passthrough import LicensePassthrough
+
+        app.add_middleware(LicensePassthrough, proxy=proxy)
     return app
 
 
