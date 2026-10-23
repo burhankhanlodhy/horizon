@@ -125,25 +125,29 @@ def test_the_detached_start_retries_without_breakaway_when_the_job_refuses_it(
     assert not flags_seen[1] & runtime._CREATE_BREAKAWAY_FROM_JOB
 
 
-def test_the_embedded_client_runs_its_own_pythonw(tmp_path, monkeypatch) -> None:
-    folder = tmp_path / "engine"
-    (folder / "python").mkdir(parents=True)
-    (folder / "app").mkdir()
-    (folder / "horizon.exe").write_bytes(b"stub")
-    (folder / "python" / "pythonw.exe").write_bytes(b"pythonw")
-    (folder / "app" / "horizon_main.py").write_text("", encoding="utf-8")
-    monkeypatch.setenv(bundled_client.CLIENT_EXE_ENV, str(folder / "horizon.exe"))
+def test_the_embedded_build_runs_its_own_pythonw(tmp_path, monkeypatch) -> None:
+    engine = tmp_path / "engine"
+    folder = engine / "python"
+    folder.mkdir(parents=True)
+    (engine / "app").mkdir()
+    (folder / "python312._pth").write_text("", encoding="utf-8")
+    (folder / "python.exe").write_bytes(b"python")
+    (folder / "pythonw.exe").write_bytes(b"pythonw")
+    script = engine / "app" / "horizon_main.py"
+    script.write_text("", encoding="utf-8")
+    monkeypatch.delenv(bundled_client.CLIENT_EXE_ENV, raising=False)
+    monkeypatch.setattr(sys, "executable", str(folder / "python.exe"))
     monkeypatch.setattr(
-        runtime, "sys", SimpleNamespace(platform="win32", executable=sys.executable)
+        runtime, "sys", SimpleNamespace(platform="win32", executable=str(folder / "python.exe"))
     )
 
     assert runtime.background_command() == [
-        str(folder / "python" / "pythonw.exe"),
+        str(folder.resolve() / "pythonw.exe"),
         "-I",
         "-s",
         "-X",
         "utf8",
-        str(folder / "app" / "horizon_main.py"),
+        str(script.resolve()),
     ]
 
 

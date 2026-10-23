@@ -277,21 +277,18 @@ def background_command() -> list[str]:
 
     A console program started without a console gets a new console window on Windows.
     ``pythonw.exe`` is the same interpreter built for the GUI subsystem, so it has none.
-    Order: the embedded client's ``python\\pythonw.exe`` beside ``horizon.exe`` (the
-    bundled layout), then the ``pythonw.exe`` beside this interpreter, then the CLI
-    command as it is.
+    Order: the embedded build's ``python\\pythonw.exe`` (recognised from its files, see
+    ``bundled_client.embedded_layout``), then the ``pythonw.exe`` beside this interpreter,
+    then the CLI command as it is.
     """
-    from horizon.bundled_client import bundled_client_command, cli_command
+    from horizon.bundled_client import cli_command, embedded_layout, windowless_cli_command
 
     if sys.platform != "win32" or getattr(sys, "frozen", False):
         return cli_command()
-    client = bundled_client_command()
-    if client:
-        folder = Path(client[0]).parent
-        pythonw = folder / "python" / "pythonw.exe"
-        script = folder / "app" / "horizon_main.py"
-        if pythonw.is_file() and script.is_file():
-            return [str(pythonw), "-I", "-s", "-X", "utf8", str(script)]
+    layout = embedded_layout()
+    if layout is not None:
+        # The launcher's own command would be a console program; the bundle's pythonw.exe is not.
+        return windowless_cli_command(*layout)
     candidate = Path(sys.executable).with_name("pythonw.exe")
     if candidate.is_file():
         return [str(candidate), "-m", "horizon.cli"]
