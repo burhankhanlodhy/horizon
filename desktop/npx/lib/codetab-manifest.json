@@ -1,13 +1,13 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "files": {
     "claude-code-launcher.exe": {
-      "sha256": "8c019f81e8044b1a15a97d789fcee4f7faaa6c730a7d4ee868305a41056a855a",
+      "sha256": "039f5354725f22d3e2bfdc3b321f77151028377e2b0f0ec2d5a81f5eb954c022",
       "size": 284512
     },
     "contextshrink-codetab.exe": {
-      "sha256": "93297b36902d77615621e81094f1e4b24d9cdc6a70bb3a02474159a64a0dc195",
-      "size": 285024
+      "sha256": "f93ea24e06ea5658162575a82269f2f874a3b9bde0e507e9b8ff280155eb3757",
+      "size": 286048
     }
   }
 }
