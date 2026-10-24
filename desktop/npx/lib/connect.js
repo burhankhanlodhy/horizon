@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const cfg = require('./config');
 const files = require('./files');
 const codetab = require('./codetab');
+const lean = require('./lean');
 const savings = require('./savings');
 const device = require('./code-device');
 const engine = require('./code-engine');
@@ -237,7 +238,8 @@ function persist(paths, settings, state, nextState, settingsChanged) {
 }
 
 async function finishConnect(ctx, paths, options) {
-  const code = await codetab.setUpCodeTab(ctx, { settings: paths.settings, engineUrl: paths.engineUrl }, options);
+  const terminal = { settings: paths.settings, engineUrl: paths.engineUrl, leanWindow: options.leanWindow };
+  const code = await codetab.setUpCodeTab(ctx, terminal, options);
   savings.ensure(ctx, paths, { codeTab: !options.skip });
   return code;
 }
@@ -282,6 +284,8 @@ async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
   const block = envBlockOf(settings.payload, paths.settings);
   hooksOf(settings.payload, paths.settings);
   const state = readState(paths.state);
+  // Connect does not change keep-sessions-lean. It only keeps codetab.json in step with it.
+  const leanWindow = lean.windowOf(paths);
   const plan = toolSearchPlan(block, state);
   if (state) {
     if (!matchesWritten(block || {}, state.written) && !force) {
@@ -332,7 +336,7 @@ async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
     ctx.out('Start a new Claude Code session to use the connection.');
   }
   reportToolSearch(ctx, plan);
-  return finishConnect(ctx, paths, { skip: !codeTab });
+  return finishConnect(ctx, paths, { skip: !codeTab, leanWindow });
 }
 
 /**
@@ -340,6 +344,8 @@ async function connect(ctx, { force = false, codeTab = true, deps = {} } = {}) {
  * leaves the device: the device is released only when no ContextShrink tool is left.
  */
 async function uninstall(ctx, { deps = {} } = {}) {
+  // Keep-sessions-lean goes first, so the Code tab's codetab.json is still npx's when it is edited.
+  const leanDone = lean.undoLean(ctx);
   const undone = await codetab.undoCodeTab(ctx);
   await disconnectTerminal(ctx);
   if (undone !== 0) {
@@ -348,7 +354,7 @@ async function uninstall(ctx, { deps = {} } = {}) {
     return undone;
   }
   await device.leaveDevice(ctx, ctx.env, { tool: 'claude', deps });
-  return 0;
+  return leanDone;
 }
 
 async function disconnectTerminal(ctx) {
@@ -429,6 +435,7 @@ async function status(ctx) {
     ctx.out('Not connected.');
   }
   ctx.out(toolSearchLine(block));
+  ctx.out(lean.statusLine(block));
   if (state) ctx.out(savings.describe(settings.payload, state.ui));
   await device.reportDevice(ctx, ctx.env, { toolName: 'Claude' });
   await codetab.codeTabStatus(ctx);

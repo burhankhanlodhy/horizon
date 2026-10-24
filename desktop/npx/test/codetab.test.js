@@ -712,3 +712,31 @@ test('status says routed (npx), desktop app, or not set up, and never the key', 
     assert.match(routed.stdout, /^Code tab: routed \(npx\)\. 1 Claude Code version\(s\) patched; startup re-patch off\./m);
     assertNoKeyText([none.stdout, off.stdout, on.stdout, routed.stdout]);
   }));
+
+test('keep sessions lean carries into codetab.json: connect writes it, and lean off takes it out again', () =>
+  withCodeTab(async ({ sb, engine, paths }) => {
+    const on = await runCli(sb, ['lean', 'on']);
+    assert.strictEqual(on.code, 0, on.output);
+
+    const connected = await runCli(sb, []);
+    assert.strictEqual(connected.code, 0, connected.output);
+    assert.deepStrictEqual(readJson(paths.config), {
+      v: 1,
+      owner: 'npx',
+      enabled: true,
+      base_url: engine.url,
+      health_port: Number(new URL(engine.url).port),
+      env: { ENABLE_TOOL_SEARCH: 'true', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' },
+    });
+
+    const off = await runCli(sb, ['lean', 'off']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.deepStrictEqual(readJson(paths.config).env, { ENABLE_TOOL_SEARCH: 'true' });
+  }));
+
+test('connect without lean writes codetab.json with no lean window', () =>
+  withCodeTab(async ({ sb, paths }) => {
+    const connected = await runCli(sb, []);
+    assert.strictEqual(connected.code, 0, connected.output);
+    assert.deepStrictEqual(readJson(paths.config).env, { ENABLE_TOOL_SEARCH: 'true' });
+  }));

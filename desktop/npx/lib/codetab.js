@@ -414,14 +414,17 @@ function gatewayFromSettings(terminal) {
 
 // The forwarder format: no launch mode and no key. The launcher forwards to the engine.
 // The launcher only routes when v is 1 and enabled is true, so v must be written.
-function configFor(gateway) {
+// leanWindow is the keep-sessions-lean value (text), or null when lean is off.
+function configFor(gateway, leanWindow = null) {
+  const env = { ...gateway.env };
+  if (leanWindow) env[cfg.LEAN_KEY] = leanWindow;
   return {
     v: 1,
     owner: OWNER,
     enabled: true,
     base_url: gateway.base,
     health_port: Number(new URL(gateway.base).port),
-    env: gateway.env,
+    env,
   };
 }
 
@@ -551,7 +554,7 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
     if (skip) {
       if (existing) {
         // Brings an older codetab.json (before the forwarder format) up to date.
-        const text = configText(configFor(gatewayFromSettings(terminal)));
+        const text = configText(configFor(gatewayFromSettings(terminal), terminal.leanWindow));
         files.writePrivateText(paths.config, text);
         recordFollows(paths, text);
         ctx.out('Code tab left as it is (--no-code-tab).');
@@ -575,7 +578,7 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
     for (const name of FILE_NAMES) {
       await fetchFile(env, paths, base, manifest, name);
     }
-    const text = configText(configFor(gateway));
+    const text = configText(configFor(gateway, terminal.leanWindow));
     const previousBytes = readBytes(paths.config);
     const recordBytes = readBytes(paths.takeover);
     const oldRecord = readTakeover(paths.takeover);
@@ -787,6 +790,53 @@ async function codeTabStatus(ctx) {
   }
 }
 
+/**
+ * The keep-sessions-lean entry in the Code tab's codetab.json. state is "npx" when npx owns
+ * the file, "desktop" when the desktop app's file is there, and "absent" when there is none
+ * (or not Windows). current is { present, value } for CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
+function leanEntryOf(env) {
+  if (!isWindows(env)) return { state: 'absent', current: { present: false } };
+  const file = codeTabPaths(env).config;
+  const config = readConfig(file);
+  if (config === null) return { state: 'absent', current: { present: false } };
+  if (!ownedByUs(config)) return { state: 'desktop', current: { present: false } };
+  if (config.env !== undefined && !files.isPlainObject(config.env)) {
+    throw new CodeTabError(`${file} has a non-object 'env', so the Code tab was not touched.`);
+  }
+  const block = config.env || {};
+  const current = files.hasOwn(block, cfg.LEAN_KEY) ? { present: true, value: block[cfg.LEAN_KEY] } : { present: false };
+  return { state: 'npx', current };
+}
+
+/**
+ * Sets (entry.present) or removes the keep-sessions-lean entry in npx's codetab.json. Does
+ * nothing when npx does not own the file or the file already holds the entry. Returns true
+ * when it wrote. The desktop app's file is never changed.
+ */
+function setLeanEnv(env, entry) {
+  if (!isWindows(env)) return false;
+  const paths = codeTabPaths(env);
+  const config = readConfig(paths.config);
+  if (config === null || !ownedByUs(config)) return false;
+  if (config.env !== undefined && !files.isPlainObject(config.env)) {
+    throw new CodeTabError(`${paths.config} has a non-object 'env', so the Code tab was not touched.`);
+  }
+  const block = { ...(config.env || {}) };
+  if (entry.present) {
+    if (files.hasOwn(block, cfg.LEAN_KEY) && block[cfg.LEAN_KEY] === entry.value) return false;
+    block[cfg.LEAN_KEY] = entry.value;
+  } else {
+    if (!files.hasOwn(block, cfg.LEAN_KEY)) return false;
+    delete block[cfg.LEAN_KEY];
+  }
+  const text = configText({ ...config, env: block });
+  files.writePrivateText(paths.config, text);
+  // The takeover record follows the text, so a later uninstall still recognises this file.
+  recordFollows(paths, text);
+  return true;
+}
+
 module.exports = {
   CodeTabError,
   codeTabPaths,
@@ -795,5 +845,7 @@ module.exports = {
   undoCodeTab,
   codeTabStatus,
   configFor,
+  leanEntryOf,
+  setLeanEnv,
   signatureProblem,
 };
