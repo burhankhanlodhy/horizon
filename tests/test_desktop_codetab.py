@@ -482,6 +482,119 @@ def test_discover_roots_honours_override_and_drops_missing(tmp_path: Path) -> No
     assert dc.discover_roots({dc.ENV_ROOTS: ""}) == []
 
 
+def _desktop_env(base: Path) -> dict[str, str]:
+    """A temp LOCALAPPDATA and APPDATA. The real Claude Desktop folders are never passed in."""
+    return {
+        "LOCALAPPDATA": str(base / "Local"),
+        "APPDATA": str(base / "Roaming"),
+        "CLAUDE_CONFIG_DIR": str(base / "no-claude-settings"),
+    }
+
+
+def test_claude_desktop_candidates_list_claude_data_first(tmp_path: Path) -> None:
+    env = _desktop_env(tmp_path)
+    local = tmp_path / "Local"
+    publisher = local / "Claude-Data" / "claude_pzs8sxrjxfjjc"
+    (publisher / "claude-code").mkdir(parents=True)
+    # Not a publisher folder, so ignored.
+    (local / "Claude-Data" / "other").mkdir(parents=True)
+    package = local / "Packages" / "Claude_test"
+    package.mkdir(parents=True)
+
+    assert dc.claude_desktop_candidates(env) == [
+        publisher / "claude-code",
+        package / "LocalCache" / "Roaming" / "Claude" / "claude-code",
+        tmp_path / "Roaming" / "Claude" / "claude-code",
+    ]
+
+
+def test_discover_roots_finds_claude_data_folder_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dc.sys, "platform", "win32")
+    env = _desktop_env(tmp_path)
+    current = tmp_path / "Local" / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "claude-code"
+    current.mkdir(parents=True)
+    # A publisher folder with no claude-code folder has nothing to patch.
+    (tmp_path / "Local" / "Claude-Data" / "claude_empty").mkdir(parents=True)
+
+    assert dc.discover_roots(env) == [current]
+
+
+def test_discover_roots_reads_the_publisher_folder_name_case_insensitively(tmp_path: Path) -> None:
+    upper = tmp_path / "Local" / "Claude-Data" / "CLAUDE_abc123" / "claude-code"
+    upper.mkdir(parents=True)
+    candidates = dc.claude_desktop_candidates(_desktop_env(tmp_path))
+    assert candidates[0] == upper
+
+
+def test_remove_leaves_an_npx_owned_config_and_its_folders_alone(layout: Layout) -> None:
+    folder = layout.folder()
+    layout.install()
+    config_path = layout.data / "codetab.json"
+    # npx writes owner "npx" and enabled true; the desktop app's remove must not change either.
+    npx_config = json.dumps(
+        {
+            "v": 1,
+            "owner": "npx",
+            "enabled": True,
+            "base_url": "http://127.0.0.1:18788",
+            "health_port": 18788,
+            "env": {"ENABLE_TOOL_SEARCH": "true"},
+        },
+        indent=2,
+    ).encode("utf-8") + b"\n"
+    config_path.write_bytes(npx_config)
+    state_before = (layout.data / "codetab-state.json").read_bytes()
+
+    result = layout.remove()
+
+    assert result.left_for_npx is True
+    assert result.folders == []
+    assert result.config_removed is False and result.config_disabled is False
+    assert config_path.read_bytes() == npx_config
+    assert (layout.data / "codetab-state.json").read_bytes() == state_before
+    assert (folder / "claude.exe").read_bytes() == LAUNCHER_BYTES
+    assert (folder / "claude.cs-real.exe").read_bytes() == REAL_BYTES
+
+
+def test_remove_still_restores_a_desktop_owned_config(layout: Layout) -> None:
+    folder = layout.folder()
+    layout.install()
+    assert "owner" not in json.loads((layout.data / "codetab.json").read_text(encoding="utf-8"))
+
+    result = layout.remove()
+
+    assert result.left_for_npx is False
+    assert result.config_removed is True
+    assert (folder / "claude.exe").read_bytes() == REAL_BYTES
+
+
+def test_cli_remove_says_one_line_when_npx_owns_the_config(layout: Layout) -> None:
+    from click.testing import CliRunner
+
+    from horizon.cli.main import main
+
+    folder = layout.folder()
+    layout.install()
+    config_path = layout.data / "codetab.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["owner"] = "npx"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        ["codetab", "remove", "--root", str(layout.root), "--data-dir", str(layout.data)],
+        env={"CLAUDE_CONFIG_DIR": layout.environ["CLAUDE_CONFIG_DIR"]},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("\n") == 1
+    assert "belongs to npx contextshrink-claude" in result.output
+    assert json.loads(config_path.read_text(encoding="utf-8"))["enabled"] is True
+    assert (folder / "claude.exe").read_bytes() == LAUNCHER_BYTES
+
+
 def test_data_dir_override(tmp_path: Path) -> None:
     assert dc.data_dir({dc.ENV_DATA_DIR: str(tmp_path)}) == tmp_path
 

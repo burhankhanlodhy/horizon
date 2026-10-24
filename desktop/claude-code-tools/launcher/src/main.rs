@@ -1,7 +1,8 @@
 //! claude-code-launcher.exe
 //!
 //! Claude Desktop's Code tab starts `claude.exe` from a versioned folder under
-//! `%LOCALAPPDATA%\Packages\Claude_*\...\claude-code\<version>\<hash>\`. The
+//! `%LOCALAPPDATA%\Claude-Data\claude_<publisher>\claude-code\<version>\<hash>\`
+//! (or the older `%LOCALAPPDATA%\Packages\Claude_*\...\claude-code\` root). The
 //! ContextShrink patcher renames the real binary to `claude.cs-real.exe` and
 //! puts this launcher in its place as `claude.exe`.
 //!

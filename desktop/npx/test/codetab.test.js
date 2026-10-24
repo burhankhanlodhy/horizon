@@ -10,10 +10,11 @@ const assert = require('node:assert');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const { runCli, readJson } = require('./support');
 const code = require('./code-support');
-const { signatureProblem, configFor } = require('../lib/codetab');
+const { signatureProblem, configFor, desktopRoots } = require('../lib/codetab');
 
 const STUB = path.join(__dirname, 'fixtures', 'fake-codetab-helper.js');
 const SHIPPED_MANIFEST = path.join(__dirname, '..', 'lib', 'codetab-manifest.json');
@@ -87,7 +88,10 @@ function startReleases(served) {
 }
 
 // A sandbox with a fake Claude Desktop folder, a releases server and the stub helper.
-async function withCodeTab(fn, { served = servedFiles(), manifest, platform = 'win32', signature = false } = {}) {
+async function withCodeTab(
+  fn,
+  { served = servedFiles(), manifest, platform = 'win32', signature = false, desktopLayout = 'packages' } = {}
+) {
   const api = await code.startCodeApi();
   const engine = await code.startFakeEngine();
   const releases = await startReleases(served);
@@ -102,17 +106,12 @@ async function withCodeTab(fn, { served = servedFiles(), manifest, platform = 'w
   const manifestFile = path.join(sb.root, 'manifest.json');
   fs.writeFileSync(manifestFile, JSON.stringify(manifest || manifestFor(LAUNCHER_BYTES, HELPER_BYTES)));
 
-  const desktopRoot = path.join(
-    sb.localAppData,
-    'Packages',
-    'Claude_test',
-    'LocalCache',
-    'Roaming',
-    'Claude',
-    'claude-code',
-    '1.0.0',
-    'abc123'
-  );
+  // Where Claude Desktop keeps its Code: the current Claude-Data folder, or the older packaged root.
+  const desktopRootParts =
+    desktopLayout === 'claude-data'
+      ? [sb.localAppData, 'Claude-Data', 'claude_pzs8sxrjxfjjc', 'claude-code']
+      : [sb.localAppData, 'Packages', 'Claude_test', 'LocalCache', 'Roaming', 'Claude', 'claude-code'];
+  const desktopRoot = path.join(...desktopRootParts, '1.0.0', 'abc123');
   fs.mkdirSync(desktopRoot, { recursive: true });
   const claudeExe = path.join(desktopRoot, 'claude.exe');
   fs.writeFileSync(claudeExe, 'real claude bytes');
@@ -390,6 +389,87 @@ test('status shows one Code tab line and never the key', () =>
     assert.match(status.stdout, /Code tab: routed \(npx\)\. 1 Claude Code version\(s\) patched; startup re-patch on\./);
     assertNoKeyText([status.stdout, status.stderr]);
   }));
+
+// A temp LOCALAPPDATA and APPDATA for desktopRoots. Only temp folders are ever created here.
+function desktopRootsSandbox() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'contextshrink-roots-'));
+  const localAppData = path.join(base, 'LocalAppData');
+  const appData = path.join(base, 'AppData');
+  fs.mkdirSync(localAppData, { recursive: true });
+  fs.mkdirSync(appData, { recursive: true });
+  return { base, env: { LOCALAPPDATA: localAppData, APPDATA: appData }, localAppData, appData };
+}
+
+function mkdirs(...parts) {
+  fs.mkdirSync(path.join(...parts), { recursive: true });
+  return path.join(...parts);
+}
+
+test('desktopRoots finds the Claude-Data folder, with the publisher folder read from disk', () => {
+  const sb = desktopRootsSandbox();
+  try {
+    const current = mkdirs(sb.localAppData, 'Claude-Data', 'claude_pzs8sxrjxfjjc', 'claude-code');
+    // Other folders in Claude-Data are not Claude Desktop's publisher folders, and a publisher
+    // folder without a claude-code folder has nothing to patch.
+    mkdirs(sb.localAppData, 'Claude-Data', 'other', 'claude-code');
+    mkdirs(sb.localAppData, 'Claude-Data', 'claude_empty');
+    assert.deepStrictEqual(desktopRoots(sb.env), [current]);
+  } finally {
+    fs.rmSync(sb.base, { recursive: true, force: true });
+  }
+});
+
+test('desktopRoots keeps the older packaged and classic roots', () => {
+  const sb = desktopRootsSandbox();
+  try {
+    const packaged = mkdirs(sb.localAppData, 'Packages', 'Claude_test', 'LocalCache', 'Roaming', 'Claude', 'claude-code');
+    const classic = mkdirs(sb.appData, 'Claude', 'claude-code');
+    assert.deepStrictEqual(desktopRoots(sb.env), [packaged, classic]);
+    // Only the classic root, no packages at all.
+    fs.rmSync(path.join(sb.localAppData, 'Packages'), { recursive: true, force: true });
+    assert.deepStrictEqual(desktopRoots(sb.env), [classic]);
+  } finally {
+    fs.rmSync(sb.base, { recursive: true, force: true });
+  }
+});
+
+test('desktopRoots lists the Claude-Data root and the older roots together, new first', () => {
+  const sb = desktopRootsSandbox();
+  try {
+    const current = mkdirs(sb.localAppData, 'Claude-Data', 'claude_pzs8sxrjxfjjc', 'claude-code');
+    const packaged = mkdirs(sb.localAppData, 'Packages', 'Claude_test', 'LocalCache', 'Roaming', 'Claude', 'claude-code');
+    const classic = mkdirs(sb.appData, 'Claude', 'claude-code');
+    assert.deepStrictEqual(desktopRoots(sb.env), [current, packaged, classic]);
+  } finally {
+    fs.rmSync(sb.base, { recursive: true, force: true });
+  }
+});
+
+test('desktopRoots is empty when Claude Desktop has no claude-code folder', () => {
+  const sb = desktopRootsSandbox();
+  try {
+    mkdirs(sb.localAppData, 'Claude-Data', 'claude_pzs8sxrjxfjjc');
+    assert.deepStrictEqual(desktopRoots(sb.env), []);
+    assert.deepStrictEqual(desktopRoots({}), []);
+  } finally {
+    fs.rmSync(sb.base, { recursive: true, force: true });
+  }
+});
+
+test('connect sets up the Code tab from the Claude-Data folder alone', () =>
+  withCodeTab(
+    async ({ sb, paths, log, claudeExe }) => {
+      const res = await runCli(sb, []);
+      assert.strictEqual(res.code, 0, res.output);
+      assert.doesNotMatch(res.stdout, /Claude Desktop not found/);
+      assert.match(res.stdout, /Code tab: patched 1 Claude Code version\(s\)/);
+      assert.deepStrictEqual(commands(log)[0], 'install');
+      assert.ok(fs.existsSync(paths.config));
+      assert.strictEqual(fs.readFileSync(claudeExe, 'utf8'), 'real claude bytes', 'Claude Desktop was touched by the test');
+      assertNoKeyText([res.stdout, res.stderr]);
+    },
+    { desktopLayout: 'claude-data' }
+  ));
 
 test('without Claude Desktop the Code tab is skipped in one line', () =>
   withCodeTab(async ({ sb, paths, releases }) => {
