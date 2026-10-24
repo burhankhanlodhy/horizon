@@ -1,6 +1,6 @@
 {
   "name": "contextshrink-codex",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "description": "Connect local Codex CLI and desktop coding sessions to ContextShrink using your ChatGPT sign-in.",
   "license": "Apache-2.0",
   "author": "ContextShrink",
