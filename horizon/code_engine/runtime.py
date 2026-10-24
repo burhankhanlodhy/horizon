@@ -13,6 +13,7 @@ console. The detached Popen start is the fallback, and the log says which one ra
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
 import logging
 import logging.handlers
@@ -85,6 +86,14 @@ _LAUNCH_ENV_HORIZON_EXCLUDED = (
     "LAUNCHER_PID",
 )
 HEALTH_PATH = "/__cs/health"
+# The quick probe (0.3 s) is for the hot paths. A busy engine (a heavy import, a model
+# warm-up) can take longer than that to answer, so a decision that ends an engine or starts
+# one uses the patient probe, retried once. See ``patient_health``.
+PATIENT_HEALTH_TIMEOUT_SECONDS = 2.0
+_NTSTATUS_SUCCESS = 0
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_QUERY_INFORMATION = 0x0400
+_PROCESS_COMMAND_LINE_INFORMATION = 60
 
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _DETACHED_PROCESS = 0x00000008
@@ -228,27 +237,53 @@ def health(port: int = DEFAULT_PORT, *, timeout: float = 0.3) -> dict[str, Any] 
     return None
 
 
+def patient_health(
+    port: int = DEFAULT_PORT, *, deadline: float | None = None
+) -> dict[str, Any] | None:
+    """``health()`` with a patient timeout, retried once: a busy engine answers late, not never.
+
+    ``deadline`` (a ``time.monotonic()`` value) caps the time spent, so a caller's wait holds.
+    """
+    for _ in range(2):
+        timeout = PATIENT_HEALTH_TIMEOUT_SECONDS
+        if deadline is not None:
+            timeout = min(timeout, deadline - time.monotonic())
+            if timeout <= 0:
+                break
+        body = health(port, timeout=timeout)
+        if body is not None:
+            return body
+    return None
+
+
 # ── Start ─────────────────────────────────────────────────────────────
 
 
 def ensure(home: Path, port: int = DEFAULT_PORT, *, wait_seconds: float = 5.0) -> bool:
-    """Start the engine in the background unless it already answers. Returns True when it answers.
+    """Start the engine in the background unless one is running. Returns True when it answers.
 
-    The saved launch environment is deleted when the wait ends, whether or not the engine
-    answered: an engine that has not read it by then is not going to.
+    A live engine that is slow to answer (busy) is waited for, never started a second time:
+    the PID file names it. The saved launch environment is deleted when a wait this function
+    started ends, whether or not the engine answered: an engine that has not read it by then
+    is not going to.
     """
     if health(port) is not None:
         return True
+    if pid_is_engine(read_pid(home), port):
+        return _wait_until_answering(port, time.monotonic() + wait_seconds)
     try:
         spawn_detached(home, port)
-        deadline = time.monotonic() + wait_seconds
-        while time.monotonic() < deadline:
-            if health(port) is not None:
-                return True
-            time.sleep(0.1)
-        return False
+        return _wait_until_answering(port, time.monotonic() + wait_seconds)
     finally:
         remove(home / LAUNCH_ENV_FILE)
+
+
+def _wait_until_answering(port: int, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        if patient_health(port, deadline=deadline) is not None:
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def spawn_detached(
@@ -488,19 +523,24 @@ def stop(home: Path, port: int = DEFAULT_PORT, *, wait_seconds: float = 10.0) ->
 
     ``stopped`` means the engine's process has ended, not only that its port closed: the
     engine removes its PID file as its last step, after the final usage upload.
+
+    "Not running" needs both answers to be no: the patient health probe, and the PID file
+    naming a live engine on this port. A busy engine answers the probe late, so one fast
+    probe alone never decides it. The PID file is kept while its process is alive.
     """
-    if health(port) is None:
-        remove_pid(home)
-        return "not_running"
     pid = read_pid(home)
+    if patient_health(port) is None and not pid_is_engine(pid, port):
+        if pid is None or not pid_alive(pid):
+            remove_pid(home)
+        return "not_running"
     request_stop(home)
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
-        if health(port) is None and not (pid is not None and pid_alive(pid)):
+        if patient_health(port) is None and not (pid is not None and pid_alive(pid)):
             remove_pid(home)
             return "stopped"
         time.sleep(0.2)
-    if health(port) is None:
+    if patient_health(port) is None:
         # The port closed but the process did not end. It is not killed: its PID may be stale.
         return "still_running"
     # Last resort, by PID only. The health check above proved this port is the engine.
@@ -508,6 +548,102 @@ def stop(home: Path, port: int = DEFAULT_PORT, *, wait_seconds: float = 10.0) ->
         _kill_pid(pid)
         return "killed"
     return "still_running"
+
+
+def pid_is_engine(pid: int | None, port: int) -> bool:
+    """True when ``pid`` is a live process whose command line is the engine on ``port``.
+
+    The command line is what tells a live engine from a PID that the OS has reused for
+    another program. An unreadable command line counts as not the engine.
+    """
+    if pid is None or not pid_alive(pid):
+        return False
+    command = process_command_line(pid)
+    return command is not None and is_engine_command(command, port)
+
+
+def is_engine_command(command: str, port: int) -> bool:
+    """True for ``... code-engine run --port <port> ...`` (no ``--port`` means the default port)."""
+    tokens = command.split()
+    if "code-engine" not in tokens or "run" not in tokens:
+        return False
+    for index, token in enumerate(tokens):
+        if token == "--port" and index + 1 < len(tokens):
+            return tokens[index + 1] == str(port)
+        if token.startswith("--port="):
+            return token[len("--port=") :] == str(port)
+    return port == DEFAULT_PORT
+
+
+def process_command_line(pid: int) -> str | None:
+    """The command line of a process of this user, or ``None`` when it cannot be read."""
+    if sys.platform == "win32":
+        return _windows_command_line(pid)
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        raw = None
+    if raw is not None:
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip() or None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() or None
+
+
+class _UnicodeString(ctypes.Structure):
+    _fields_ = [
+        ("Length", ctypes.c_ushort),
+        ("MaximumLength", ctypes.c_ushort),
+        ("Buffer", ctypes.c_void_p),
+    ]
+
+
+def _windows_command_line(pid: int) -> str | None:
+    """Reads the command line with NtQueryInformationProcess (no PEB read, no PowerShell)."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+    ntdll.NtQueryInformationProcess.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.POINTER(ctypes.c_ulong),
+    ]
+    handle = None
+    for access in (_PROCESS_QUERY_LIMITED_INFORMATION, _PROCESS_QUERY_INFORMATION):
+        handle = kernel32.OpenProcess(access, False, pid)
+        if handle:
+            break
+    if not handle:
+        return None
+    try:
+        size = 32768
+        buffer = ctypes.create_string_buffer(size)
+        returned = ctypes.c_ulong(0)
+        status = ntdll.NtQueryInformationProcess(
+            handle, _PROCESS_COMMAND_LINE_INFORMATION, buffer, size, ctypes.byref(returned)
+        )
+        if status != _NTSTATUS_SUCCESS:
+            return None
+        text = _UnicodeString.from_buffer_copy(buffer)
+        if text.Length == 0 or not text.Buffer:
+            return None
+        # The string's characters live in this same buffer, after the structure.
+        return ctypes.wstring_at(text.Buffer, text.Length // 2)
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def pid_alive(pid: int) -> bool:

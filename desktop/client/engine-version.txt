@@ -2,10 +2,14 @@
 # Independent of the desktop app version (tauri.conf.json). Bump it whenever the engine changes:
 # horizon/code_engine, the proxy it serves, or desktop/client/engine-requirements.txt.
 # Read by desktop/client/build-engine-embed.ps1 (the first line that is not a comment).
+# 0.8.3: stop, status and ensure no longer decide an engine is not running from one fast
+# health probe. A busy engine answers late, so it was reported "not running", its PID file was
+# deleted and it kept running (uninstall then removed files it had open). Now the patient probe
+# decides, and a live PID whose command line is this engine's counts too.
 # 0.8.2: the engine cycle runs under pythonw with its own engine.log and a watchdog, usage is
 # uploaded about 30 seconds after the first change (idle engines upload nothing), and the test
 # cycle intervals are honoured only outside the shipped client. Counts only, as before.
 # 0.8.1: usage counts are written as each request is recorded (a killed or restarted
 # engine no longer loses them), Codex ChatGPT-sign-in calls on /backend-api/codex/responses
 # are counted, and every usage upload is logged (counts and status only).
-0.8.2
+0.8.3

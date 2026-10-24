@@ -144,10 +144,12 @@ def stop_engine(port: int) -> None:
 def status_engine(port: int, as_json: bool) -> None:
     """Show whether the engine runs, the plan state and the device connection."""
     home = home_dir()
-    running = runtime.health(port)
+    # A busy engine answers late: its PID file counts as running too (see runtime.stop).
+    running = runtime.patient_health(port)
+    engine_up = running is not None or runtime.pid_is_engine(runtime.read_pid(home), port)
     plan, expires_at, connected = _license_status(home)
     report = {
-        "running": running is not None,
+        "running": engine_up,
         "port": port,
         "engine_version": running.get("engine") if running else None,
         "compression_licensed": bool(running and running.get("ok")),
