@@ -341,6 +341,7 @@ def test_stop_kills_by_pid_only_while_the_engine_still_answers(home, monkeypatch
 def test_stop_when_nothing_answers_says_not_running(home, monkeypatch) -> None:
     runtime.write_pid(home, 4242)
     monkeypatch.setattr(runtime, "health", lambda port=0, **k: None)
+    monkeypatch.setattr(runtime, "pid_alive", lambda pid: False)
     assert runtime.stop(home, 18999) == "not_running"
     assert runtime.read_pid(home) is None
 
