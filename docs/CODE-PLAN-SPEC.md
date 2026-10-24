@@ -251,6 +251,10 @@ are unchanged.
        `GET /__cs/health` on `health_port`, which must answer one plain HTTP/1.1
        response with a `Content-Length` body.
        The rest of codetab install stays as today.
+       If `codetab.json` belongs to the desktop app and is switched off (`enabled` is
+       not `true`), connect takes it over and records its exact bytes in
+       `claude-code\npx-takeover.json`. If the desktop app's file routes, it is left
+       alone. Uninstall hands the file back only while it is still npx's text.
    - **Codex:** the ContextShrink model provider's `base_url` is
      `http://127.0.0.1:18793/v1`, with no `X-Horizon-Proxy-Token` header.
      ChatGPT auth is preserved as today.

@@ -60,7 +60,10 @@ npx contextshrink-claude uninstall
 - Device files in `~/.contextshrink`: `device.json` (the device key, readable only by
   you), `license.json` (the plan note) and `usage-pending.json` (usage counts not yet
   sent).
-- On Windows with Claude Desktop, the Code tab routing (see `codetab.json`).
+- On Windows with Claude Desktop, the Code tab routing (see `codetab.json`). If the
+  ContextShrink desktop app is installed but its Code-tab routing is off, connect routes
+  the Code tab through the engine. Uninstall hands the desktop app's `codetab.json` back
+  byte for byte (`npx-takeover.json` keeps the copy), unless the app changed it since.
 
 Every setting connect changes is recorded, so uninstall restores exactly what it
 changed. A value you edit after connecting is left alone, and uninstall says so.
