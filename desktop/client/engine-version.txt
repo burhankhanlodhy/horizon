@@ -2,6 +2,11 @@
 # Independent of the desktop app version (tauri.conf.json). Bump it whenever the engine changes:
 # horizon/code_engine, the proxy it serves, or desktop/client/engine-requirements.txt.
 # Read by desktop/client/build-engine-embed.ps1 (the first line that is not a comment).
+# 0.8.4: the usage meter counts only real model generations: POST /v1/messages (claude) and
+# the Codex Responses roots and WebSocket turns (codex). Token counting (count_tokens),
+# batches, model listing and compaction were counted as requests with zero tokens (a
+# session showed 39 count_tokens calls against 1 real turn). Response-cache hits and
+# turns without usage are no longer recorded as zero. Counts only, as before.
 # 0.8.3: stop, status and ensure no longer decide an engine is not running from one fast
 # health probe. A busy engine answers late, so it was reported "not running", its PID file was
 # deleted and it kept running (uninstall then removed files it had open). Now the patient probe
@@ -12,4 +17,4 @@
 # 0.8.1: usage counts are written as each request is recorded (a killed or restarted
 # engine no longer loses them), Codex ChatGPT-sign-in calls on /backend-api/codex/responses
 # are counted, and every usage upload is logged (counts and status only).
-0.8.3
+0.8.4

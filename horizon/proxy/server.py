@@ -129,6 +129,7 @@ from horizon.proxy.cost import (
     build_session_summary,  # noqa: F401
     merge_cost_stats,  # noqa: F401
 )
+from horizon.proxy.engine_hooks import bind_request_path
 from horizon.proxy.helpers import (
     COMPRESSION_CACHE_MAX_ENTRIES,
     COMPRESSION_CACHE_TTL_SECONDS,
@@ -3073,6 +3074,7 @@ class WebSocketProjectPrefixMiddleware:
                 name.decode("latin-1"): value.decode("latin-1") for name, value in scope["headers"]
             }
             set_current_project(classify_project(headers) or prefix_project)
+            bind_request_path(scope.get("path"))
         await self.app(scope, receive, send)
 
 
@@ -3879,6 +3881,8 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         query = request.url.query
         headers = dict(request.headers.items())
         set_current_project(classify_project(headers) or prefix_project)
+        # Canonical path for the engine's usage meter (horizon.proxy.engine_hooks).
+        bind_request_path(path)
         # Path-based Codex identification: stamp X-Client: codex on the
         # Responses endpoint for callers that don't otherwise classify (e.g.
         # Codex Desktop, whose User-Agent isn't a known codex UA). Without it

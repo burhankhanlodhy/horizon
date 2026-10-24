@@ -475,16 +475,22 @@ def _warn_estimated_input(provider: str, model: str) -> None:
 def _record_engine_usage(outcome: RequestOutcome) -> None:
     """Hand one served request's before/after token counts to the engine, if any.
 
-    Only the two products the engine sells are counted: Anthropic Messages
-    (``claude``) and OpenAI Responses from Codex (``codex``).
-    """
-    from horizon.proxy.engine_hooks import record_usage
+    Only the two products the engine sells are counted, and only real generations
+    on their generation routes: Anthropic Messages (``claude``, ``POST /v1/messages``)
+    and Codex Responses turns (``codex``). Auxiliary routes (count_tokens, batches,
+    model listing, compaction) are never counted, even though they are proxied and
+    emit an outcome.
 
-    if outcome.provider == "anthropic":
-        tool = "claude"
-    elif outcome.provider == "openai" and outcome.client == "codex":
-        tool = "codex"
-    else:
+    A request whose counts are unknown is not counted either. Two kinds reach here
+    with zero tokens: a response-cache hit (no upstream call, nothing generated) and a
+    WebSocket turn that finished without a usage frame (the provider reported no
+    counts, and the proxy defers that turn's savings). Recording them as zero would
+    only inflate the request count.
+    """
+    from horizon.proxy.engine_hooks import metered_tool, record_usage, request_path
+
+    tool = metered_tool(request_path(), provider=outcome.provider, client=outcome.client)
+    if tool is None or outcome.from_response_cache or outcome.original_tokens <= 0:
         return
     record_usage(tool, outcome.original_tokens, outcome.optimized_tokens)
 

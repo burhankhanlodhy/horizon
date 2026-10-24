@@ -162,12 +162,14 @@ def test_the_cycle_refreshes_and_uploads_in_the_real_launched_engine(tmp_path, m
             time.sleep(0.2)
         assert runtime.health(port) is not None, "the launched engine never answered"
 
-        body = {"model": "claude-sonnet-4-5", "max_tokens": 64, "messages": [
-            {"role": "user", "content": "Summarize this build log."},
-        ]}
         import urllib.request
 
-        for _ in range(2):
+        # Two different prompts: an identical repeat is served from the proxy's response
+        # cache without a model call, and a cache hit is not a usage request.
+        for turn in range(2):
+            body = {"model": "claude-sonnet-4-5", "max_tokens": 64, "messages": [
+                {"role": "user", "content": f"Summarize build log number {turn}."},
+            ]}
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/messages", data=json.dumps(body).encode(),
                 headers={"content-type": "application/json", "x-api-key": "sk-ant-test",
