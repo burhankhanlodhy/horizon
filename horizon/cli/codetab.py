@@ -144,6 +144,12 @@ def codetab_remove(roots: tuple[Path, ...], data_dir: Path | None, dry_run: bool
         result = dc.remove(roots=list(roots) or None, data=data_dir, dry_run=dry_run)
     except dc.CodetabError as exc:
         raise click.ClickException(str(exc)) from exc
+    if result.left_for_npx:
+        click.echo(
+            "Left the Code tab alone: codetab.json belongs to npx contextshrink-claude "
+            "(owner npx), so nothing was restored or switched off."
+        )
+        return
     _print_folders(result.folders)
     if result.config_removed:
         click.echo("Removed codetab.json")

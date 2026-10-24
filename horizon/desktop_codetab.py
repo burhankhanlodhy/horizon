@@ -21,6 +21,9 @@ Safety rules, all enforced here:
   run, and ``watch`` retries on the next pass.
 - A failed step rolls back to a runnable real ``claude.exe`` before returning.
 - Reparse points (junctions and symlinks) are never followed.
+- ``remove`` leaves everything alone when ``codetab.json`` is owned by
+  ``npx contextshrink-claude`` (its ``owner`` is ``npx``), so the desktop app's
+  Disconnect cannot switch off that routing.
 - State and config writes take an exclusive lock file and use unique temp
   names, so a manual install cannot collide with a running ``--watch``.
 
@@ -54,6 +57,8 @@ PAYLOAD_NAME = ".payload"
 DISPLACED_STEM = "claude.exe.cs-displaced"
 LAUNCHER_NAME = "claude-code-launcher.exe"
 CONFIG_NAME = "codetab.json"
+#: ``owner`` that ``npx contextshrink-claude`` writes into codetab.json. ``remove`` leaves such a file alone.
+NPX_OWNER = "npx"
 STATE_NAME = "codetab-state.json"
 LOCK_NAME = "codetab.lock"
 DEFAULT_HEALTH_PORT = 18788
@@ -112,27 +117,50 @@ def default_launcher_path(environ: Mapping[str, str] | None = None) -> Path:
     return data_dir(environ) / "bin" / LAUNCHER_NAME
 
 
+def _prefixed_dirs(parent: Path, prefix: str) -> list[Path]:
+    """Folders directly inside ``parent`` whose names start with ``prefix`` (any case), sorted."""
+    try:
+        children = sorted(parent.iterdir())
+    except OSError:
+        return []
+    return [
+        child
+        for child in children
+        if child.name[: len(prefix)].casefold() == prefix.casefold() and child.is_dir()
+    ]
+
+
+def claude_desktop_candidates(environ: Mapping[str, str]) -> list[Path]:
+    """Where Claude Desktop keeps its ``claude-code`` folders, newest layout first.
+
+    ``%LOCALAPPDATA%\\Claude-Data\\claude_<publisher>\\claude-code`` (Desktop 3.6556
+    and later), ``%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude\\claude-code``
+    (older packaged builds) and ``%APPDATA%\\Claude\\claude-code`` (classic installs).
+    The publisher folder names are read from disk, never hard-coded. Not checked for existence.
+    """
+    candidates: list[Path] = []
+    local = (environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        for publisher in _prefixed_dirs(Path(local) / "Claude-Data", "claude_"):
+            candidates.append(publisher / "claude-code")
+        for package in _prefixed_dirs(Path(local) / "Packages", "Claude_"):
+            candidates.append(package / "LocalCache" / "Roaming" / "Claude" / "claude-code")
+    appdata = (environ.get("APPDATA") or "").strip()
+    if appdata:
+        candidates.append(Path(appdata) / "Claude" / "claude-code")
+    return candidates
+
+
 def discover_roots(environ: Mapping[str, str] | None = None) -> list[Path]:
     """Claude Desktop's ``claude-code`` roots that exist on this machine."""
     env = os.environ if environ is None else environ
     override = env.get(ENV_ROOTS)
     if override is not None:
         candidates = [Path(part) for part in override.split(os.pathsep) if part.strip()]
+    elif sys.platform == "win32":
+        candidates = claude_desktop_candidates(env)
     else:
         candidates = []
-        if sys.platform == "win32":
-            local = (env.get("LOCALAPPDATA") or "").strip()
-            if local:
-                packages = Path(local) / "Packages"
-                try:
-                    matches = sorted(packages.glob("Claude_*"))
-                except OSError:
-                    matches = []
-                for package in matches:
-                    candidates.append(package / "LocalCache" / "Roaming" / "Claude" / "claude-code")
-            appdata = (env.get("APPDATA") or "").strip()
-            if appdata:
-                candidates.append(Path(appdata) / "Claude" / "claude-code")
     return [path for path in candidates if path.is_dir()]
 
 
@@ -850,6 +878,8 @@ class RemoveResult:
     folders: list[FolderReport] = field(default_factory=list)
     config_removed: bool = False
     config_disabled: bool = False
+    #: True when codetab.json belongs to ``npx contextshrink-claude``. Nothing was touched.
+    left_for_npx: bool = False
 
 
 @dataclass
@@ -865,6 +895,15 @@ class StatusResult:
 
 def _write_config(path: Path, config: dict[str, Any]) -> None:
     _write_json_atomic(path, config)
+
+
+def _owned_by_npx(config_path: Path) -> bool:
+    """True when ``codetab.json`` was written by ``npx contextshrink-claude`` (``owner`` is ``npx``)."""
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(config, dict) and config.get("owner") == NPX_OWNER
 
 
 def _saved_lean_window(config_path: Path) -> int | None:
@@ -971,6 +1010,11 @@ def remove(
     result = RemoveResult(roots=roots)
     lock = _nullcontext() if dry_run else exclusive_lock(data_folder, lock_timeout)
     with lock:
+        if _owned_by_npx(data_folder / CONFIG_NAME):
+            # npx routes the Code tab with this config. Restoring the folders or switching the
+            # config off here would switch off that routing, so the desktop app's remove leaves it.
+            result.left_for_npx = True
+            return result
         state = load_state(data_folder)
         folders, skipped = scan_folders(roots)
         result.folders.extend(skipped)

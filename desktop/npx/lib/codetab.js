@@ -122,11 +122,31 @@ function isDirectory(file) {
   }
 }
 
-// Claude Desktop's claude-code folders, the same places the desktop app looks.
+// Names of the folders directly inside dir. Empty when dir is missing or unreadable.
+function childDirs(dir) {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+// Claude Desktop's claude-code folders, the same places the desktop app looks:
+//   %LOCALAPPDATA%\Claude-Data\claude_<publisher>\claude-code   (Desktop 3.6556 and later)
+//   %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code   (older packaged builds)
+//   %APPDATA%\Claude\claude-code   (classic installs)
+// The publisher folder name is read from disk, never hard-coded.
 function desktopRoots(env) {
   const candidates = [];
   const localAppData = (env.LOCALAPPDATA || '').trim();
   if (localAppData) {
+    const claudeData = path.join(localAppData, 'Claude-Data');
+    for (const name of childDirs(claudeData).filter((n) => n.slice(0, 7).toLowerCase() === 'claude_').sort()) {
+      candidates.push(path.join(claudeData, name, 'claude-code'));
+    }
     const packages = path.join(localAppData, 'Packages');
     let names = [];
     try {
@@ -770,6 +790,7 @@ async function codeTabStatus(ctx) {
 module.exports = {
   CodeTabError,
   codeTabPaths,
+  desktopRoots,
   setUpCodeTab,
   undoCodeTab,
   codeTabStatus,

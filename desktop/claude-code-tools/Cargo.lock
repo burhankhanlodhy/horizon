@@ -19,14 +19,14 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "claude-code-launcher"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "contextshrink-codetab"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "sha2",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "contextshrink-status"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
 ]
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-client-stub"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "itoa"
