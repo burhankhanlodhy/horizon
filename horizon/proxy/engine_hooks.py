@@ -16,10 +16,31 @@ This module imports nothing heavy, so the request path can depend on it.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextvars import ContextVar
 
 _license_allows: Callable[[], bool] | None = None
 _usage_sink: Callable[[str, int, int], None] | None = None
 _health: Callable[[], dict] | None = None
+
+# The canonical path of the request being served (after the /p and /k prefixes are
+# stripped). Bound by the ingress middlewares in horizon.proxy.server, so the usage
+# meter can tell a real generation from an auxiliary route at the outcome funnel.
+_request_path: ContextVar[str | None] = ContextVar("horizon_engine_request_path", default=None)
+
+# Routes whose served requests the engine meters. Only real generation counts:
+# token counting, batches, model listing, compaction and every other auxiliary route
+# are deliberately absent. The Responses roots and WebSocket paths mirror
+# horizon.providers.openai_responses (a test keeps the two in step).
+_CLAUDE_METERED_PATHS = frozenset({"/v1/messages"})
+_CODEX_METERED_PATHS = frozenset(
+    {
+        "/v1/responses",
+        "/v1/codex/responses",
+        "/backend-api/responses",
+        "/backend-api/codex/responses",
+        "/responses",
+    }
+)
 
 
 def install(
@@ -47,6 +68,29 @@ def license_denied() -> bool:
     """True when an installed license gate is closed. False when none is installed."""
     check = _license_allows
     return check is not None and not check()
+
+
+def bind_request_path(path: str | None) -> None:
+    """Record the canonical path of the request now being served."""
+    _request_path.set(path)
+
+
+def request_path() -> str | None:
+    """The bound request path, or ``None`` outside a request."""
+    return _request_path.get()
+
+
+def metered_tool(path: str | None, *, provider: str, client: str | None) -> str | None:
+    """The usage tool for a served request on ``path``, or ``None`` when it is not metered.
+
+    ``claude`` is Anthropic Messages (``POST /v1/messages``). ``codex`` is a Responses
+    turn from the Codex client on one of the Responses root paths, HTTP or WebSocket.
+    """
+    if path in _CLAUDE_METERED_PATHS and provider == "anthropic":
+        return "claude"
+    if path in _CODEX_METERED_PATHS and provider == "openai" and client == "codex":
+        return "codex"
+    return None
 
 
 def record_usage(tool: str, tokens_before: int, tokens_after: int) -> None:

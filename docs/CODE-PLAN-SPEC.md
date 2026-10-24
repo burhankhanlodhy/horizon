@@ -193,9 +193,16 @@ are unchanged.
   The Code-tab launcher only routes through the engine when `ok` is true, so an
   unlicensed engine leaves the Code tab on plain Claude.
 - **Usage:**
-  - Each request adds to an in-memory hourly bucket: requests, tokens_before
-    (input tokens before compression), tokens_after (after compression), and
-    tool (`claude` for /v1/messages, `codex` for responses).
+  - Each real model generation adds to an in-memory hourly bucket: requests,
+    tokens_before (input tokens before compression), tokens_after (after
+    compression), and tool. `claude` is `POST /v1/messages`. `codex` is a
+    Responses turn from the Codex client on `/v1/responses`,
+    `/v1/codex/responses`, `/backend-api/responses`, `/backend-api/codex/responses`
+    or `/responses` (HTTP or WebSocket).
+  - Not counted: auxiliary routes (`/v1/messages/count_tokens`, batches, model
+    listing, `/v1/responses/*` subpaths such as compaction, `/v1/compress`), response-cache
+    hits, and any turn whose token counts are unknown. A zero-token request is never
+    recorded just to count it.
   - Buckets are flushed to `/code/usage` every 15 min and on stop, and persisted
     to `usage-pending.json` until the upload succeeds.
   - Only these counts are sent: no model names, no paths, nothing else.
