@@ -39,6 +39,9 @@ checks, and hourly usage counts (numbers only).
 npx contextshrink-claude [connect] [--force] [--no-code-tab]
 npx contextshrink-claude status
 npx contextshrink-claude uninstall
+npx contextshrink-claude lean on [--force]
+npx contextshrink-claude lean off
+npx contextshrink-claude lean status
 ```
 
 - `connect` (the default) signs this computer in and sets everything up. `--force`
@@ -49,6 +52,18 @@ npx contextshrink-claude uninstall
 - `uninstall` restores Claude Code's settings and the Code tab. When no ContextShrink
   tool is left on this computer, it also releases the device, stops the engine and
   deletes the engine files. `disconnect` and `logout` do the same.
+
+## Keep sessions lean
+
+`lean on` caps Claude Code's auto-compact window at 200,000 tokens. A long session is
+then summarised instead of resending about 1M tokens of context on every turn, so a
+subscription plan goes further. The cost: older history becomes a summary. The value is
+set in `settings.json` and, when npx owns the Code tab, in `codetab.json`. Start a new
+Claude Code session (or restart Claude Desktop) afterwards.
+
+- `lean off` puts back the value that was there before. `uninstall` does the same.
+- A `CLAUDE_CODE_AUTO_COMPACT_WINDOW` you set yourself is refused unless you add `--force`.
+- Connect does not change this setting. The desktop app's Code tab is never changed.
 
 ## What it changes
 

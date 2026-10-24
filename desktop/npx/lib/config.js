@@ -17,6 +17,8 @@ const device = require('./code-device');
 const DESKTOP_STATE_FILE = '.horizon-vscode-claude.json';
 // Written by this installer next to settings.json.
 const STATE_FILE = '.contextshrink-npx.json';
+// Written by `lean on` next to settings.json (see lean.js).
+const LEAN_FILE = '.contextshrink-lean.json';
 const SETTINGS_FILE = 'settings.json';
 // The hosted proxy that versions 0.2.x connected Claude Code to. Used only to
 // recognise and take over an earlier connection.
@@ -34,6 +36,10 @@ const TOOL_SEARCH_KEY = 'ENABLE_TOOL_SEARCH';
 const TOOL_SEARCH_VALUE = 'true';
 // Every key connect may write. Only MANAGED_KEYS are required for "connected".
 const OWNED_KEYS = [...MANAGED_KEYS, HEADERS_KEY, TOOL_SEARCH_KEY];
+// Keep sessions lean: the auto-compact window Claude Code reads. Kept out of OWNED_KEYS:
+// lean has its own record (LEAN_FILE), so connect's state does not change.
+const LEAN_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+const LEAN_VALUE = '200000';
 
 function expandHome(p, homeDir) {
   if (p === '~') return homeDir;
@@ -56,6 +62,7 @@ function resolvePaths(env = process.env) {
     configDir,
     settings,
     state: path.join(configDir, STATE_FILE),
+    leanRecord: path.join(configDir, LEAN_FILE),
     desktopState: path.join(configDir, DESKTOP_STATE_FILE),
     csHome: files.home,
     device: files.device,
@@ -75,6 +82,8 @@ module.exports = {
   TOOL_SEARCH_KEY,
   TOOL_SEARCH_VALUE,
   OWNED_KEYS,
+  LEAN_KEY,
+  LEAN_VALUE,
   LEGACY_PROXY_URL,
   DEFAULT_ENGINE_URL,
   resolvePaths,
