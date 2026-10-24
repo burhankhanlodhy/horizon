@@ -15,6 +15,11 @@
 // codetab.json names the local engine address and holds no secret (the device key
 // stays in device.json). The launcher forwards Code tab requests to the engine.
 // On Windows the file takes the ACL of the ContextShrink data folder under the profile.
+//
+// Takeover: when the desktop app's codetab.json is switched off (its "enabled" is not
+// true), connect replaces it with the npx config and records the desktop app's exact
+// previous bytes in npx-takeover.json. Uninstall hands the file back, but only while it
+// is still the text npx wrote. A desktop config that routes is never taken over.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -40,6 +45,7 @@ const CONFIG_NAME = 'codetab.json';
 const OWNER = 'npx';
 const BIN_DIR = 'npx-bin';
 const STAMP_NAME = 'npx-repair.stamp';
+const TAKEOVER_NAME = 'npx-takeover.json';
 const PLACEHOLDER_VERSION = '0.0.0-unset';
 const PLACEHOLDER_HASH = '0'.repeat(64);
 const DEFAULT_MANIFEST = path.join(__dirname, 'codetab-manifest.json');
@@ -100,6 +106,7 @@ function codeTabPaths(env) {
   return {
     dir,
     config: path.join(dir, CONFIG_NAME),
+    takeover: path.join(dir, TAKEOVER_NAME),
     stamp: path.join(dir, STAMP_NAME),
     bin,
     launcher: path.join(bin, LAUNCHER_NAME),
@@ -398,13 +405,81 @@ function configFor(gateway) {
   };
 }
 
-function restoreConfig(file, previous) {
+// The exact text npx writes for codetab.json (the same layout as files.writePrivateJson).
+function configText(config) {
+  return JSON.stringify(config, null, 2) + '\n';
+}
+
+// The bytes of a file, or null when there is no file.
+function readBytes(file) {
   try {
-    if (previous) files.writePrivateJson(file, previous);
-    else files.removeFile(file);
-  } catch {
-    // Best effort: the original error is the one the user needs to see.
+    return fs.readFileSync(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw new CodeTabError(`${file} could not be read, so the Code tab was not touched.`);
   }
+}
+
+// Puts exact bytes back, or removes the file when there were none.
+function restoreBytes(file, bytes) {
+  if (bytes === null) {
+    files.removeFile(file);
+    return;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, bytes, { mode: 0o600 });
+}
+
+// Runs one step of putting files back after a failure. The original error is the one shown.
+function rollback(step) {
+  try {
+    step();
+  } catch {
+    // Best effort.
+  }
+}
+
+function encodeBytes(bytes) {
+  return bytes === null ? null : { base64: bytes.toString('base64') };
+}
+
+function decodeBytes(entry) {
+  return entry === null ? null : Buffer.from(entry.base64, 'base64');
+}
+
+// The takeover record, or null when npx has taken nothing over. Throws when it is not usable.
+function readTakeover(file) {
+  const data = files.readOwnJson(file, 'Code tab takeover record');
+  if (data === null) return null;
+  const previousOk =
+    data.previous === null || (files.isPlainObject(data.previous) && typeof data.previous.base64 === 'string');
+  const ok =
+    data.v === 1 &&
+    typeof data.written === 'string' &&
+    previousOk &&
+    typeof data.patched_by_npx === 'boolean' &&
+    typeof data.autostart_by_npx === 'boolean';
+  if (!ok) throw new CodeTabError(`${file} is not in the expected format, so the Code tab was not touched.`);
+  return data;
+}
+
+// npx still owns codetab.json after this write, so a takeover record follows the new text.
+function recordFollows(paths, text) {
+  const record = readTakeover(paths.takeover);
+  if (record) files.writePrivateJson(paths.takeover, { ...record, written: text });
+}
+
+// What the helper reports before npx changes anything: whether no Claude Code folder is
+// patched or in use, and whether the startup re-patch is already on.
+async function probeBefore(env, paths) {
+  const result = await runHelper(env, paths, ['status', '--json']);
+  if (result.code !== 0) throw helperError('read the Code tab state', result);
+  const data = helperJson(result, 'status');
+  const states = folderStates(data);
+  return {
+    untouched: countOf(states, 'patched') + countOf(states, 'locked') === 0,
+    autostart: data.autostart === true,
+  };
 }
 
 async function patchFolders(env, paths) {
@@ -447,14 +522,18 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
     }
     const paths = codeTabPaths(env);
     const existing = readConfig(paths.config);
-    if (existing && !ownedByUs(existing)) {
+    // The desktop app's config is taken over only when it is switched off. One that routes stays theirs.
+    const takeover = existing !== null && !ownedByUs(existing) && existing.enabled !== true && !skip;
+    if (existing && !ownedByUs(existing) && !takeover) {
       ctx.out('Code tab left alone: the ContextShrink desktop app manages it.');
       return 0;
     }
     if (skip) {
       if (existing) {
         // Brings an older codetab.json (before the forwarder format) up to date.
-        files.writePrivateJson(paths.config, configFor(gatewayFromSettings(terminal)));
+        const text = configText(configFor(gatewayFromSettings(terminal)));
+        files.writePrivateText(paths.config, text);
+        recordFollows(paths, text);
         ctx.out('Code tab left as it is (--no-code-tab).');
       } else {
         ctx.out('Code tab skipped (--no-code-tab).');
@@ -476,13 +555,33 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
     for (const name of FILE_NAMES) {
       await fetchFile(env, paths, base, manifest, name);
     }
-    files.writePrivateJson(paths.config, configFor(gateway));
+    const text = configText(configFor(gateway));
+    const previousBytes = readBytes(paths.config);
+    const recordBytes = readBytes(paths.takeover);
+    const oldRecord = readTakeover(paths.takeover);
+    // The record goes first, so a crash after this point still leaves the previous bytes on file.
+    if (takeover) {
+      const before = await probeBefore(env, paths);
+      files.writePrivateJson(paths.takeover, {
+        v: 1,
+        taken_over_at: new Date().toISOString(),
+        previous: encodeBytes(previousBytes),
+        written: text,
+        // A folder the desktop app had patched or had in use is not unpatched at uninstall.
+        patched_by_npx: oldRecord ? oldRecord.patched_by_npx : before.untouched,
+        autostart_by_npx: oldRecord ? oldRecord.autostart_by_npx : !before.autostart,
+      });
+    } else {
+      recordFollows(paths, text);
+    }
+    files.writePrivateText(paths.config, text);
     let outcome;
     try {
       outcome = await patchFolders(env, paths);
     } catch (err) {
-      // The patch did not finish, so the previous config goes back in place.
-      restoreConfig(paths.config, existing);
+      // The patch did not finish, so the files go back to how they were before this run.
+      rollback(() => restoreBytes(paths.config, previousBytes));
+      rollback(() => restoreBytes(paths.takeover, recordBytes));
       throw err;
     }
     // The patch is in place now, so the config stays even if the shortcut fails.
@@ -491,6 +590,11 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
       throw new CodeTabError(
         `Claude Desktop is patched, but the startup shortcut could not be added (exit code ${autostart.code}). ` +
           'Updates will not be patched until you run connect again.'
+      );
+    }
+    if (takeover) {
+      ctx.out(
+        "Code tab: routed through the ContextShrink engine (the desktop app's Code-tab routing was off; uninstall hands it back)."
       );
     }
     reportSetUp(ctx, outcome);
@@ -502,15 +606,69 @@ async function setUpCodeTab(ctx, terminal, { skip = false } = {}) {
 }
 
 /**
+ * Hands the Code tab back to the desktop app after a takeover. Only while codetab.json is
+ * still the text npx wrote: a file the desktop app changed since is left as it is.
+ * Returns 0, or 1 when a step failed (npx's config is then kept, so a retry works).
+ */
+async function undoTakeover(ctx, env, paths, record) {
+  const ours = Buffer.from(record.written, 'utf8');
+  const current = readBytes(paths.config);
+  if (current === null || !current.equals(ours)) {
+    files.removeFile(paths.takeover);
+    ctx.out("Code tab left alone: codetab.json changed after ContextShrink took it over, so the desktop app's file was kept.");
+    return 0;
+  }
+  let restored = 0;
+  let handedBack = false;
+  try {
+    if (record.patched_by_npx) {
+      const remove = await runHelper(env, paths, ['remove', '--json']);
+      if (remove.code !== 0) throw helperError('restore Claude Desktop', remove);
+      const states = folderStates(helperJson(remove, 'remove'));
+      const stillPatched = countOf(states, 'patched') + countOf(states, 'locked');
+      if (stillPatched > 0) {
+        throw new CodeTabError(
+          `${stillPatched} Claude Code folder(s) are still patched, probably because Claude Desktop is running. ` +
+            'Close it and run disconnect again. The Code tab files were kept.'
+        );
+      }
+      restored = countOf(states, 'real');
+    }
+    if (record.autostart_by_npx) {
+      const autostart = await runHelper(env, paths, ['autostart', 'off']);
+      if (autostart.code !== 0) throw helperError('remove the startup shortcut', autostart);
+    }
+    restoreBytes(paths.config, decodeBytes(record.previous));
+    handedBack = true;
+    files.removeFile(paths.takeover);
+    files.removeFile(paths.stamp);
+    fs.rmSync(paths.bin, { recursive: true, force: true });
+  } catch (err) {
+    if (!handedBack) rollback(() => restoreBytes(paths.config, ours));
+    ctx.err(failureLine(err));
+    return 1;
+  }
+  const folders = record.patched_by_npx
+    ? `restored ${restored} Claude Code folder(s) and `
+    : '';
+  ctx.out(`Code tab: ${folders}handed the Code tab back to the ContextShrink desktop app.`);
+  if (!record.patched_by_npx) ctx.out('Claude Desktop stays patched, as the desktop app had it before.');
+  return 0;
+}
+
+/**
  * Restores the Code tab during disconnect or logout. Only a codetab.json owned by npx
- * is removed; a desktop-app config is left alone. Returns 0, or 1 when something is
- * still patched or a step failed (the files that are still needed are kept).
+ * is removed; a desktop-app config is left alone (or handed back after a takeover).
+ * Returns 0, or 1 when something is still patched or a step failed (the files that are
+ * still needed are kept).
  */
 async function undoCodeTab(ctx) {
   const env = ctx.env;
   if (!isWindows(env)) return 0;
   try {
     const paths = codeTabPaths(env);
+    const takeover = readTakeover(paths.takeover);
+    if (takeover) return await undoTakeover(ctx, env, paths, takeover);
     const config = readConfig(paths.config);
     if (config && !ownedByUs(config)) {
       ctx.out('Code tab left alone: the ContextShrink desktop app manages it.');
@@ -565,7 +723,11 @@ async function codeTabStatus(ctx) {
     const paths = codeTabPaths(env);
     const config = readConfig(paths.config);
     if (config && !ownedByUs(config)) {
-      ctx.out('Code tab: managed by the ContextShrink desktop app.');
+      ctx.out(
+        config.enabled === true
+          ? 'Code tab: desktop app. The ContextShrink desktop app routes it.'
+          : 'Code tab: desktop app. Its routing is off; run npx contextshrink-claude to route it through the engine.'
+      );
       return 0;
     }
     if (!config) {
@@ -576,8 +738,12 @@ async function codeTabStatus(ctx) {
       );
       return 0;
     }
+    if (config.enabled !== true) {
+      ctx.out('Code tab: not routed, because its npx config is switched off. Run npx contextshrink-claude to turn it on.');
+      return 0;
+    }
     if (!helperPresent(env, paths)) {
-      ctx.out('Code tab: set up, but its helper is missing. Run connect again.');
+      ctx.out('Code tab: routed (npx), but its helper is missing. Run connect again.');
       return 0;
     }
     const result = await runHelper(env, paths, ['status', '--json']);
@@ -591,7 +757,7 @@ async function codeTabStatus(ctx) {
     const lockedText = locked > 0 ? `, ${locked} waiting for the next session` : '';
     const autostart = data.autostart === true ? 'on' : 'off';
     ctx.out(
-      `Code tab: set up. ${countOf(states, 'patched')} Claude Code version(s) patched${lockedText}; ` +
+      `Code tab: routed (npx). ${countOf(states, 'patched')} Claude Code version(s) patched${lockedText}; ` +
         `startup re-patch ${autostart}.`
     );
     return 0;

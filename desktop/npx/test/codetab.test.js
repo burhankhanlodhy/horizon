@@ -23,6 +23,15 @@ const HELPER_BYTES = Buffer.from('test helper bytes\n');
 const TAMPERED_LAUNCHER = Buffer.from(LAUNCHER_BYTES.toString().toUpperCase());
 const BASE_RE = /^http:\/\/127\.0\.0\.1:\d+$/;
 const KEY_RE = /cs_dev_[A-Za-z0-9_-]+/;
+// A desktop-app codetab.json that is switched off. Its 4-space indent and CRLF line
+// ending make a restore that only re-serialises the JSON fail the byte-for-byte checks.
+const DESKTOP_OFF_BYTES = Buffer.from(
+  JSON.stringify(
+    { v: 1, enabled: false, base_url: 'http://127.0.0.1:18788/k/desktopid', health_port: 18788, env: {} },
+    null,
+    4
+  ) + '\r\n'
+);
 const PLACEHOLDER = {
   version: '0.0.0-unset',
   files: {
@@ -123,6 +132,7 @@ async function withCodeTab(fn, { served = servedFiles(), manifest, platform = 'w
   const paths = {
     dir: codeTabDir,
     config: path.join(codeTabDir, 'codetab.json'),
+    takeover: path.join(codeTabDir, 'npx-takeover.json'),
     stamp: path.join(codeTabDir, 'npx-repair.stamp'),
     bin,
     launcher: path.join(bin, 'claude-code-launcher.exe'),
@@ -377,7 +387,7 @@ test('status shows one Code tab line and never the key', () =>
     assert.strictEqual(res.code, 0, res.output);
     const status = await runCli(sb, ['status']);
     assert.strictEqual(status.code, 0, status.output);
-    assert.match(status.stdout, /Code tab: set up\. 1 Claude Code version\(s\) patched; startup re-patch on\./);
+    assert.match(status.stdout, /Code tab: routed \(npx\)\. 1 Claude Code version\(s\) patched; startup re-patch on\./);
     assertNoKeyText([status.stdout, status.stderr]);
   }));
 
@@ -445,3 +455,180 @@ test('the forwarder config the launcher reads has v 1 and enabled, and health_po
     }
   );
 });
+
+// Takeover: the desktop app's codetab.json is switched off, so npx takes the Code tab over.
+// The stub reports the folders as "real" (nothing patched) unless a test says otherwise.
+function desktopOff(sb, paths) {
+  sb.env.CONTEXTSHRINK_NPX_STUB_STATUS_STATE = 'real';
+  sb.env.CONTEXTSHRINK_NPX_STUB_AUTOSTART = 'off';
+  fs.mkdirSync(paths.dir, { recursive: true });
+  fs.writeFileSync(paths.config, DESKTOP_OFF_BYTES);
+}
+
+test('a switched-off desktop codetab.json is taken over: npx writes its config and records the desktop bytes', () =>
+  withCodeTab(async ({ sb, engine, log, paths }) => {
+    desktopOff(sb, paths);
+    const res = await runCli(sb, []);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.match(
+      res.stdout,
+      /Code tab: routed through the ContextShrink engine \(the desktop app's Code-tab routing was off; uninstall hands it back\)\./
+    );
+    assert.doesNotMatch(res.stdout, /left alone/);
+    assert.deepStrictEqual(readJson(paths.config), {
+      v: 1,
+      owner: 'npx',
+      enabled: true,
+      base_url: engine.url,
+      health_port: Number(new URL(engine.url).port),
+      env: { ENABLE_TOOL_SEARCH: 'true' },
+    });
+    const record = readJson(paths.takeover);
+    assert.ok(Buffer.from(record.previous.base64, 'base64').equals(DESKTOP_OFF_BYTES), 'the desktop bytes were not recorded exactly');
+    assert.strictEqual(record.patched_by_npx, true, 'nothing was patched before, so npx owns the patch');
+    assert.strictEqual(record.autostart_by_npx, true, 'the startup re-patch was off before, so npx owns it');
+    assert.deepStrictEqual(commands(log), ['status', 'install', 'autostart']);
+    assert.deepStrictEqual(stubCalls(log)[1].args, ['install', '--json', '--launcher', paths.launcher]);
+    assertNoKeyText([res.stdout, res.stderr]);
+  }));
+
+test('a takeover over a folder the desktop app had patched does not unpatch it at uninstall', () =>
+  withCodeTab(async ({ sb, paths, log }) => {
+    desktopOff(sb, paths);
+    sb.env.CONTEXTSHRINK_NPX_STUB_STATUS_STATE = 'patched';
+    sb.env.CONTEXTSHRINK_NPX_STUB_AUTOSTART = 'on';
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+    const record = readJson(paths.takeover);
+    assert.strictEqual(record.patched_by_npx, false);
+    assert.strictEqual(record.autostart_by_npx, false);
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.match(off.stdout, /Claude Desktop stays patched, as the desktop app had it before\./);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES));
+    assert.deepStrictEqual(commands(log), ['status', 'install', 'autostart'], 'the helper ran remove or turned the shortcut off');
+  }));
+
+test('uninstall hands the Code tab back: the desktop codetab.json is restored byte for byte', () =>
+  withCodeTab(async ({ sb, paths, log, claudeExe }) => {
+    desktopOff(sb, paths);
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.match(off.stdout, /Code tab: restored 1 Claude Code folder\(s\) and handed the Code tab back to the ContextShrink desktop app\./);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES), 'codetab.json was not restored byte for byte');
+    assert.ok(!fs.existsSync(paths.takeover), 'the takeover record was left behind');
+    assert.ok(!fs.existsSync(paths.bin), 'npx-bin was left behind');
+    assert.deepStrictEqual(commands(log).slice(-2), ['remove', 'autostart']);
+    assert.deepStrictEqual(stubCalls(log).slice(-1)[0].args, ['autostart', 'off']);
+    assert.strictEqual(fs.readFileSync(claudeExe, 'utf8'), 'real claude bytes');
+    assertNoKeyText([off.stdout, off.stderr]);
+  }));
+
+test('uninstall leaves codetab.json alone when the desktop app changed it after the takeover', () =>
+  withCodeTab(async ({ sb, paths, log }) => {
+    desktopOff(sb, paths);
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+    const changed = Buffer.from(
+      JSON.stringify({ v: 1, enabled: true, base_url: 'http://127.0.0.1:18788/k/newer', health_port: 18788, env: {} }) + '\n'
+    );
+    fs.writeFileSync(paths.config, changed);
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.match(off.stdout, /Code tab left alone: codetab.json changed after ContextShrink took it over/);
+    assert.ok(fs.readFileSync(paths.config).equals(changed), 'the desktop app\'s file was overwritten');
+    assert.ok(!fs.existsSync(paths.takeover));
+    assert.ok(fs.existsSync(paths.helper), 'the helper was removed while the desktop app may still use the patch');
+    assert.deepStrictEqual(commands(log), ['status', 'install', 'autostart'], 'the helper ran after the desktop app changed the file');
+  }));
+
+test('a takeover whose patch fails puts the desktop codetab.json back exactly and keeps no record', () =>
+  withCodeTab(async ({ sb, paths }) => {
+    desktopOff(sb, paths);
+    sb.env.CONTEXTSHRINK_NPX_STUB_INSTALL_FAIL = '1';
+    const res = await runCli(sb, []);
+    assert.strictEqual(res.code, 1, res.output);
+    assert.match(res.stderr, /the helper could not patch Claude Desktop \(exit code 5\)/);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES), 'the desktop codetab.json was not put back');
+    assert.ok(!fs.existsSync(paths.takeover), 'a record was kept for a takeover that did not happen');
+    assert.match(readJson(sb.settings).env.ANTHROPIC_BASE_URL, BASE_RE, 'the terminal part did not connect');
+  }));
+
+test('a Code tab still patched at uninstall keeps npx config, so a retry hands it back', () =>
+  withCodeTab(async ({ sb, paths }) => {
+    desktopOff(sb, paths);
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+
+    sb.env.CONTEXTSHRINK_NPX_STUB_REMOVE_STATE = 'locked';
+    const first = await runCli(sb, ['uninstall']);
+    assert.strictEqual(first.code, 1, first.output);
+    assert.match(first.stderr, /still patched/);
+    const kept = readJson(paths.config);
+    assert.strictEqual(kept.owner, 'npx');
+    assert.strictEqual(kept.enabled, true, 'the config was left switched off while folders are still patched');
+    assert.ok(fs.existsSync(paths.takeover), 'the takeover record was removed too early');
+
+    delete sb.env.CONTEXTSHRINK_NPX_STUB_REMOVE_STATE;
+    const second = await runCli(sb, ['uninstall']);
+    assert.strictEqual(second.code, 0, second.output);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES));
+    assert.ok(!fs.existsSync(paths.takeover));
+  }));
+
+test('a second connect while taken over keeps the desktop bytes on record', () =>
+  withCodeTab(async ({ sb, paths }) => {
+    desktopOff(sb, paths);
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+    const first = readJson(paths.takeover);
+
+    const again = await runCli(sb, [], { input: '' });
+    assert.strictEqual(again.code, 0, again.output);
+    const second = readJson(paths.takeover);
+    assert.deepStrictEqual(second.previous, first.previous, 'npx recorded its own config as the desktop app\'s');
+    assert.strictEqual(second.written, fs.readFileSync(paths.config, 'utf8'), 'the record does not match the file npx wrote');
+
+    const off = await runCli(sb, ['uninstall']);
+    assert.strictEqual(off.code, 0, off.output);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES));
+  }));
+
+test('--no-code-tab leaves a switched-off desktop codetab.json alone', () =>
+  withCodeTab(async ({ sb, paths, log }) => {
+    desktopOff(sb, paths);
+    const res = await runCli(sb, ['--no-code-tab']);
+    assert.strictEqual(res.code, 0, res.output);
+    assert.match(res.stdout, /Code tab left alone: the ContextShrink desktop app manages it\./);
+    assert.ok(fs.readFileSync(paths.config).equals(DESKTOP_OFF_BYTES));
+    assert.ok(!fs.existsSync(paths.takeover));
+    assert.deepStrictEqual(stubCalls(log), []);
+  }));
+
+test('status says routed (npx), desktop app, or not set up, and never the key', () =>
+  withCodeTab(async ({ sb, paths }) => {
+    const none = await runCli(sb, ['status']);
+    assert.match(none.stdout, /Code tab: not set up\. Run npx contextshrink-claude to set it up\./);
+
+    fs.mkdirSync(paths.dir, { recursive: true });
+    fs.writeFileSync(paths.config, DESKTOP_OFF_BYTES);
+    const off = await runCli(sb, ['status']);
+    assert.match(off.stdout, /^Code tab: desktop app\. Its routing is off;/m);
+
+    fs.writeFileSync(paths.config, JSON.stringify({ v: 1, enabled: true, base_url: 'http://127.0.0.1:18788/k/x' }));
+    const on = await runCli(sb, ['status']);
+    assert.match(on.stdout, /^Code tab: desktop app\. The ContextShrink desktop app routes it\./m);
+
+    desktopOff(sb, paths);
+    const up = await runCli(sb, []);
+    assert.strictEqual(up.code, 0, up.output);
+    sb.env.CONTEXTSHRINK_NPX_STUB_STATUS_STATE = 'patched';
+    const routed = await runCli(sb, ['status']);
+    assert.match(routed.stdout, /^Code tab: routed \(npx\)\. 1 Claude Code version\(s\) patched; startup re-patch off\./m);
+    assertNoKeyText([none.stdout, off.stdout, on.stdout, routed.stdout]);
+  }));
